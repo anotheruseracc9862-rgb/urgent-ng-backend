@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    container_name: urgent-ng-postgres
+    environment:
+      POSTGRES_USER: urgent
+      POSTGRES_PASSWORD: urgent
+      POSTGRES_DB: urgent_ng
+    # Host ports avoid conflicts with native Windows Postgres/Redis services:
+    # 5544 -> container 5432, 6399 -> container 6379
+    ports:
+      - '5544:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U urgent -d urgent_ng']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: urgent-ng-redis
+    ports:
+      - '6399:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
