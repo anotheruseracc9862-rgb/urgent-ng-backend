@@ -1,0 +1,7 @@
+{
+  "task_id": "task-p006-shared-primitives",
+  "task_description": "Create shared utility primitives in src/common/utils/ covering Money, Clock, UUID, phone normalization, and crypto helpers with comprehensive unit tests",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

@@ -1,103 +1,93 @@
-# Implementation Plan: P0-03 — Error Framework
+# Implementation Plan: P0-04 — Response Envelope and Request IDs
 
-This plan implements a comprehensive error handling framework with domain exceptions, global filters, and proper error code mappings for the Urgent.ng backend.
+**Task:** P0-04 from Backend Build Plan — Response envelope and request IDs  
+**Complexity:** Small  
+**Context:** NestJS + Pino logger (via nestjs-pino). P0-03 is complete: `DomainExceptionFilter` is wired as APP_FILTER in `AppModule` and already reads `x-request-id` from request headers (falling back to `'unknown'`) to include in error responses.
 
-## Context
+## Exploration Findings
 
-The backend is a NestJS v12 ESM modular monolith with:
-- TypeScript with ES modules (`"type": "module"` in package.json, `.js` extensions on imports)
-- Vitest for unit tests (`npm test` runs `vitest run` on `src/**/*.spec.ts`)
-- Pino logging via nestjs-pino
-- PostgreSQL + Prisma ORM
-- Global validation pipe and throttler guard already configured in `app.module.ts`
-- Standard error response format from PRD §6.1: `{ "error": { "code": "...", "message": "...", "details": {} }, "requestId": "..." }`
+- **AppModule** (`src/app.module.ts`): Already has `APP_FILTER` provider for `DomainExceptionFilter` and `APP_GUARD` for `ThrottlerGuard`. LoggerModule from nestjs-pino is configured globally.
+- **DomainExceptionFilter** (`src/common/filters/domain-exception.filter.ts`): Reads `x-request-id` header; if missing, uses `'unknown'`. Returns error envelope `{ error: { code, message, details? }, requestId }`.
+- **Directory structure**: `src/common/` has subdirectories for `decorators/`, `interceptors/`, `middleware/` (doesn't exist yet), `filters/`, `guards/`, etc. The `decorators/` and `interceptors/` folders currently contain only `.gitkeep`.
+- **UUID generation**: Node.js crypto.randomUUID is available (confirmed via test).
+- **Test framework**: vitest with globals enabled. Existing test (`domain-exception.filter.spec.ts`) demonstrates the pattern: mock request/response, use vi.fn(), describe/it/expect/beforeEach.
+- **Test command**: `npm test` runs unit tests (`src/**/*.spec.ts`).
+- **Build command**: `npm run build` compiles TypeScript.
+- **Check command**: `npm run check` runs lint, build, and unit tests.
 
-The `src/common/` directory has placeholder subdirectories (exceptions/, filters/, constants/) currently containing only `.gitkeep` files.
+## Implementation Plan
 
-## Design Decisions
+- [ ] 1. **Create the request ID middleware** in `src/common/middleware/request-id.middleware.ts`.
+      - Implement NestJS `NestMiddleware` that reads the incoming `x-request-id` header; if absent, generates a UUIDv4 using Node.js `crypto.randomUUID()`.
+      - Set the `x-request-id` header on both the request (for downstream use) and the response (for client visibility).
+      - Bind the requestId to the Pino logger context by injecting `PinoLogger` from nestjs-pino and calling `logger.assign({ requestId })` so every log line in that request carries the ID.
+      Files: `src/common/middleware/request-id.middleware.ts`
+      Verify: Unit tests pass (`npm test` for `src/common/middleware/request-id.middleware.spec.ts`).
 
-**1. Exception hierarchy:** Create a single `DomainException` class extending NestJS `HttpException` with three properties: `code` (string), `httpStatus` (number), and `message` (safe, user-facing string). Other domain code throws this with appropriate values. No need for a deep hierarchy; the error code provides semantic distinction.
-
-**2. Global filter:** A NestJS exception filter catches every unhandled exception and transforms it into the standard envelope. The filter handles three cases:
-   - `DomainException`: use its code, status, and message directly
-   - `PrismaClientKnownRequestError`: map specific Prisma error codes (P2002, P2003, P2025) to domain codes and HTTP statuses
-   - All other errors: return 500 with code `INTERNAL_ERROR` and generic message, never exposing stack traces or internal details
-
-**3. RequestId:** The filter reads `x-request-id` from the request headers (lowercase, as Express normalizes them) and includes it in every response. If missing, it returns `null` (the PRD shows requestId as a top-level field, not optional, so we always include it).
-
-**4. Error codes:** Export all codes from PRD §31 as string constants in `src/common/constants/error-codes.ts`. Group by category for readability. Each constant is the code itself (e.g., `export const AUTH_REQUIRED = 'AUTH_REQUIRED'`).
-
-**5. APP_FILTER wiring:** Register the filter globally in `AppModule` using the `APP_FILTER` provider pattern (same as the existing `APP_GUARD` for throttler).
-
----
-
-## Implementation Steps
-
-- [ ] 1. Create error code constants in `src/common/constants/error-codes.ts`.
-      Export all 47 error codes from Backend PRD §31 as string constants, grouped by category: auth/account, general, errands, offers, assignments, verification, location/chat/ratings/safety, billing/media. Add `INTERNAL_ERROR` for unknown errors.
-      Files: `src/common/constants/error-codes.ts`
-      Verify: `npm run build` — the file compiles without errors.
-
-- [ ] 2. Create the DomainException class in `src/common/exceptions/domain.exception.ts`.
-      Extend NestJS `HttpException`. Constructor accepts `code: string`, `httpStatus: number`, and `message: string`. Store them as public readonly properties so the filter can read them. Pass `message` and `httpStatus` to the parent constructor.
-      Files: `src/common/exceptions/domain.exception.ts`
-      Verify: `npm run build` — the file compiles and DomainException can be instantiated.
-
-- [ ] 3. Create the global exception filter in `src/common/filters/domain-exception.filter.ts`.
-      Implement `@Catch()` decorator (catches all exceptions) with `ExceptionFilter` interface. In the `catch` method:
-      - Extract `requestId` from `request.headers['x-request-id']` (or null)
-      - If exception is `DomainException`, return `{ error: { code, message, details: {} }, requestId }` with its httpStatus
-      - If exception is `PrismaClientKnownRequestError` (from `@prisma/client`), map:
-        - P2002 (unique constraint) → code `RESOURCE_CONFLICT`, status 409, message "A resource with this value already exists."
-        - P2003 (foreign key constraint) → code `VALIDATION_ERROR`, status 400, message "Invalid reference to a related resource."
-        - P2025 (record not found) → code `RESOURCE_NOT_FOUND`, status 404, message "The requested resource was not found."
-      - For all other exceptions, return code `INTERNAL_ERROR`, status 500, message "An unexpected error occurred. Please try again later.", with empty details. Never include stack traces or exception messages.
-      - Use the Pino logger (inject `Logger` from nestjs-pino) to log the full exception details (including stack) for internal debugging, but never expose them in the response.
-      Files: `src/common/filters/domain-exception.filter.ts`
-      Verify: `npm run build` — the filter compiles and implements the ExceptionFilter interface correctly.
-
-- [ ] 4. Wire the global exception filter in `src/app.module.ts`.
-      Add `APP_FILTER` provider with `useClass: DomainExceptionFilter` to the `providers` array in `AppModule`, following the same pattern as the existing `APP_GUARD` provider for `ThrottlerGuard`. Import `DomainExceptionFilter` and `APP_FILTER` from `@nestjs/core`.
+- [ ] 2. **Wire the middleware globally in AppModule**.
+      - Import `MiddlewareConsumer` and `NestModule` from `@nestjs/common`.
+      - Make `AppModule` implement `NestModule` with a `configure(consumer: MiddlewareConsumer)` method.
+      - Apply `RequestIdMiddleware` to all routes using `consumer.apply(RequestIdMiddleware).forRoutes('*')`.
       Files: `src/app.module.ts`
-      Verify: `npm run build` — the application compiles with the global filter registered.
+      Verify: `npm run build` succeeds without errors.
 
-- [ ] 5. Write unit tests for error-codes.ts in `src/common/constants/error-codes.spec.ts`.
-      Test that all expected error code constants are exported and have the correct string values. Verify all 47 codes from PRD §31 plus `INTERNAL_ERROR` are present.
-      Files: `src/common/constants/error-codes.spec.ts`
-      Verify: `npm test` — all error-codes tests pass.
+- [ ] 3. **Create the @NoEnvelope decorator** in `src/common/decorators/no-envelope.decorator.ts`.
+      - Simple metadata decorator using `SetMetadata('NO_ENVELOPE', true)` to mark SSE endpoints and webhooks that should skip envelope wrapping.
+      Files: `src/common/decorators/no-envelope.decorator.ts`
+      Verify: Unit tests pass (`npm test` for `src/common/decorators/no-envelope.decorator.spec.ts`).
 
-- [ ] 6. Write unit tests for DomainException in `src/common/exceptions/domain.exception.spec.ts`.
-      Test that DomainException:
-      - Stores code, httpStatus, and message as public properties
-      - Extends HttpException correctly
-      - Can be instantiated with various status codes and messages
-      Files: `src/common/exceptions/domain.exception.spec.ts`
-      Verify: `npm test` — all DomainException tests pass.
+- [ ] 4. **Create the response envelope interceptor** in `src/common/interceptors/response-envelope.interceptor.ts`.
+      - Implement NestJS `NestInterceptor` that wraps every successful (non-streaming) response in `{ data: <original>, meta: {}, requestId: <id from req header> }`.
+      - Use `Reflector` to check if the handler or controller has `NO_ENVELOPE` metadata; if present, skip wrapping.
+      - Include idempotency guard: if the response is already an object with `data`, `meta`, and `requestId` keys, do not wrap again (return as-is).
+      - Extract `requestId` from the request headers (`x-request-id`).
+      Files: `src/common/interceptors/response-envelope.interceptor.ts`
+      Verify: Unit tests pass (`npm test` for `src/common/interceptors/response-envelope.interceptor.spec.ts`).
 
-- [ ] 7. Write unit tests for DomainExceptionFilter in `src/common/filters/domain-exception.filter.spec.ts`.
-      Test coverage:
-      - DomainException returns its code, status, and message unchanged, with requestId from header
-      - Prisma P2002 error maps to RESOURCE_CONFLICT (409) with safe message
-      - Prisma P2003 error maps to VALIDATION_ERROR (400) with safe message
-      - Prisma P2025 error maps to RESOURCE_NOT_FOUND (404) with safe message
-      - Unknown exception returns INTERNAL_ERROR (500) with generic message and no stack trace
-      - requestId is null when x-request-id header is missing
-      - requestId is forwarded when x-request-id header is present
-      Mock the response object's `status()` and `json()` methods, and verify they are called with correct arguments. Mock the logger to verify internal errors are logged but not exposed.
-      Files: `src/common/filters/domain-exception.filter.spec.ts`
-      Verify: `npm test` — all DomainExceptionFilter tests pass, covering all Prisma error mappings and the unknown error case.
+- [ ] 5. **Wire the interceptor globally in AppModule**.
+      - Add a provider with `provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor` to the `providers` array.
+      Files: `src/app.module.ts`
+      Verify: `npm run build` succeeds without errors.
 
-- [ ] 8. Final verification: run the full check script.
-      Run the project's pre-commit check that includes lint, build, and all unit tests. Confirm no regressions.
-      Files: (none)
-      Verify: `npm run check` (runs `npm run lint && npm run build && npm test`) — all steps pass without errors.
+- [ ] 6. **Write unit tests for RequestIdMiddleware** in `src/common/middleware/request-id.middleware.spec.ts`.
+      - Test: When `x-request-id` header is absent, middleware generates a UUIDv4 and sets it on request and response headers.
+      - Test: When `x-request-id` header is present, middleware forwards the existing value to request and response headers.
+      - Test: Middleware binds requestId to the Pino logger context (verify `logger.assign` is called with the correct ID).
+      Files: `src/common/middleware/request-id.middleware.spec.ts`
+      Verify: `npm test` passes (all three test cases pass).
 
----
+- [ ] 7. **Write unit tests for @NoEnvelope decorator** in `src/common/decorators/no-envelope.decorator.spec.ts`.
+      - Test: Decorator sets the correct metadata key and value on a handler.
+      - Test: Reflector can retrieve the metadata from a decorated handler.
+      Files: `src/common/decorators/no-envelope.decorator.spec.ts`
+      Verify: `npm test` passes (metadata tests pass).
+
+- [ ] 8. **Write unit tests for ResponseEnvelopeInterceptor** in `src/common/interceptors/response-envelope.interceptor.spec.ts`.
+      - Test: Wraps a plain object response in `{ data, meta: {}, requestId }`.
+      - Test: Wraps an array response in `{ data, meta: {}, requestId }`.
+      - Test: Skips wrapping when handler is decorated with `@NoEnvelope()`.
+      - Test: Skips wrapping when response is already an envelope (has `data`, `meta`, and `requestId` keys).
+      - Test: Uses the `x-request-id` from request headers as the `requestId` in the envelope.
+      Files: `src/common/interceptors/response-envelope.interceptor.spec.ts`
+      Verify: `npm test` passes (all five test cases pass).
+
+- [ ] 9. **Run the full check suite and verify integration**.
+      - Run `npm run check` to execute lint, build, and all unit tests.
+      - Confirm all tests pass, including the new middleware, decorator, and interceptor tests.
+      - Manually inspect a sample log line from a real request (start the dev server with `npm run start:dev`, make a request to `/api/v1/health`, check logs) to confirm the requestId appears in Pino log output.
+      Files: N/A (verification only)
+      Verify: `npm run check` passes with exit code 0. Logs from a real request show the requestId in every log line for that request.
+
+## Verification Commands
+
+- **Unit tests**: `npm test` (runs all `src/**/*.spec.ts`)
+- **Build**: `npm run build` (compiles TypeScript)
+- **Full check**: `npm run check` (lint + build + unit tests)
+- **Manual integration check**: `npm run start:dev` → `curl http://localhost:4000/api/v1/health` → inspect logs and response headers for consistent requestId.
 
 ## Notes
 
-- **ESM imports:** All imports must use `.js` extensions (e.g., `import { DomainException } from './domain.exception.js'`) per the project's ESM configuration.
-- **Prisma imports:** `PrismaClientKnownRequestError` is imported from `@prisma/client/runtime/library.js` in ESM projects.
-- **Testing strategy:** Unit tests use vitest with the globals setup (describe, it, expect are global). The test setup file (`test/setup.ts`) imports `reflect-metadata` for decorators. Mock NestJS `ArgumentsHost` and Express request/response objects for filter tests.
-- **No production stack traces:** The filter logs the full exception internally but never includes stack traces or internal error messages in the JSON response, per PRD §6.1 ("Messages are safe and stable; internal details never leak").
-- **Error details:** The `details` field in the error envelope is always an empty object `{}` in this implementation; domain services can extend DomainException in future to include structured details if needed.
+- The middleware must run early in the request lifecycle, before any logging occurs, so the requestId is available to all downstream code.
+- The interceptor must check for the `@NoEnvelope` decorator on both the handler and controller level (use `context.getHandler()` and `context.getClass()` with Reflector).
+- The idempotency guard in the interceptor prevents double-wrapping if a service or controller method already returns an envelope shape.
+- All error responses from `DomainExceptionFilter` already include `requestId` (from P0-03), so errors and success responses will have a consistent ID format.
