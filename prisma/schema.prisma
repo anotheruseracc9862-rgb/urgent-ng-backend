@@ -701,3 +701,19 @@ model OutboxEvent {
   @@index([aggregateType, aggregateId, occurredAt, id], map: "outbox_events_aggregate_idx")
   @@map("outbox_events")
 }
+
+// P1-05: Idempotency keys
+model IdempotencyKey {
+  id             String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  operation      String
+  key            String
+  requestHash    String    @map("request_hash")
+  responseStatus Int?      @map("response_status")
+  responseBody   Json?     @map("response_body")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, operation, key], map: "idempotency_keys_user_operation_key_unique")
+  @@index([createdAt], map: "idempotency_keys_created_at_idx")
+  @@map("idempotency_keys")
+}
