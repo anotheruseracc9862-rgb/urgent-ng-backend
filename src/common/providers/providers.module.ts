@@ -1,10 +1,12 @@
 /**
  * Providers module
- * Dynamically selects fake or real provider implementations based on config
+ * Selects the fake or real implementation of every external provider from the
+ * validated config (`providers.<name>`, set by `<NAME>_PROVIDER=fake|real`).
  */
 
-import { Module, DynamicModule } from '@nestjs/common';
+import { DynamicModule, FactoryProvider, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { AppConfig } from '../../config/configuration.js';
 import {
   OTP_PROVIDER,
   KYC_PROVIDER,
@@ -24,109 +26,49 @@ import {
   FakePaymentProvider,
 } from './fakes/index.js';
 
+type ProviderName = keyof AppConfig['providers'];
+
+/**
+ * Build a provider factory. Reading the mode from `providers.<name>` (and
+ * failing fast when "real" has no implementation yet) means a production
+ * misconfiguration can never silently run on a fake.
+ */
+function providerFactory(
+  token: symbol,
+  name: ProviderName,
+  createFake: () => unknown,
+  describeReal: string,
+): FactoryProvider {
+  return {
+    provide: token,
+    inject: [ConfigService],
+    useFactory: (config: ConfigService) => {
+      const mode = config.get<string>(`providers.${name}`) ?? 'fake';
+      if (mode === 'fake') {
+        return createFake();
+      }
+      // The real adapter is added in its own task (see the Build Plan).
+      throw new Error(
+        `${name.toUpperCase()}_PROVIDER=real is set but the ${describeReal} adapter is not implemented yet`,
+      );
+    },
+  };
+}
+
 @Module({})
 export class ProvidersModule {
   static forRoot(): DynamicModule {
     return {
       module: ProvidersModule,
+      global: true,
       providers: [
-        // OTP Provider
-        {
-          provide: OTP_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('SMS_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakeOtpProvider();
-            }
-            // TODO: Return real implementation when available
-            throw new Error(`OTP provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // KYC Provider
-        {
-          provide: KYC_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('KYC_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakeKycProvider();
-            }
-            // TODO: Return real Dojah implementation when available
-            throw new Error(`KYC provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // Storage Provider
-        {
-          provide: STORAGE_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('STORAGE_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakeStorageProvider();
-            }
-            // TODO: Return real AWS S3 implementation when available
-            throw new Error(`Storage provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // Maps Provider
-        {
-          provide: MAPS_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('MAPS_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakeMapsProvider();
-            }
-            // TODO: Return real Google Maps implementation when available
-            throw new Error(`Maps provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // Push Provider
-        {
-          provide: PUSH_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('PUSH_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakePushProvider();
-            }
-            // TODO: Return real FCM implementation when available
-            throw new Error(`Push provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // Email Provider
-        {
-          provide: EMAIL_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('EMAIL_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakeEmailProvider();
-            }
-            // TODO: Return real Mailgun implementation when available
-            throw new Error(`Email provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
-
-        // Payment Provider
-        {
-          provide: PAYMENT_PROVIDER,
-          useFactory: (configService: ConfigService) => {
-            const mode = configService.get<string>('PAYMENT_PROVIDER_MODE', 'fake');
-            if (mode === 'fake') {
-              return new FakePaymentProvider();
-            }
-            // TODO: Return real Paystack implementation when available
-            throw new Error(`Payment provider mode "${mode}" not implemented yet`);
-          },
-          inject: [ConfigService],
-        },
+        providerFactory(OTP_PROVIDER, 'sms', () => new FakeOtpProvider(), 'SMS (Termii)'),
+        providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah'),
+        providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3'),
+        providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
+        providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM'),
+        providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'Mailgun'),
+        providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack'),
       ],
       exports: [
         OTP_PROVIDER,
@@ -137,7 +79,6 @@ export class ProvidersModule {
         EMAIL_PROVIDER,
         PAYMENT_PROVIDER,
       ],
-      global: true,
     };
   }
 }

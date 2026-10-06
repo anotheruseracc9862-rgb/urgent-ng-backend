@@ -1,61 +1,79 @@
 /**
- * Fake KYC provider for testing
+ * Fake KYC provider.
+ *
+ * Deterministic by the last four digits of the NIN (Backend PRD section 10.3):
+ *   0000 -> selfie mismatch      1111 -> NIN not found
+ *   8888 -> provider timeout     9999 -> provider error
+ *   anything else -> verified with confidence 99
+ * Scripted outcomes (see BaseFake) override these rules.
  */
 
 import { Injectable } from '@nestjs/common';
 import { BaseFake } from './base.fake.js';
-import { IKycProvider, KycVerificationResult } from '../kyc.provider.js';
+import {
+  IKycProvider,
+  KycVerifyRequest,
+  KycVerifyResult,
+} from '../kyc.provider.js';
 
 @Injectable()
 export class FakeKycProvider extends BaseFake implements IKycProvider {
-  async verifyBvn(bvn: string, phoneNumber: string): Promise<KycVerificationResult> {
-    this.recordCall('verifyBvn', bvn, phoneNumber);
+  async verifyNinWithSelfie(
+    request: KycVerifyRequest,
+  ): Promise<KycVerifyResult> {
+    // Never record the NIN or the selfie in the call log.
+    this.recordCall('verifyNinWithSelfie', {
+      ninLast4: request.nin.slice(-4),
+      threshold: request.threshold,
+    });
 
-    if (this.hasScriptedOutcome('verifyBvn')) {
-      return this.getNextOutcome<KycVerificationResult>('verifyBvn')!;
+    if (this.hasScriptedOutcome('verifyNinWithSelfie')) {
+      return this.getNextOutcome<KycVerifyResult>('verifyNinWithSelfie')!;
     }
 
-    // Default success response
-    return {
-      success: true,
-      verified: true,
-      referenceId: `fake-bvn-${Date.now()}`,
-      firstName: 'John',
-      lastName: 'Doe',
-      dateOfBirth: '1990-01-01',
-    };
-  }
+    const providerRequestId = `fake-kyc-${Date.now()}`;
+    const maskedAttributes = { ninLast4: request.nin.slice(-4) };
 
-  async verifyNin(nin: string): Promise<KycVerificationResult> {
-    this.recordCall('verifyNin', nin);
-
-    if (this.hasScriptedOutcome('verifyNin')) {
-      return this.getNextOutcome<KycVerificationResult>('verifyNin')!;
+    switch (request.nin.slice(-4)) {
+      case '0000':
+        return {
+          outcome: 'FAILED',
+          failureReason: 'SELFIE_MISMATCH',
+          confidence: 41,
+          countsAgainstAllowance: true,
+          providerRequestId,
+          maskedAttributes,
+        };
+      case '1111':
+        return {
+          outcome: 'FAILED',
+          failureReason: 'IDENTITY_MISMATCH',
+          countsAgainstAllowance: true,
+          providerRequestId,
+          maskedAttributes,
+        };
+      case '8888':
+        return {
+          outcome: 'FAILED',
+          failureReason: 'PROVIDER_TIMEOUT',
+          countsAgainstAllowance: false,
+          providerRequestId,
+        };
+      case '9999':
+        return {
+          outcome: 'FAILED',
+          failureReason: 'PROVIDER_ERROR',
+          countsAgainstAllowance: false,
+          providerRequestId,
+        };
+      default:
+        return {
+          outcome: 'VERIFIED',
+          confidence: 99,
+          countsAgainstAllowance: true,
+          providerRequestId,
+          maskedAttributes,
+        };
     }
-
-    // Default success response
-    return {
-      success: true,
-      verified: true,
-      referenceId: `fake-nin-${Date.now()}`,
-      firstName: 'Jane',
-      lastName: 'Smith',
-      dateOfBirth: '1985-06-15',
-    };
-  }
-
-  async getVerificationStatus(referenceId: string): Promise<KycVerificationResult> {
-    this.recordCall('getVerificationStatus', referenceId);
-
-    if (this.hasScriptedOutcome('getVerificationStatus')) {
-      return this.getNextOutcome<KycVerificationResult>('getVerificationStatus')!;
-    }
-
-    // Default success response
-    return {
-      success: true,
-      verified: true,
-      referenceId,
-    };
   }
 }

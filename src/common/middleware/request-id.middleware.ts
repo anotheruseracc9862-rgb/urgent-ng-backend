@@ -1,24 +1,24 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import { randomUUID } from 'node:crypto';
 import { PinoLogger } from 'nestjs-pino';
+import { resolveRequestId } from './request-id.js';
 
 @Injectable()
 export class RequestIdMiddleware implements NestMiddleware {
   constructor(private readonly logger: PinoLogger) {}
 
   use(req: Request, res: Response, next: NextFunction): void {
-    const requestId = (req.headers['x-request-id'] as string) || randomUUID();
-    
-    // Store in headers for downstream use
+    const requestId = resolveRequestId(req.headers['x-request-id']);
+
+    // Store in headers for downstream use (filters, interceptors)
     req.headers['x-request-id'] = requestId;
-    
-    // Set on response header
+
+    // Echo on the response
     res.setHeader('x-request-id', requestId);
-    
-    // Bind to Pino context
+
+    // Bind to the Pino context
     this.logger.assign({ requestId });
-    
+
     next();
   }
 }

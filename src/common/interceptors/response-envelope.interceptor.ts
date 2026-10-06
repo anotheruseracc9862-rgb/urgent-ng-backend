@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { NO_ENVELOPE_KEY } from '../decorators/no-envelope.decorator.js';
+import { Paginated } from '../pagination/paginated.js';
 
 export interface EnvelopedResponse<T> {
   data: T;
@@ -38,11 +39,17 @@ export class ResponseEnvelopeInterceptor<T>
     const requestId = (request.headers['x-request-id'] as string) || '';
 
     return next.handle().pipe(
-      map((data) => ({
-        data,
-        meta: {},
-        requestId,
-      })),
+      map((result) => {
+        // A Paginated result carries its own meta; lift it instead of nesting it.
+        if (result instanceof Paginated) {
+          return {
+            data: result.items,
+            meta: { ...result.meta },
+            requestId,
+          } as unknown as EnvelopedResponse<T>;
+        }
+        return { data: result, meta: {}, requestId };
+      }),
     );
   }
 }

@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { formatInTimeZone } from 'date-fns-tz';
-import { startOfDay, endOfDay } from 'date-fns';
 
 const LAGOS_TIMEZONE = 'Africa/Lagos';
 

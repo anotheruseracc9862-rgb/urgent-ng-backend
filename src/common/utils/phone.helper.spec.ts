@@ -31,6 +31,16 @@ describe('Phone Helpers', () => {
       expect(normalizePhone('(080) 1234-5678')).toBe('+2348012345678');
     });
 
+    it('should handle the country code followed by the national leading 0', () => {
+      expect(normalizePhone('+23408012345678')).toBe('+2348012345678');
+      expect(normalizePhone('23408012345678')).toBe('+2348012345678');
+      expect(normalizePhone('+234 0801 234 5678')).toBe('+2348012345678');
+    });
+
+    it('should handle dots', () => {
+      expect(normalizePhone('0801.234.5678')).toBe('+2348012345678');
+    });
+
     it('should throw on empty string', () => {
       expect(() => normalizePhone('')).toThrow('required');
     });

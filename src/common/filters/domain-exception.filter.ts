@@ -51,11 +51,13 @@ export class DomainExceptionFilter implements ExceptionFilter {
       // NestJS HttpException (not DomainException)
       statusCode = exception.getStatus();
       errorCode = this.mapHttpStatusToCode(statusCode);
-      errorMessage = exception.message || 'An error occurred';
+      const mapped = this.describeHttpException(exception, statusCode);
+      errorMessage = mapped.message;
+      errorDetails = mapped.details;
     } else {
       // Unknown errors: return generic 500 without exposing internal details
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
-      errorCode = 'INTERNAL_ERROR';
+      errorCode = ErrorCodes.INTERNAL_ERROR;
       errorMessage = 'An unexpected error occurred';
 
       // Log the full error for internal debugging but never expose it in the response
@@ -75,6 +77,52 @@ export class DomainExceptionFilter implements ExceptionFilter {
     };
 
     response.status(statusCode).json(errorResponse);
+  }
+
+  /**
+   * Turn a Nest HttpException into a safe message plus structured details:
+   * - class-validator failures keep their per-field messages in details.fields
+   * - Terminus health failures keep their per-component results in details.health
+   * - 5xx messages (other than 503) are never passed through to the client
+   */
+  private describeHttpException(
+    exception: HttpException,
+    status: number,
+  ): { message: string; details?: unknown } {
+    if (status >= 500 && status !== HttpStatus.SERVICE_UNAVAILABLE) {
+      return { message: 'An unexpected error occurred' };
+    }
+
+    const body = exception.getResponse();
+    if (typeof body === 'object' && body !== null) {
+      const record = body as Record<string, unknown>;
+
+      if (Array.isArray(record.message)) {
+        return {
+          message: 'The request is not valid.',
+          details: { fields: record.message },
+        };
+      }
+
+      if (
+        status === HttpStatus.SERVICE_UNAVAILABLE &&
+        record.status === 'error' &&
+        'details' in record
+      ) {
+        return {
+          message: 'One or more required services are unavailable.',
+          details: {
+            health: {
+              info: record.info,
+              error: record.error,
+              details: record.details,
+            },
+          },
+        };
+      }
+    }
+
+    return { message: exception.message || 'An error occurred' };
   }
 
   private mapPrismaError(error: PrismaClientKnownRequestError): {
@@ -105,7 +153,7 @@ export class DomainExceptionFilter implements ExceptionFilter {
         // Other Prisma errors treated as internal errors
         return {
           status: HttpStatus.INTERNAL_SERVER_ERROR,
-          code: 'INTERNAL_ERROR',
+          code: ErrorCodes.INTERNAL_ERROR,
           message: 'An unexpected error occurred',
         };
     }
@@ -131,6 +179,6 @@ export class DomainExceptionFilter implements ExceptionFilter {
       }
     }
 
-    return 'INTERNAL_ERROR';
+    return ErrorCodes.INTERNAL_ERROR;
   }
 }

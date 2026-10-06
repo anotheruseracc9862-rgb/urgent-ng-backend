@@ -37,6 +37,13 @@ export interface AppConfig {
 const mode = (value: string | undefined): ProviderMode =>
   value === 'real' ? 'real' : 'fake';
 
+// Secrets default to a clearly fake value outside production so cursors and
+// encrypted columns work locally. Production requires real values (see
+// env.validation.ts) and never falls back to these.
+const isProduction = process.env.NODE_ENV === 'production';
+const devSecret = (name: string) =>
+  isProduction ? '' : `development-only-${name}-not-for-production`;
+
 export default (): AppConfig => ({
   nodeEnv:
     process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test'
@@ -58,8 +65,9 @@ export default (): AppConfig => ({
     refreshSecret: process.env.JWT_REFRESH_SECRET ?? '',
   },
   security: {
-    dataEncryptionKey: process.env.DATA_ENCRYPTION_KEY ?? '',
-    hmacSecret: process.env.HMAC_SECRET ?? '',
+    dataEncryptionKey:
+      process.env.DATA_ENCRYPTION_KEY || devSecret('data-encryption-key'),
+    hmacSecret: process.env.HMAC_SECRET || devSecret('hmac-secret'),
   },
   dojah: {
     appId: process.env.DOJAH_APP_ID ?? '',

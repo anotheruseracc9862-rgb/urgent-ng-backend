@@ -1,12 +1,8 @@
 /**
- * Global test teardown
- * Runs once after all tests complete
+ * Global teardown. Each test worker closes its own Prisma and Redis clients in
+ * `test/setup.db.ts`, so there is nothing to release here.
  */
 
-import { closeTestConnections } from './database.helper.js';
-
-export async function teardown() {
-  console.log('Closing test database connections...');
-  await closeTestConnections();
-  console.log('Test connections closed');
+export async function teardown(): Promise<void> {
+  // intentionally empty
 }

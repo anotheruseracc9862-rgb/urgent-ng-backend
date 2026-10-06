@@ -5,7 +5,6 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 export class PaginationQueryDto {
   @ApiPropertyOptional({
     description: 'Opaque cursor for pagination',
-    example: 'eyJwYXlsb2FkIjoie1wic29ydFwiOjEwMCxcImNyZWF0ZWRBdFwiOlwiMjAyNC0wMS0wMVQwMDowMDowMC4wMDBaXCIsXCJpZFwiOlwiMTIzNDU2Nzg5MFwifSIsInNpZ25hdHVyZSI6ImFiY2RlZiJ9',
   })
   @IsOptional()
   @IsString()
@@ -25,10 +24,12 @@ export class PaginationQueryDto {
   limit?: number = 20;
 }
 
+/** Shape of a paginated response body after the envelope is applied. */
 export interface PaginatedResponse<T> {
   data: T[];
   meta: {
-    hasMore: boolean;
+    hasNextPage: boolean;
     nextCursor?: string;
   };
+  requestId: string;
 }

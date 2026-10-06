@@ -27,7 +27,8 @@ describe('Database Test Harness (Integration)', () => {
       `;
       
       expect(result).toHaveLength(1);
-      expect(result[0].current_database).toBeTruthy();
+      // Integration tests must never run against the development database
+      expect(result[0].current_database.endsWith('_test')).toBe(true);
     });
 
     it('should insert and read data from database', async () => {

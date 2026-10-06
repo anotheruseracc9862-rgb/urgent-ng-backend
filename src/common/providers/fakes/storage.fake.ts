@@ -1,77 +1,122 @@
 /**
- * Fake storage provider for testing
+ * Fake storage provider for testing.
+ *
+ * Objects live in memory. `simulateClientUpload` stands in for the browser
+ * uploading to the presigned URL, so tests can walk the whole upload flow.
  */
 
 import { Injectable } from '@nestjs/common';
 import { BaseFake } from './base.fake.js';
-import { IStorageProvider, UploadResult, SignedUrlResult } from '../storage.provider.js';
+import {
+  IStorageProvider,
+  PresignedDownload,
+  PresignedUpload,
+  StoredObjectInfo,
+} from '../storage.provider.js';
 
 @Injectable()
 export class FakeStorageProvider extends BaseFake implements IStorageProvider {
-  private storage = new Map<string, { buffer: Buffer; contentType: string; metadata?: Record<string, string> }>();
+  private objects = new Map<string, { body: Buffer; contentType: string }>();
+  private maxBytesByKey = new Map<string, number>();
 
-  async upload(
-    key: string,
-    buffer: Buffer,
-    contentType: string,
-    metadata?: Record<string, string>,
-  ): Promise<UploadResult> {
-    this.recordCall('upload', key, buffer, contentType, metadata);
+  async createPresignedUpload(input: {
+    key: string;
+    contentType: string;
+    maxBytes: number;
+    expiresInSeconds: number;
+  }): Promise<PresignedUpload> {
+    this.recordCall('createPresignedUpload', input);
 
-    if (this.hasScriptedOutcome('upload')) {
-      return this.getNextOutcome<UploadResult>('upload')!;
+    if (this.hasScriptedOutcome('createPresignedUpload')) {
+      return this.getNextOutcome<PresignedUpload>('createPresignedUpload')!;
     }
 
-    // Store in memory
-    this.storage.set(key, { buffer, contentType, metadata });
+    this.maxBytesByKey.set(input.key, input.maxBytes);
+    const expiresAt = new Date(Date.now() + input.expiresInSeconds * 1000);
 
     return {
-      success: true,
-      url: `https://fake-storage.com/${key}`,
-      key,
-    };
-  }
-
-  async getSignedUrl(key: string, expiresInSeconds: number): Promise<SignedUrlResult> {
-    this.recordCall('getSignedUrl', key, expiresInSeconds);
-
-    if (this.hasScriptedOutcome('getSignedUrl')) {
-      return this.getNextOutcome<SignedUrlResult>('getSignedUrl')!;
-    }
-
-    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
-
-    return {
-      success: true,
-      url: `https://fake-storage.com/${key}?signature=fake&expires=${expiresAt.getTime()}`,
+      url: `https://fake-storage.local/upload/${input.key}?expires=${expiresAt.getTime()}`,
+      method: 'PUT',
+      headers: { 'Content-Type': input.contentType },
+      key: input.key,
       expiresAt,
     };
   }
 
-  async delete(key: string): Promise<{ success: boolean; error?: string }> {
-    this.recordCall('delete', key);
+  async createPresignedDownload(
+    key: string,
+    expiresInSeconds: number,
+  ): Promise<PresignedDownload> {
+    this.recordCall('createPresignedDownload', key, expiresInSeconds);
 
-    if (this.hasScriptedOutcome('delete')) {
-      return this.getNextOutcome<{ success: boolean; error?: string }>('delete')!;
+    if (this.hasScriptedOutcome('createPresignedDownload')) {
+      return this.getNextOutcome<PresignedDownload>('createPresignedDownload')!;
     }
 
-    this.storage.delete(key);
-
-    return { success: true };
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    return {
+      url: `https://fake-storage.local/download/${key}?expires=${expiresAt.getTime()}`,
+      expiresAt,
+    };
   }
 
-  async exists(key: string): Promise<boolean> {
-    this.recordCall('exists', key);
+  async headObject(key: string): Promise<StoredObjectInfo> {
+    this.recordCall('headObject', key);
 
-    if (this.hasScriptedOutcome('exists')) {
-      return this.getNextOutcome<boolean>('exists')!;
+    if (this.hasScriptedOutcome('headObject')) {
+      return this.getNextOutcome<StoredObjectInfo>('headObject')!;
     }
 
-    return this.storage.has(key);
+    const object = this.objects.get(key);
+    if (!object) {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      sizeBytes: object.body.length,
+      contentType: object.contentType,
+    };
+  }
+
+  async getObject(key: string): Promise<Buffer> {
+    this.recordCall('getObject', key);
+
+    const object = this.objects.get(key);
+    if (!object) {
+      throw new Error(`Object not found: ${key}`);
+    }
+    return object.body;
+  }
+
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    this.recordCall('putObject', key, body.length, contentType);
+    this.objects.set(key, { body, contentType });
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    this.recordCall('deleteObject', key);
+    this.objects.delete(key);
+  }
+
+  /**
+   * Test helper: behave like a browser PUT to the presigned URL. Enforces the
+   * size limit the real signature would enforce.
+   */
+  simulateClientUpload(key: string, body: Buffer, contentType: string): void {
+    const max = this.maxBytesByKey.get(key);
+    if (max !== undefined && body.length > max) {
+      throw new Error('Upload exceeds the size limit in the presigned URL');
+    }
+    this.objects.set(key, { body, contentType });
   }
 
   override reset(): void {
     super.reset();
-    this.storage.clear();
+    this.objects.clear();
+    this.maxBytesByKey.clear();
   }
 }

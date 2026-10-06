@@ -47,10 +47,24 @@ Three entry points share one codebase (Backend PRD section 5.2):
 
 ## Scripts
 
-- `npm run check` runs lint, build and unit tests in one go. Run it before every commit.
-- `npm test` unit tests (`src/**/*.spec.ts`).
-- `npm run test:e2e` end-to-end tests (`test/**/*.e2e-spec.ts`); needs `npm run db:up`.
+- `npm run check` runs lint, build and unit tests (no database needed). Run it before every commit.
+- `npm run check:full` also runs the integration and e2e tests (needs `npm run db:up`).
+- `npm test` unit tests: pure and fast (`src/**/*.spec.ts`).
+- `npm run test:int` integration tests against real PostgreSQL and Redis (`src/**/*.int-spec.ts`).
+- `npm run test:e2e` end-to-end tests over HTTP (`test/**/*.e2e-spec.ts`).
+- `npm run test:all` runs all three levels.
 - `npm run prisma:migrate` creates a new migration during development.
+- `npm run prisma:seed` runs `prisma/seed.ts` (through `tsx`).
+- `npm run db:reset` drops and recreates the **development** database from the migrations. It is destructive.
+- `npm run openapi` writes `openapi.json` with the real `/api/v1` paths.
+
+## Testing safely
+
+Integration and e2e tests never touch your development data. They run against
+`<database>_test` (created automatically on the same server) and Redis
+database 15. Override with `DATABASE_URL_TEST` and `REDIS_URL_TEST` if needed.
+Every destructive test helper refuses to run unless the database name ends in
+`_test` and Redis is not database 0.
 
 ## Structure
 

@@ -26,8 +26,10 @@ describe('App bootstrap (e2e)', () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/health')
       .expect(200);
-    expect(response.body.status).toBe('ok');
-    expect(response.body.info.database.status).toBe('up');
+    // Responses are wrapped in the standard envelope: { data, meta, requestId }
+    expect(response.body.data.status).toBe('ok');
+    expect(response.body.data.info.database.status).toBe('up');
+    expect(response.body.requestId).toBeTruthy();
   });
 
   it('serves nothing outside the /api/v1 prefix', async () => {

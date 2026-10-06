@@ -2,6 +2,7 @@
  * Providers index
  */
 
+export * from './provider.error.js';
 export * from './otp.provider.js';
 export * from './kyc.provider.js';
 export * from './storage.provider.js';

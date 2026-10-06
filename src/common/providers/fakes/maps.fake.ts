@@ -38,6 +38,8 @@ export class FakeMapsProvider extends BaseFake implements IMapsProvider {
     return {
       success: true,
       address: 'Fake Address, Lagos',
+      area: 'Yaba',
+      lga: 'Lagos Mainland',
       city: 'Lagos',
       state: 'Lagos',
     };

@@ -11,6 +11,9 @@ import { HealthModule } from './health/health.module.js';
 import { DomainExceptionFilter } from './common/filters/domain-exception.filter.js';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor.js';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware.js';
+import { resolveRequestId } from './common/middleware/request-id.js';
+import { CommonModule } from './common/common.module.js';
+import { ProvidersModule } from './common/providers/providers.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -29,6 +32,13 @@ const isTest = process.env.NODE_ENV === 'test';
         transport: isDev && !isTest
           ? { target: 'pino-pretty', options: { singleLine: true } }
           : undefined,
+        // Same ID in the log line, the x-request-id response header and the error envelope
+        genReqId: (req, res) => {
+          const id = resolveRequestId(req.headers['x-request-id']);
+          req.headers['x-request-id'] = id;
+          res.setHeader('x-request-id', id);
+          return id;
+        },
         redact: ['req.headers.authorization', 'req.headers.cookie'],
         autoLogging: {
           ignore: (req) =>
@@ -50,6 +60,8 @@ const isTest = process.env.NODE_ENV === 'test';
         };
       },
     }),
+    CommonModule,
+    ProvidersModule.forRoot(),
     DatabaseModule,
     HealthModule,
   ],
@@ -61,6 +73,6 @@ const isTest = process.env.NODE_ENV === 'test';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestIdMiddleware).forRoutes('*');
+    consumer.apply(RequestIdMiddleware).forRoutes('{*path}');
   }
 }

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { hmacSign, hmacVerify, encrypt, decrypt } from './crypto.helper.js';
+import {
+  hmacSign,
+  hmacVerify,
+  encrypt,
+  decrypt,
+  readKeyId,
+} from './crypto.helper.js';
 
 describe('Crypto Helpers', () => {
   describe('HMAC operations', () => {
@@ -111,6 +117,43 @@ describe('Crypto Helpers', () => {
 
     it('should fail with invalid format', () => {
       expect(() => decrypt('invalid-format', key)).toThrow('Decryption failed');
+    });
+
+    it('should store the key ID and format version with the value', () => {
+      const encrypted = encrypt('value', key, { keyId: 'k2' });
+
+      expect(encrypted.startsWith('v1.k2.')).toBe(true);
+      expect(readKeyId(encrypted)).toBe('k2');
+    });
+
+    it('should reject an invalid key ID', () => {
+      expect(() => encrypt('value', key, { keyId: 'bad.id' })).toThrow('Invalid key ID');
+    });
+
+    it('should bind the ciphertext to its AAD', () => {
+      const encrypted = encrypt('value', key, { aad: 'row-1' });
+
+      expect(decrypt(encrypted, key, { aad: 'row-1' })).toBe('value');
+      expect(() => decrypt(encrypted, key, { aad: 'row-2' })).toThrow('Decryption failed');
+      expect(() => decrypt(encrypted, key)).toThrow('Decryption failed');
+    });
+
+    it('should accept secrets of any length and multibyte characters', () => {
+      const short = 'abc';
+      const long = 'k'.repeat(200);
+      const multibyte = 'ключ-密钥-🔑-'.repeat(5);
+
+      for (const secret of [short, long, multibyte]) {
+        expect(decrypt(encrypt('payload', secret), secret)).toBe('payload');
+      }
+    });
+
+    it('should not treat secrets that share a 32-character prefix as equal', () => {
+      const a = 'x'.repeat(32) + 'A';
+      const b = 'x'.repeat(32) + 'B';
+      const encrypted = encrypt('payload', a);
+
+      expect(() => decrypt(encrypted, b)).toThrow('Decryption failed');
     });
   });
 });

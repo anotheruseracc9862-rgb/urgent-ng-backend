@@ -13,6 +13,10 @@ export interface GeocodeResult {
 export interface ReverseGeocodeResult {
   success: boolean;
   address?: string;
+  /** Neighbourhood or district, for example "Yaba". Shown in feeds instead of the address. */
+  area?: string;
+  /** Local government area, for example "Lagos Mainland". */
+  lga?: string;
   city?: string;
   state?: string;
   error?: string;
@@ -22,6 +26,8 @@ export interface DistanceResult {
   success: boolean;
   distanceMeters?: number;
   durationSeconds?: number;
+  /** True only when durationSeconds already accounts for live traffic. */
+  trafficAware?: boolean;
   error?: string;
 }
 

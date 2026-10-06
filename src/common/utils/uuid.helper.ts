@@ -1,43 +1,20 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-
-// Monotonic counter for UUIDv7 within same millisecond
-let lastTimestamp = 0;
-let counter = 0;
+import { randomUUID } from 'node:crypto';
+import { v7 } from 'uuid';
 
 /**
- * Generate UUIDv7 (time-ordered UUID)
- * 
- * UUIDv7 format: xxxxxxxx-xxxx-7xxx-xxxx-xxxxxxxxxxxx
- * where the first 48 bits are Unix timestamp in milliseconds
- * and a monotonic counter ensures ordering within the same millisecond
+ * Generate a UUIDv7 (RFC 9562): a 48-bit millisecond timestamp, version and
+ * variant bits, and a monotonic counter so IDs created in the same
+ * millisecond still sort in creation order.
  */
 export function generateUuidV7(): string {
-  let now = Date.now();
-  
-  // Handle monotonic ordering within same millisecond
-  if (now === lastTimestamp) {
-    counter++;
-  } else {
-    lastTimestamp = now;
-    counter = 0;
-  }
-  
-  // Combine timestamp and counter for 48 bits
-  const timestampWithCounter = now * 4096 + (counter % 4096);
-  const timestampHex = timestampWithCounter.toString(16).padStart(12, '0');
-  
-  // Generate random bytes for the rest
-  const random = randomBytes(10);
-  
-  // Combine timestamp with random parts
-  // Format: tttttttt-tttt-7xxx-xxxx-xxxxxxxxxxxx
-  return [
-    timestampHex.slice(0, 8),
-    timestampHex.slice(8, 12),
-    '7' + random.subarray(0, 2).toString('hex').slice(1),
-    random.subarray(2, 4).toString('hex'),
-    random.subarray(4, 10).toString('hex'),
-  ].join('-');
+  return v7();
+}
+
+/**
+ * Read the millisecond timestamp encoded in a UUIDv7.
+ */
+export function uuidV7Timestamp(uuid: string): number {
+  return Number.parseInt(uuid.replace(/-/g, '').slice(0, 12), 16);
 }
 
 /**

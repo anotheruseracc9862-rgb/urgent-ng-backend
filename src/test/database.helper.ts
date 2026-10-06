@@ -1,18 +1,24 @@
 /**
- * Test database helper for integration tests
- * Manages database lifecycle, cleanup, and transaction rollback per test
+ * Test database helper for integration tests.
+ * Every helper refuses to run unless it is pointed at the test database
+ * (`*_test`) and a non-zero Redis database.
  */
 
 import { PrismaClient } from '@prisma/client';
 import { Redis } from 'ioredis';
+import { assertSafeTestDatabase, assertSafeTestRedis } from './test-env.js';
 
 let prisma: PrismaClient | null = null;
 let redis: Redis | null = null;
+
+// Tables that belong to Prisma or to PostGIS and must never be truncated.
+const PROTECTED_TABLES = ['_prisma_migrations', 'spatial_ref_sys'];
 
 /**
  * Get or create shared Prisma client for tests
  */
 export function getTestPrisma(): PrismaClient {
+  assertSafeTestDatabase();
   if (!prisma) {
     prisma = new PrismaClient({
       datasources: {
@@ -29,11 +35,9 @@ export function getTestPrisma(): PrismaClient {
  * Get or create shared Redis client for tests
  */
 export function getTestRedis(): Redis {
+  assertSafeTestRedis();
   if (!redis) {
-    redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6399', 10),
-      db: parseInt(process.env.REDIS_DB || '0', 10),
+    redis = new Redis(process.env.REDIS_URL as string, {
       maxRetriesPerRequest: null,
     });
   }
@@ -41,31 +45,32 @@ export function getTestRedis(): Redis {
 }
 
 /**
- * Clean all tables in the database (for test cleanup)
- * Preserves structure, only deletes data
+ * Remove all rows from every application table (for test cleanup).
+ * Keeps table structure. Runs as one statement, so it works on a pooled
+ * connection, and never touches Prisma or PostGIS system tables.
  */
 export async function cleanDatabase(): Promise<void> {
   const client = getTestPrisma();
-  
-  // Get all table names from the database
+
   const tables = await client.$queryRaw<Array<{ tablename: string }>>`
-    SELECT tablename FROM pg_tables 
-    WHERE schemaname = 'public' 
-    AND tablename != '_prisma_migrations'
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
   `;
 
-  // Disable triggers and truncate all tables
-  await client.$executeRawUnsafe('SET session_replication_role = replica;');
-  
-  for (const { tablename } of tables) {
-    await client.$executeRawUnsafe(`TRUNCATE TABLE "${tablename}" CASCADE;`);
+  const names = tables
+    .map((table) => table.tablename)
+    .filter((name) => !PROTECTED_TABLES.includes(name));
+
+  if (names.length === 0) {
+    return;
   }
-  
-  await client.$executeRawUnsafe('SET session_replication_role = DEFAULT;');
+
+  const list = names.map((name) => `"${name}"`).join(', ');
+  await client.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
 }
 
 /**
- * Flush all keys from test Redis database
+ * Flush all keys from the test Redis database
  */
 export async function cleanRedis(): Promise<void> {
   const client = getTestRedis();
@@ -81,14 +86,13 @@ export async function cleanAll(): Promise<void> {
 
 /**
  * Close all test database connections
- * Call this in global teardown
  */
 export async function closeTestConnections(): Promise<void> {
   if (prisma) {
     await prisma.$disconnect();
     prisma = null;
   }
-  
+
   if (redis) {
     await redis.quit();
     redis = null;

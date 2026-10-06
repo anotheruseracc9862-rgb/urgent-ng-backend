@@ -1,50 +1,74 @@
 /**
- * Payment gateway provider interface (Paystack)
+ * Payment gateway interface (Paystack), used only for Urgent.ng's own
+ * products: Runner Pro, boosts and the optional verification fee (Backend PRD
+ * section 22). Never used for the errand payment.
+ *
+ * Amounts are integer kobo. Transport failures throw `ProviderError`;
+ * business outcomes (a declined card, an abandoned checkout) are returned.
  */
 
-export interface PaymentInitializationResult {
-  success: boolean;
-  authorizationUrl?: string;
-  accessCode?: string;
-  reference?: string;
-  error?: string;
+export interface InitializeTransactionInput {
+  email: string;
+  amountKobo: number;
+  reference: string;
+  callbackUrl?: string;
+  metadata?: Record<string, unknown>;
 }
 
-export interface PaymentVerificationResult {
-  success: boolean;
-  status?: 'success' | 'failed' | 'pending';
-  amount?: number; // In kobo
-  reference?: string;
+export interface InitializeTransactionResult {
+  authorizationUrl: string;
+  accessCode: string;
+  reference: string;
+}
+
+export type TransactionStatus = 'success' | 'failed' | 'abandoned' | 'pending';
+
+export interface VerifyTransactionResult {
+  status: TransactionStatus;
+  reference: string;
+  amountKobo: number;
   paidAt?: Date;
-  error?: string;
+  /** Reusable card authorisation, returned on a successful card payment. */
+  authorizationCode?: string;
+  customerEmail?: string;
+}
+
+export interface ChargeAuthorizationInput {
+  email: string;
+  authorizationCode: string;
+  amountKobo: number;
+  reference: string;
+}
+
+export interface RefundInput {
+  /** Reference of the original transaction. */
+  reference: string;
+  /** Omit to refund the full amount. */
+  amountKobo?: number;
 }
 
 export interface RefundResult {
-  success: boolean;
-  refundId?: string;
-  error?: string;
+  providerRefundRef: string;
+  status: 'pending' | 'processed' | 'failed';
 }
 
 export interface IPaymentProvider {
-  /**
-   * Initialize a payment transaction
-   */
-  initializePayment(
-    email: string,
-    amountKobo: number,
-    reference: string,
-    callbackUrl?: string,
-  ): Promise<PaymentInitializationResult>;
+  initializeTransaction(
+    input: InitializeTransactionInput,
+  ): Promise<InitializeTransactionResult>;
 
-  /**
-   * Verify a payment by reference
-   */
-  verifyPayment(reference: string): Promise<PaymentVerificationResult>;
+  /** The only trusted source of payment status; never trust a browser redirect. */
+  verifyTransaction(reference: string): Promise<VerifyTransactionResult>;
 
-  /**
-   * Refund a payment
-   */
-  refundPayment(reference: string, amountKobo?: number): Promise<RefundResult>;
+  /** Charge a saved authorisation, used for Runner Pro auto-renewal. */
+  chargeAuthorization(
+    input: ChargeAuthorizationInput,
+  ): Promise<VerifyTransactionResult>;
+
+  refund(input: RefundInput): Promise<RefundResult>;
+
+  /** Verify a webhook against the raw request body, in constant time. */
+  verifyWebhookSignature(rawBody: string | Buffer, signature: string): boolean;
 }
 
 export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');

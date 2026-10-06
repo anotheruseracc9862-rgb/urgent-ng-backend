@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CursorService } from './cursor.service.js';
 import { ConfigService } from '@nestjs/config';
+import { DomainException } from '../exceptions/domain.exception.js';
 
 describe('CursorService', () => {
   let service: CursorService;
@@ -52,16 +53,16 @@ describe('CursorService', () => {
       const encoded = service.encode(data);
       const tampered = encoded.slice(0, -5) + 'XXXXX';
 
-      expect(() => service.decode(tampered)).toThrow('Invalid cursor');
+      expect(() => service.decode(tampered)).toThrow('Invalid pagination cursor');
     });
 
     it('should throw on invalid base64', () => {
-      expect(() => service.decode('not-valid-base64!!!')).toThrow('Invalid cursor');
+      expect(() => service.decode('not-valid-base64!!!')).toThrow('Invalid pagination cursor');
     });
 
     it('should throw on malformed JSON', () => {
       const invalid = Buffer.from('not valid json').toString('base64url');
-      expect(() => service.decode(invalid)).toThrow('Invalid cursor');
+      expect(() => service.decode(invalid)).toThrow('Invalid pagination cursor');
     });
   });
 
@@ -81,7 +82,29 @@ describe('CursorService', () => {
       parsed.signature = 'tampered';
       const reencoded = Buffer.from(JSON.stringify(parsed)).toString('base64url');
 
-      expect(() => service.decode(reencoded)).toThrow('Invalid cursor');
+      expect(() => service.decode(reencoded)).toThrow('Invalid pagination cursor');
+    });
+  });
+
+  describe('error type', () => {
+    it('should throw a 400 VALIDATION_ERROR DomainException, never a plain Error', () => {
+      try {
+        service.decode('garbage');
+        expect.unreachable('decode should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(DomainException);
+        expect((error as DomainException).code).toBe('VALIDATION_ERROR');
+        expect((error as DomainException).httpStatus).toBe(400);
+      }
+    });
+
+    it('should reject a validly signed payload with bad field types', () => {
+      const payload = JSON.stringify({ sort: { nested: true }, createdAt: 'nope', id: 5 });
+      const forged = Buffer.from(
+        JSON.stringify({ payload, signature: 'x' }),
+      ).toString('base64url');
+
+      expect(() => service.decode(forged)).toThrow('Invalid pagination cursor');
     });
   });
 });

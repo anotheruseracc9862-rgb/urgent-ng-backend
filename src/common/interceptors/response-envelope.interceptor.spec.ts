@@ -3,7 +3,7 @@ import { ResponseEnvelopeInterceptor } from './response-envelope.interceptor.js'
 import { Reflector } from '@nestjs/core';
 import { ExecutionContext, CallHandler } from '@nestjs/common';
 import { of } from 'rxjs';
-import { NO_ENVELOPE_KEY } from '../decorators/no-envelope.decorator.js';
+import { Paginated } from '../pagination/paginated.js';
 
 describe('ResponseEnvelopeInterceptor', () => {
   let interceptor: ResponseEnvelopeInterceptor<any>;
@@ -58,6 +58,24 @@ describe('ResponseEnvelopeInterceptor', () => {
       data: { result: 'test data' },
       meta: {},
       requestId: '',
+    });
+  });
+
+  it('should lift meta from a Paginated result instead of nesting it', async () => {
+    const mockContext = createMockContext('page-request-id', false);
+    const mockHandler = {
+      handle: () =>
+        of(new Paginated([{ id: 'a' }, { id: 'b' }], { hasNextPage: true, nextCursor: 'cur' })),
+    } as CallHandler;
+
+    const result = await interceptor
+      .intercept(mockContext, mockHandler)
+      .toPromise();
+
+    expect(result).toEqual({
+      data: [{ id: 'a' }, { id: 'b' }],
+      meta: { hasNextPage: true, nextCursor: 'cur' },
+      requestId: 'page-request-id',
     });
   });
 

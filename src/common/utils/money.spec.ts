@@ -35,6 +35,36 @@ describe('Money', () => {
     });
   });
 
+  describe('fromNairaString', () => {
+    it('should parse exactly without floating point error', () => {
+      expect(Money.fromNairaString('8500').toKobo()).toBe(850000);
+      expect(Money.fromNairaString('8,500.50').toKobo()).toBe(850050);
+      expect(Money.fromNairaString('₦1,000.5').toKobo()).toBe(100050);
+      expect(Money.fromNairaString('0.07').toKobo()).toBe(7);
+    });
+
+    it('should reject invalid input', () => {
+      expect(() => Money.fromNairaString('abc')).toThrow('Invalid naira amount');
+      expect(() => Money.fromNairaString('1.234')).toThrow('Invalid naira amount');
+      expect(() => Money.fromNairaString('-5')).toThrow('Invalid naira amount');
+      expect(() => Money.fromNairaString('')).toThrow('Invalid naira amount');
+    });
+  });
+
+  describe('BigInt interop', () => {
+    it('should convert to and from a BigInt column value', () => {
+      const money = Money.fromBigInt(850000n);
+
+      expect(money.toKobo()).toBe(850000);
+      expect(money.toBigInt()).toBe(850000n);
+    });
+
+    it('should reject BigInt values outside the supported range', () => {
+      expect(() => Money.fromBigInt(-1n)).toThrow('between');
+      expect(() => Money.fromBigInt(10n ** 18n)).toThrow('between');
+    });
+  });
+
   describe('arithmetic operations', () => {
     it('should add two Money values', () => {
       const a = Money.fromKobo(1000);
