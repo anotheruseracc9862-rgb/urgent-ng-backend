@@ -97,6 +97,31 @@ async function main() {
 
   console.log('✓ Initial prices seeded');
 
+  // Seed kill switch flags (P1-08)
+  console.log('Seeding kill switch flags...');
+
+  const killSwitches = [
+    { key: 'registrations_enabled', value: 'true', description: 'Allow new user registrations' },
+    { key: 'errand_posting_enabled', value: 'true', description: 'Allow errand creation' },
+    { key: 'offers_enabled', value: 'true', description: 'Allow runner offers' },
+    { key: 'billing_enabled', value: 'true', description: 'Allow billing operations' },
+  ];
+
+  for (const flag of killSwitches) {
+    await prisma.$executeRaw`
+      INSERT INTO config_values (key, value, description, value_type)
+      VALUES (
+        ${flag.key},
+        ${flag.value},
+        ${flag.description},
+        'BOOLEAN'
+      )
+      ON CONFLICT (key) DO NOTHING
+    `;
+  }
+
+  console.log('✓ Kill switch flags seeded');
+
   console.log('✓ Database seeded successfully');
 }
 
