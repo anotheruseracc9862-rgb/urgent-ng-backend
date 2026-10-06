@@ -13,6 +13,8 @@ export interface AppConfig {
   jwt: {
     secret: string;
     refreshSecret: string;
+    accessTokenTtl: number; // 15 minutes in seconds
+    refreshTokenTtl: number; // 30 days in seconds
   };
   security: {
     dataEncryptionKey: string;
@@ -65,6 +67,8 @@ export default (): AppConfig => ({
   jwt: {
     secret: process.env.JWT_SECRET ?? '',
     refreshSecret: process.env.JWT_REFRESH_SECRET ?? '',
+    accessTokenTtl: 15 * 60, // 15 minutes
+    refreshTokenTtl: 30 * 24 * 60 * 60, // 30 days
   },
   security: {
     dataEncryptionKey:
