@@ -20,7 +20,9 @@ describe('RequestIdMiddleware', () => {
     mockRequest = {
       headers: {},
     };
-    mockResponse = {};
+    mockResponse = {
+      setHeader: vi.fn(),
+    };
     mockNext = vi.fn();
   });
 

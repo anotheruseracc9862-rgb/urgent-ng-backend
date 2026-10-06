@@ -21,9 +21,12 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
+    "db:reset": "prisma migrate reset --force",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
+    "prisma:seed": "node dist/prisma/seed.js",
+    "openapi": "node dist/scripts/generate-openapi.js",
     "start:scheduler": "node dist/scheduler/main.js",
     "check": "npm run lint && npm run build && npm test"
   },
