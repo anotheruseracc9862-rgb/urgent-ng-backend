@@ -581,3 +581,102 @@ enum BlocklistType {
   IDENTITY_HMAC
   DEVICE
 }
+
+// ========================================
+// MODELS
+// ========================================
+
+// P1-01: Demo migration patterns
+model DemoLocation {
+  id          String                     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String
+  point       Unsupported("geography(Point,4326)")
+  searchText  Unsupported("tsvector")?
+  createdAt   DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([point], type: Gist)
+  @@index([searchText], type: Gin)
+  @@map("demo_locations")
+}
+
+model DemoConstraint {
+  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  code       String    @unique
+  amount     Int
+  status     String
+  email      String?
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([code, status], map: "demo_constraints_code_status_unique")
+  @@map("demo_constraints")
+}
+
+// P1-02: Config store and pricing tables
+model ConfigValue {
+  id                String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  key               String
+  valueJson         Json      @map("value_json")
+  version           Int       @default(1)
+  effectiveFrom     DateTime  @default(now()) @map("effective_from") @db.Timestamptz(3)
+  updatedByAdminId  String?   @map("updated_by_admin_id") @db.Uuid
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([key, effectiveFrom])
+  @@map("config_values")
+}
+
+model CommercialProduct {
+  id          String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  code        String         @unique
+  name        String
+  description String?
+  type        String
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  priceVersions PriceVersion[]
+
+  @@map("commercial_products")
+}
+
+model PriceVersion {
+  id                String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  productId         String             @map("product_id") @db.Uuid
+  amountKobo        BigInt             @map("amount_kobo")
+  currency          String             @default("NGN")
+  effectiveFrom     DateTime           @map("effective_from") @db.Date
+  notes             String?
+  createdByAdminId  String?            @map("created_by_admin_id") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  product           CommercialProduct  @relation(fields: [productId], references: [id])
+
+  @@index([productId, effectiveFrom])
+  @@map("price_versions")
+}
+
+// P1-03: Audit log
+model AuditLog {
+  id           String          @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  actorType    AuditActorType  @map("actor_type")
+  actorId      String?         @map("actor_id") @db.Uuid
+  action       String
+  entityType   String?         @map("entity_type")
+  entityId     String?         @map("entity_id") @db.Uuid
+  requestId    String?         @map("request_id")
+  beforeHash   String?         @map("before_hash")
+  afterHash    String?         @map("after_hash")
+  reasonCode   String?         @map("reason_code")
+  metadata     Json?
+  ip           String?
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([actorType, actorId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
