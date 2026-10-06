@@ -680,3 +680,24 @@ model AuditLog {
   @@index([createdAt])
   @@map("audit_logs")
 }
+
+// P1-04: Outbox and queues
+model OutboxEvent {
+  id            String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  eventType     String       @map("event_type")
+  aggregateType String?      @map("aggregate_type")
+  aggregateId   String?      @map("aggregate_id") @db.Uuid
+  payload       Json
+  occurredAt    DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  availableAt   DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  processedAt   DateTime?    @map("processed_at") @db.Timestamptz(3)
+  lastError     String?      @map("last_error")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([status, availableAt, occurredAt, id], map: "outbox_events_poll_idx")
+  @@index([status, occurredAt], map: "outbox_events_dead_letter_idx")
+  @@index([aggregateType, aggregateId, occurredAt, id], map: "outbox_events_aggregate_idx")
+  @@map("outbox_events")
+}
