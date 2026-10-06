@@ -17,6 +17,8 @@ export interface AppConfig {
   security: {
     dataEncryptionKey: string;
     hmacSecret: string;
+    otpHmacSecret: string;
+    blocklistHmacSecret: string;
   };
   dojah: {
     appId: string;
@@ -68,6 +70,10 @@ export default (): AppConfig => ({
     dataEncryptionKey:
       process.env.DATA_ENCRYPTION_KEY || devSecret('data-encryption-key'),
     hmacSecret: process.env.HMAC_SECRET || devSecret('hmac-secret'),
+    otpHmacSecret:
+      process.env.OTP_HMAC_SECRET || devSecret('otp-hmac-secret'),
+    blocklistHmacSecret:
+      process.env.BLOCKLIST_HMAC_SECRET || devSecret('blocklist-hmac-secret'),
   },
   dojah: {
     appId: process.env.DOJAH_APP_ID ?? '',

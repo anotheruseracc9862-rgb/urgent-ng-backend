@@ -80,6 +80,20 @@ export class EnvironmentVariables {
   })
   HMAC_SECRET?: string;
 
+  @ValidateIf(isProduction)
+  @IsString()
+  @MinLength(32, {
+    message: 'OTP_HMAC_SECRET must be at least 32 characters in production',
+  })
+  OTP_HMAC_SECRET?: string;
+
+  @ValidateIf(isProduction)
+  @IsString()
+  @MinLength(32, {
+    message: 'BLOCKLIST_HMAC_SECRET must be at least 32 characters in production',
+  })
+  BLOCKLIST_HMAC_SECRET?: string;
+
   // Provider modes: "fake" (default) uses in-process fakes, "real" calls the vendor.
   @IsOptional()
   @Transform(defaultToFake)
