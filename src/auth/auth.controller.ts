@@ -7,11 +7,15 @@ import { SessionService } from './session.service.js';
 import { ProfileService } from './profile.service.js';
 import { AccountService } from './account.service.js';
 import { NotificationPreferenceService } from './notification-preference.service.js';
+import { BlockService } from './block.service.js';
+import { ConsentService } from './consent.service.js';
+import { DeviceService } from './device.service.js';
 import { RegisterDto, SendOtpDto, VerifyOtpDto } from './dto/register.dto.js';
 import { LoginDto, RefreshTokenDto, PasswordResetRequestDto, PasswordResetConfirmDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/profile.dto.js';
 import { DeactivateAccountDto, RequestDeletionDto } from './dto/account.dto.js';
 import { UpdatePreferencesDto } from './dto/notification-preferences.dto.js';
+import { RegisterDeviceDto } from './dto/device.dto.js';
 import { RateLimit } from '../common/decorators/rate-limit.decorator.js';
 import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
 import { AccountStatusGuard, AllowDeactivated } from './guards/account-status.guard.js';
@@ -32,6 +36,9 @@ export class AuthController {
     private readonly profileService: ProfileService,
     private readonly accountService: AccountService,
     private readonly notificationPreferenceService: NotificationPreferenceService,
+    private readonly blockService: BlockService,
+    private readonly consentService: ConsentService,
+    private readonly deviceService: DeviceService,
   ) {}
 
   /**
@@ -551,5 +558,135 @@ export class AuthController {
       success: true,
       data: preferences,
     };
+  }
+
+  /**
+   * Block a user (P2-07)
+   * POST /auth/blocks/:userId
+   */
+  @Post('blocks/:userId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async blockUser(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId') blockedUserId: string,
+  ) {
+    const result = await this.blockService.blockUser(user.userId, blockedUserId);
+    return result;
+  }
+
+  /**
+   * Unblock a user (P2-07)
+   * DELETE /auth/blocks/:userId
+   */
+  @Delete('blocks/:userId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async unblockUser(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId') blockedUserId: string,
+  ) {
+    const result = await this.blockService.unblockUser(user.userId, blockedUserId);
+    return result;
+  }
+
+  /**
+   * List blocked users (P2-07)
+   * GET /auth/blocks
+   */
+  @Get('blocks')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async listBlocks(@CurrentUser() user: AuthenticatedUser) {
+    const blocks = await this.blockService.listBlocks(user.userId);
+    return {
+      success: true,
+      data: blocks,
+    };
+  }
+
+  /**
+   * Get user's consent history (P2-07)
+   * GET /auth/consents
+   */
+  @Get('consents')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async getConsents(@CurrentUser() user: AuthenticatedUser) {
+    const consents = await this.consentService.getUserConsents(user.userId);
+    return {
+      success: true,
+      data: consents,
+    };
+  }
+
+  /**
+   * Accept a policy version (P2-07)
+   * POST /auth/consents
+   * Body: { consentType, documentVersion }
+   */
+  @Post('consents')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async acceptPolicy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { consentType: string; documentVersion: string },
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent: string,
+  ) {
+    const result = await this.consentService.recordConsent(
+      user.userId,
+      body.consentType as any,
+      body.documentVersion,
+      ipAddress,
+      userAgent,
+    );
+    return result;
+  }
+
+  /**
+   * Register a device for push notifications (P2-08)
+   * POST /auth/devices
+   */
+  @Post('devices')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async registerDevice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RegisterDeviceDto,
+  ) {
+    const result = await this.deviceService.registerDevice(
+      user.userId,
+      dto.deviceType,
+      dto.pushToken,
+    );
+    return result;
+  }
+
+  /**
+   * List user's devices (P2-08)
+   * GET /auth/devices
+   */
+  @Get('devices')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async listDevices(@CurrentUser() user: AuthenticatedUser) {
+    const devices = await this.deviceService.listDevices(user.userId);
+    return {
+      success: true,
+      data: devices,
+    };
+  }
+
+  /**
+   * Deactivate a device (P2-08)
+   * DELETE /auth/devices/:id
+   */
+  @Delete('devices/:id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async deactivateDevice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') deviceId: string,
+  ) {
+    const result = await this.deviceService.deactivateDevice(user.userId, deviceId);
+    return result;
   }
 }
