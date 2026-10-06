@@ -419,6 +419,16 @@ enum AdminStatus {
   INVITED
 }
 
+enum AdminAuthEventType {
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  TOTP_ENABLED
+  TOTP_DISABLED
+  PASSWORD_CHANGED
+  ACCOUNT_LOCKED
+}
+
 enum ConsentType {
   TERMS_OF_SERVICE
   PRIVACY_POLICY
@@ -876,4 +886,113 @@ model UserRestriction {
   @@index([userId, status, type], map: "user_restrictions_user_status_type_idx")
   @@index([endsAt], map: "user_restrictions_ends_at_idx")
   @@map("user_restrictions")
+}
+
+// P2-06: Admin identity and RBAC
+
+model Admin {
+  id                String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  email             String         @unique @map("email")
+  passwordHash      String         @map("password_hash")
+  totpSecret        String?        @map("totp_secret")
+  totpEnabled       Boolean        @default(false) @map("totp_enabled")
+  status            AdminStatus    @default(ACTIVE)
+  failedLoginCount  Int            @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?      @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt       DateTime?      @map("last_login_at") @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  // Relations
+  roleAssignments   AdminRoleAssignment[]
+  sessions          AdminSession[]
+  authEvents        AdminAuthEvent[]
+
+  @@index([status], map: "admins_status_idx")
+  @@map("admins")
+}
+
+model AdminRole {
+  id          String                  @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String                  @unique
+  description String?
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Relations
+  permissions AdminRolePermission[]
+  assignments AdminRoleAssignment[]
+
+  @@map("admin_roles")
+}
+
+model AdminPermission {
+  id          String                  @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String                  @unique
+  description String?
+  category    String
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // Relations
+  roles       AdminRolePermission[]
+
+  @@index([category], map: "admin_permissions_category_idx")
+  @@map("admin_permissions")
+}
+
+model AdminRolePermission {
+  roleId       String           @db.Uuid @map("role_id")
+  permissionId String           @db.Uuid @map("permission_id")
+  role         AdminRole        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   AdminPermission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([roleId, permissionId])
+  @@map("admin_role_permissions")
+}
+
+model AdminRoleAssignment {
+  adminId    String    @db.Uuid @map("admin_id")
+  roleId     String    @db.Uuid @map("role_id")
+  admin      Admin     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  role       AdminRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt DateTime  @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  assignedBy String    @db.Uuid @map("assigned_by")
+
+  @@id([adminId, roleId])
+  @@map("admin_role_assignments")
+}
+
+model AdminSession {
+  id                  String     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  adminId             String     @db.Uuid @map("admin_id")
+  admin               Admin      @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  tokenHash           String     @unique @map("token_hash")
+  userAgent           String?    @map("user_agent")
+  ip                  String?    @db.Inet
+  expiresAt           DateTime   @map("expires_at") @db.Timestamptz(3)
+  revokedAt           DateTime?  @map("revoked_at") @db.Timestamptz(3)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([adminId, revokedAt], map: "admin_sessions_admin_revoked_idx")
+  @@index([expiresAt], map: "admin_sessions_expires_at_idx")
+  @@map("admin_sessions")
+}
+
+model AdminAuthEvent {
+  id        String           @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  adminId   String?          @db.Uuid @map("admin_id")
+  admin     Admin?           @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  event     AdminAuthEventType
+  email     String
+  ip        String?          @db.Inet
+  userAgent String?          @map("user_agent")
+  success   Boolean
+  reason    String?
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([adminId, createdAt], map: "admin_auth_events_admin_created_idx")
+  @@index([email, createdAt], map: "admin_auth_events_email_created_idx")
+  @@map("admin_auth_events")
 }
