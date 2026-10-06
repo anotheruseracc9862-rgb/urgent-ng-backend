@@ -21,9 +21,7 @@ export interface AppConfig {
   dojah: {
     appId: string;
     secretKey: string;
-    publicKey: string;
     baseUrl: string;
-    webhookSecret: string;
   };
   providers: {
     kyc: ProviderMode;
@@ -66,9 +64,7 @@ export default (): AppConfig => ({
   dojah: {
     appId: process.env.DOJAH_APP_ID ?? '',
     secretKey: process.env.DOJAH_SECRET_KEY ?? '',
-    publicKey: process.env.DOJAH_PUBLIC_KEY ?? '',
     baseUrl: process.env.DOJAH_BASE_URL ?? '',
-    webhookSecret: process.env.DOJAH_WEBHOOK_SECRET ?? '',
   },
   providers: {
     kyc: mode(process.env.KYC_PROVIDER),

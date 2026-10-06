@@ -1,12 +1,10 @@
 # Urgent.ng Backend
 
 NestJS modular monolith for the Urgent.ng errand marketplace. The authoritative
-specifications live in `../doc/`:
+specification lives in `../doc/`:
 
-- Backend Architecture PRD (platform)
-- Backend Domain Rules & Data Contracts PRD (domain rules, state machines, enums)
-- Backend Gap Resolutions PRD (amendments, defaults, admin scope)
-- Backend Build Plan (phased task list; start here when building)
+- `Urgent.ng — Backend PRD.md` is the single backend specification (architecture, domain rules, data contracts, and the data dictionary)
+- `Urgent.ng — Backend Build Plan.md` is the phased task list (start here when building)
 
 ## Stack
 
@@ -39,7 +37,7 @@ npm run start:dev      # http://localhost:4000/api/v1
 
 ## Process types
 
-Three entry points share one codebase (PRD 1 section 61):
+Three entry points share one codebase (Backend PRD section 5.2):
 
 | Command | Entry | Purpose |
 |---|---|---|
@@ -69,6 +67,6 @@ helmet, validation) shared by `main.ts` and the e2e tests.
 ## Database notes
 
 - Prisma cannot express PostGIS geography columns, partial unique indexes or
-  CHECK constraints. Add those as hand-written SQL inside a Prisma migration and
-  keep raw SQL inside repository classes (Gap Resolutions GR-34).
+  CHECK constraints. Add those as hand-written SQL inside a Prisma migration
+  (`prisma migrate dev --create-only`, then edit the SQL) and keep raw SQL inside repository classes (Backend PRD section 26.1).
 - The `enable_postgis` migration enables the extension.

@@ -1,5 +1,5 @@
-// Urgent.ng — canonical enums from the Backend Domain Rules & Data Contracts
-// PRD (§4). Models are added module-by-module as implementation proceeds.
+// Urgent.ng — canonical enums from the Backend PRD (sections 8 and A.2).
+// Models are added module-by-module as implementation proceeds (see Appendix A).
 
 generator client {
   provider = "prisma-client-js"
@@ -85,9 +85,10 @@ enum OfferCloseReason {
   ERRAND_CANCELLED
   ERRAND_EXPIRED
   ASSIGNMENT_ACCEPTED
+  ASSIGNMENT_DECLINED
+  ASSIGNMENT_ACCEPTANCE_TIMEOUT
   RUNNER_RESTRICTED
   ADMIN_CLOSED
-  ASSIGNMENT_ACCEPTANCE_TIMEOUT
 }
 
 enum AssignmentStatus {
@@ -318,4 +319,265 @@ enum OutboxStatus {
   PUBLISHED
   FAILED
   DEAD_LETTERED
+}
+
+enum StartMode {
+  REQUESTER
+  RUNNER
+}
+
+enum TimeMode {
+  ASAP
+  SCHEDULED
+}
+
+enum ItemSize {
+  SMALL
+  MEDIUM
+  LARGE
+  EXTRA_LARGE
+}
+
+enum AwaitingParty {
+  NONE
+  RUNNER
+  REQUESTER
+}
+
+enum ChangeRequestType {
+  AMOUNT
+  PICKUP
+  DESTINATION
+  TIME
+  OTHER
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum ExecutionProblemType {
+  ITEM_NOT_READY
+  RECIPIENT_UNREACHABLE
+  WRONG_ADDRESS
+  ITEM_PROBLEM
+  OTHER
+}
+
+enum DelayReason {
+  TRAFFIC
+  ITEM_NOT_READY
+  QUEUE
+  TRANSPORT
+  PERSONAL
+  OTHER
+}
+
+enum TransportMethod {
+  WALKING
+  BICYCLE
+  MOTORCYCLE
+  CAR
+  PUBLIC_TRANSPORT
+  OTHER
+}
+
+enum DeviceType {
+  MOBILE_PUSH
+  WEB_PUSH
+}
+
+enum DisputeResolution {
+  COMPLETE
+  CANCEL
+  DISMISS
+}
+
+enum BadgeType {
+  NEW
+  TRUSTED
+  FAST_RESPONDER
+  PRO
+  NEW_REQUESTER
+  PROMPT_PAYER
+}
+
+enum OrderType {
+  VERIFICATION_FEE
+  RUNNER_PRO
+  BOOST
+}
+
+enum AdminStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+  INVITED
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  SAFETY_POLICY
+  PROHIBITED_ITEMS_POLICY
+  OFFLINE_PAYMENT_TERMS
+  LOCATION_SHARING
+  MARKETING_COMMUNICATIONS
+}
+
+enum MediaPurpose {
+  PROFILE_PHOTO
+  ERRAND_PHOTO
+  CHAT_IMAGE
+  PICKUP_EVIDENCE
+  DELIVERY_EVIDENCE
+  PURCHASE_RECEIPT
+  DISPUTE_EVIDENCE
+  VERIFICATION_INPUT
+  OTHER
+}
+
+enum RunnerAvailability {
+  AVAILABLE
+  UNAVAILABLE
+}
+
+enum MediaStatus {
+  PENDING
+  PROCESSING
+  READY
+  REJECTED
+}
+
+enum ModerationStatus {
+  NONE
+  FLAGGED
+  APPROVED
+  REMOVED
+}
+
+enum CheckpointType {
+  PICKUP
+  DELIVERY
+}
+
+enum ExecutionEventType {
+  STARTED
+  PICKED_UP
+  DELIVERED
+  COMPLETED
+  AUTO_COMPLETED
+  CANCELLED
+  PROBLEM_REPORTED
+  PROBLEM_RESOLVED
+  DELAY_NOTICE
+  RECEIPT_ADDED
+  CHANGE_REQUESTED
+  CHANGE_ACCEPTED
+  NO_SHOW_REPORTED
+}
+
+enum TrustedShareStatus {
+  CREATED
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum RiskFlagStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+  ACTIONED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum DsrType {
+  ACCESS
+  CORRECTION
+  DELETION
+}
+
+enum DsrStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  INITIATED
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+  FAILED
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED_DUPLICATE
+  FAILED
+}
+
+enum EntitlementType {
+  RUNNER_PRO
+  ERRAND_BOOST
+  VERIFICATION_ATTEMPT_ALLOWANCE
+}
+
+enum ReportTargetType {
+  USER
+  ERRAND
+  MESSAGE
+  RATING
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
+}
+
+enum EvidenceSourceType {
+  MESSAGE
+  MEDIA
+  CHECKPOINT
+  EXECUTION_EVENT
+  STATEMENT
+}
+
+enum BlocklistType {
+  PHONE
+  EMAIL
+  IDENTITY_HMAC
+  DEVICE
 }

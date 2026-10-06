@@ -82,7 +82,7 @@ describe('validateEnv', () => {
 
   it('requires Dojah credentials when KYC_PROVIDER is real', () => {
     expect(() => validateEnv({ ...valid, KYC_PROVIDER: 'real' })).toThrow(
-      /DOJAH_APP_ID[\s\S]*DOJAH_SECRET_KEY[\s\S]*DOJAH_BASE_URL[\s\S]*DOJAH_WEBHOOK_SECRET/,
+      /DOJAH_APP_ID[\s\S]*DOJAH_SECRET_KEY[\s\S]*DOJAH_BASE_URL/,
     );
   });
 
@@ -94,7 +94,6 @@ describe('validateEnv', () => {
         DOJAH_APP_ID: 'app',
         DOJAH_SECRET_KEY: 'secret',
         DOJAH_BASE_URL: 'https://sandbox.dojah.io',
-        DOJAH_WEBHOOK_SECRET: 'whsec',
       }),
     ).not.toThrow();
   });

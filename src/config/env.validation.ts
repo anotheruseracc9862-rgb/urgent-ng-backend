@@ -102,11 +102,6 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DOJAH_BASE_URL?: string;
 
-  @ValidateIf(usesRealKyc)
-  @IsString()
-  @IsNotEmpty()
-  DOJAH_WEBHOOK_SECRET?: string;
-
   @IsOptional()
   @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
