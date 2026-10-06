@@ -1,11 +1,17 @@
-import { Controller, Post, Body, Ip, HttpCode, HttpStatus, Get, Delete, Param, Req, Res, Headers, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Ip, HttpCode, HttpStatus, Get, Delete, Param, Req, Res, Headers, UseGuards, Patch } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { RegistrationService } from './registration.service.js';
 import { OtpService, OtpPurpose } from './otp.service.js';
 import { LoginService } from './login.service.js';
 import { SessionService } from './session.service.js';
+import { ProfileService } from './profile.service.js';
+import { AccountService } from './account.service.js';
+import { NotificationPreferenceService } from './notification-preference.service.js';
 import { RegisterDto, SendOtpDto, VerifyOtpDto } from './dto/register.dto.js';
 import { LoginDto, RefreshTokenDto, PasswordResetRequestDto, PasswordResetConfirmDto } from './dto/login.dto.js';
+import { UpdateProfileDto } from './dto/profile.dto.js';
+import { DeactivateAccountDto, RequestDeletionDto } from './dto/account.dto.js';
+import { UpdatePreferencesDto } from './dto/notification-preferences.dto.js';
 import { RateLimit } from '../common/decorators/rate-limit.decorator.js';
 import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
 import { AccountStatusGuard, AllowDeactivated } from './guards/account-status.guard.js';
@@ -23,6 +29,9 @@ export class AuthController {
     private readonly otpService: OtpService,
     private readonly loginService: LoginService,
     private readonly sessionService: SessionService,
+    private readonly profileService: ProfileService,
+    private readonly accountService: AccountService,
+    private readonly notificationPreferenceService: NotificationPreferenceService,
   ) {}
 
   /**
@@ -412,6 +421,135 @@ export class AuthController {
     return {
       success: true,
       message: 'Password reset successful. All sessions have been revoked.',
+    };
+  }
+
+  /**
+   * Get user profile (P2-05)
+   * GET /auth/profile
+   */
+  @Get('profile')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async getProfile(@CurrentUser() user: AuthenticatedUser) {
+    const profile = await this.profileService.getProfile(user.userId);
+
+    return {
+      success: true,
+      data: profile,
+    };
+  }
+
+  /**
+   * Update user profile (P2-05)
+   * PATCH /auth/profile
+   */
+  @Patch('profile')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async updateProfile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    const profile = await this.profileService.updateProfile(user.userId, dto);
+
+    return {
+      success: true,
+      data: profile,
+    };
+  }
+
+  /**
+   * Deactivate account (P2-05)
+   * POST /auth/account/deactivate
+   */
+  @Post('account/deactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async deactivateAccount(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeactivateAccountDto,
+  ) {
+    const result = await this.accountService.deactivateAccount(user.userId, dto.reason);
+
+    return result;
+  }
+
+  /**
+   * Reactivate account (P2-05)
+   * DELETE /auth/account/deactivate
+   */
+  @Delete('account/deactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard)
+  @AllowDeactivated()
+  async reactivateAccount(@CurrentUser() user: AuthenticatedUser) {
+    const result = await this.accountService.reactivateAccount(user.userId);
+
+    return result;
+  }
+
+  /**
+   * Request account deletion (P2-05)
+   * POST /auth/account/deletion-request
+   */
+  @Post('account/deletion-request')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async requestDeletion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RequestDeletionDto,
+  ) {
+    const result = await this.accountService.requestDeletion(user.userId, dto.reason);
+
+    return result;
+  }
+
+  /**
+   * Cancel account deletion (P2-05)
+   * DELETE /auth/account/deletion-request
+   */
+  @Delete('account/deletion-request')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ConsumerAuthGuard)
+  @AllowDeactivated()
+  async cancelDeletion(@CurrentUser() user: AuthenticatedUser) {
+    const result = await this.accountService.cancelDeletion(user.userId);
+
+    return result;
+  }
+
+  /**
+   * Get notification preferences (P2-05)
+   * GET /auth/preferences
+   */
+  @Get('preferences')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async getPreferences(@CurrentUser() user: AuthenticatedUser) {
+    const preferences = await this.notificationPreferenceService.getPreferences(user.userId);
+
+    return {
+      success: true,
+      data: preferences,
+    };
+  }
+
+  /**
+   * Update notification preferences (P2-05)
+   * PATCH /auth/preferences
+   */
+  @Patch('preferences')
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async updatePreferences(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdatePreferencesDto,
+  ) {
+    const preferences = await this.notificationPreferenceService.updatePreferences(
+      user.userId,
+      dto,
+    );
+
+    return {
+      success: true,
+      data: preferences,
     };
   }
 }

@@ -8,6 +8,9 @@ import { OtpService } from './otp.service.js';
 import { BlocklistService } from './blocklist.service.js';
 import { SessionService } from './session.service.js';
 import { LoginService } from './login.service.js';
+import { ProfileService } from './profile.service.js';
+import { AccountService } from './account.service.js';
+import { NotificationPreferenceService } from './notification-preference.service.js';
 import { FakeOtpDeliveryProvider } from './otp-delivery.provider.js';
 import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
 import { AccountStatusGuard } from './guards/account-status.guard.js';
@@ -37,6 +40,9 @@ import { AuthorizationHelper } from './helpers/authorization.helper.js';
     BlocklistService,
     SessionService,
     LoginService,
+    ProfileService,
+    AccountService,
+    NotificationPreferenceService,
     ConsumerAuthGuard,
     AccountStatusGuard,
     RestrictionGuard,
@@ -53,6 +59,9 @@ import { AuthorizationHelper } from './helpers/authorization.helper.js';
     RegistrationService,
     SessionService,
     LoginService,
+    ProfileService,
+    AccountService,
+    NotificationPreferenceService,
     ConsumerAuthGuard,
     AccountStatusGuard,
     RestrictionGuard,
