@@ -1,13 +1,16 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module.js';
-import { QueueModule } from '../queue/queue.module.js';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
-import { DelayedJobHelper } from './delayed-job.helper.js';
 import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
+import { SweeperRegistry } from './sweeper.registry.js';
 
+/**
+ * Sweepers (due-row jobs). Register each new sweeper in SweeperRegistry.
+ * Only the scheduler process starts them.
+ */
 @Module({
-  imports: [DatabaseModule, QueueModule, IdempotencyModule],
-  providers: [DelayedJobHelper, IdempotencyCleanupSweeper],
-  exports: [DelayedJobHelper],
+  imports: [DatabaseModule, IdempotencyModule],
+  providers: [IdempotencyCleanupSweeper, SweeperRegistry],
+  exports: [SweeperRegistry],
 })
 export class SchedulerModule {}

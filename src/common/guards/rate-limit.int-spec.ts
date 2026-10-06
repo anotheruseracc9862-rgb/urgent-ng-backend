@@ -1,13 +1,16 @@
-import { Test, TestingModule } from '@nestjs/testing';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { Test } from '@nestjs/testing';
 import { Controller, Get, INestApplication } from '@nestjs/common';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import request from 'supertest';
 import { RateLimit } from '../decorators/rate-limit.decorator.js';
+import { RedisModule } from '../redis/redis.module.js';
+import { AppThrottlerModule } from '../throttler/throttler.module.js';
+import { AppThrottlerGuard } from '../throttler/app-throttler.guard.js';
+import { DomainExceptionFilter } from '../filters/domain-exception.filter.js';
+import { cleanRedis, getTestRedis } from '../../test/database.helper.js';
+import { testConfigModule } from '../../test/test-modules.js';
 
-/**
- * Test controller with different rate limit policies
- */
 @Controller('test-rate-limit')
 class TestRateLimitController {
   @Get('auth')
@@ -22,109 +25,99 @@ class TestRateLimitController {
     return { success: true };
   }
 
+  @Get('location')
+  @RateLimit('location')
+  location() {
+    return { success: true };
+  }
+
   @Get('global')
   global() {
     return { success: true };
   }
 }
 
-describe('RateLimit (integration)', () => {
+describe('Rate limiting (integration, Redis-backed)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      imports: [
-        ThrottlerModule.forRoot([
-          { ttl: 60_000, limit: 300 }, // Global default
-        ]),
-      ],
+    const moduleRef = await Test.createTestingModule({
+      imports: [testConfigModule(), RedisModule, AppThrottlerModule],
       controllers: [TestRateLimitController],
       providers: [
-        {
-          provide: APP_GUARD,
-          useClass: ThrottlerGuard,
-        },
+        { provide: APP_GUARD, useClass: AppThrottlerGuard },
+        { provide: APP_FILTER, useClass: DomainExceptionFilter },
       ],
     }).compile();
 
-    app = module.createNestApplication();
+    app = moduleRef.createNestApplication();
     await app.init();
+  });
+
+  beforeEach(async () => {
+    await cleanRedis();
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  describe('auth policy (5 per 15 min)', () => {
-    it('should allow requests within limit', async () => {
-      // Make 5 requests (the limit)
-      for (let i = 0; i < 5; i++) {
-        const response = await request(app.getHttpServer())
-          .get('/test-rate-limit/auth')
-          .expect(200);
+  const get = (path: string) => request(app.getHttpServer()).get(path);
 
-        expect(response.body.success).toBe(true);
-      }
-    });
+  it('auth policy: allows 5 per minute, then answers 429 RATE_LIMITED', async () => {
+    for (let i = 0; i < 5; i++) {
+      await get('/test-rate-limit/auth').expect(200);
+    }
 
-    it('should block requests exceeding limit', async () => {
-      // Exhaust the limit
-      for (let i = 0; i < 5; i++) {
-        await request(app.getHttpServer()).get('/test-rate-limit/auth');
-      }
-
-      // 6th request should be blocked
-      await request(app.getHttpServer())
-        .get('/test-rate-limit/auth')
-        .expect(429);
-    });
+    const blocked = await get('/test-rate-limit/auth').expect(429);
+    expect(blocked.body.error.code).toBe('RATE_LIMITED');
+    expect(blocked.headers['retry-after']).toBeDefined();
   });
 
-  describe('otp policy (3 per hour)', () => {
-    it('should allow requests within limit', async () => {
-      // Make 3 requests (the limit)
-      for (let i = 0; i < 3; i++) {
-        const response = await request(app.getHttpServer())
-          .get('/test-rate-limit/otp')
-          .expect(200);
-
-        expect(response.body.success).toBe(true);
-      }
-    });
-
-    it('should block requests exceeding limit', async () => {
-      // Exhaust the limit
-      for (let i = 0; i < 3; i++) {
-        await request(app.getHttpServer()).get('/test-rate-limit/otp');
-      }
-
-      // 4th request should be blocked
-      await request(app.getHttpServer())
-        .get('/test-rate-limit/otp')
-        .expect(429);
-    });
+  it('location policy: allows 2 per minute', async () => {
+    await get('/test-rate-limit/location').expect(200);
+    await get('/test-rate-limit/location').expect(200);
+    await get('/test-rate-limit/location').expect(429);
   });
 
-  describe('global policy (300 per minute)', () => {
-    it('should apply to routes without explicit policy', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/test-rate-limit/global')
-        .expect(200);
-
-      expect(response.body.success).toBe(true);
-    });
+  it('otp policy: allows 10 per hour', async () => {
+    for (let i = 0; i < 10; i++) {
+      await get('/test-rate-limit/otp').expect(200);
+    }
+    await get('/test-rate-limit/otp').expect(429);
   });
 
-  describe('rate limit headers', () => {
-    it('should include X-RateLimit headers', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/test-rate-limit/auth')
-        .expect(200);
+  it('keeps a separate counter per route', async () => {
+    for (let i = 0; i < 5; i++) {
+      await get('/test-rate-limit/auth').expect(200);
+    }
+    await get('/test-rate-limit/auth').expect(429);
 
-      // NestJS throttler includes these headers
-      expect(response.headers).toHaveProperty('x-ratelimit-limit');
-      expect(response.headers).toHaveProperty('x-ratelimit-remaining');
-      expect(response.headers).toHaveProperty('x-ratelimit-reset');
-    });
+    await get('/test-rate-limit/otp').expect(200);
+    await get('/test-rate-limit/global').expect(200);
+  });
+
+  it('keeps the global default at 300 per minute (normal traffic is not blocked)', async () => {
+    for (let i = 0; i < 20; i++) {
+      await get('/test-rate-limit/global').expect(200);
+    }
+  });
+
+  it('stores the counters in Redis, so they survive an API restart', async () => {
+    await get('/test-rate-limit/auth').expect(200);
+
+    const keys = await getTestRedis().keys('throttle:*');
+    expect(keys.length).toBeGreaterThan(0);
+  });
+
+  it('resets when the Redis counters are cleared', async () => {
+    for (let i = 0; i < 5; i++) {
+      await get('/test-rate-limit/auth').expect(200);
+    }
+    await get('/test-rate-limit/auth').expect(429);
+
+    await cleanRedis();
+
+    await get('/test-rate-limit/auth').expect(200);
   });
 });

@@ -84,3 +84,12 @@ helmet, validation) shared by `main.ts` and the e2e tests.
   CHECK constraints. Add those as hand-written SQL inside a Prisma migration
   (`prisma migrate dev --create-only`, then edit the SQL) and keep raw SQL inside repository classes (Backend PRD section 26.1).
 - The `enable_postgis` migration enables the extension.
+
+## Deleting data
+
+One database login (`DATABASE_URL`) is used everywhere.
+
+- Soft-deletable tables have `deleted_at`. `prisma.client` (the soft-delete extension) turns `delete` into an update and hides deleted rows; use `withDeleted()` to see them.
+- The database backs this up with triggers: a raw `DELETE` on a soft-deletable or never-deleted table (audit log, price versions, config, products) is rejected. `audit_logs` and `price_versions` also reject `UPDATE`.
+- Transient tables (outbox events, idempotency keys, later sessions and location history) are deleted for real by cleanup jobs.
+- Time rule: compare against the **database clock** (`NOW()`, `clock_timestamp()`), never a JavaScript `Date`, whenever the value is later compared in SQL. The outbox and config store follow this.

@@ -1,4 +1,3 @@
-import { SetMetadata } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 /**
@@ -15,22 +14,22 @@ import { Throttle } from '@nestjs/throttler';
  */
 
 export type RateLimitPolicy = 
-  | 'auth'          // Login attempts: 5 per 15 minutes
-  | 'otp'           // OTP requests: 3 per hour
-  | 'feed'          // Feed queries: 30 per minute
-  | 'location'      // Location updates: 2 per minute
-  | 'public-token'  // Public token access: 10 per minute
+  | 'auth'          // Login attempts: 5 per minute per IP
+  | 'otp'           // OTP requests: 10 per hour per IP
+  | 'feed'          // Feed queries: 60 per minute
+  | 'location'      // Location updates: 2 per minute (one per 30 s)
+  | 'public-token'  // Public share link: 30 per minute
   | 'global';       // Global default: 300 per minute
 
 /**
  * Policy configuration mapping.
  */
 export const RATE_LIMIT_POLICIES: Record<RateLimitPolicy, { ttl: number; limit: number }> = {
-  'auth': { ttl: 900_000, limit: 5 },          // 5 per 15 min
-  'otp': { ttl: 3600_000, limit: 3 },          // 3 per hour
-  'feed': { ttl: 60_000, limit: 30 },          // 30 per minute
-  'location': { ttl: 60_000, limit: 2 },       // 2 per minute
-  'public-token': { ttl: 60_000, limit: 10 },  // 10 per minute
+  'auth': { ttl: 60_000, limit: 5 },
+  'otp': { ttl: 3_600_000, limit: 10 },
+  'feed': { ttl: 60_000, limit: 60 },
+  'location': { ttl: 60_000, limit: 2 },
+  'public-token': { ttl: 60_000, limit: 30 },
   'global': { ttl: 60_000, limit: 300 },       // 300 per minute (default)
 };
 

@@ -75,6 +75,7 @@ export class PricingService {
       FROM price_versions pv
       JOIN commercial_products cp ON cp.id = pv.product_id
       WHERE cp.code = ${code}
+        AND cp.deleted_at IS NULL
         AND cp.active = true
         AND pv.effective_from <= NOW()
       ORDER BY pv.effective_from DESC
@@ -144,6 +145,7 @@ export class PricingService {
         updated_at as "updatedAt"
       FROM commercial_products
       WHERE active = true
+        AND deleted_at IS NULL
       ORDER BY name
     `;
 

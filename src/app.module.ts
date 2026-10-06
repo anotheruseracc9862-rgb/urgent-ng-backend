@@ -1,8 +1,8 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
+import type { ConnectionOptions } from 'bullmq';
 import { LoggerModule } from 'nestjs-pino';
 import configuration from './config/configuration.js';
 import { validateEnv } from './config/env.validation.js';
@@ -14,7 +14,13 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware.j
 import { resolveRequestId } from './common/middleware/request-id.js';
 import { CommonModule } from './common/common.module.js';
 import { ProvidersModule } from './common/providers/providers.module.js';
-import { SchedulerModule } from './scheduler/scheduler.module.js';
+import { RedisModule } from './common/redis/redis.module.js';
+import { redisOptionsFromUrl } from './common/redis/redis.config.js';
+import { AppThrottlerModule } from './common/throttler/throttler.module.js';
+import { AppThrottlerGuard } from './common/throttler/app-throttler.guard.js';
+import { AuditModule } from './audit/audit.module.js';
+import { ConfigStoreModule } from './config/config-store.module.js';
+import { QueueModule } from './queue/queue.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -47,28 +53,26 @@ const isTest = process.env.NODE_ENV === 'test';
         },
       },
     }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
     BullModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const url = new URL(config.getOrThrow<string>('redis.url'));
-        return {
-          connection: {
-            host: url.hostname,
-            port: Number.parseInt(url.port || '6379', 10),
-            ...(url.password ? { password: url.password } : {}),
-          },
-        };
-      },
+      useFactory: (config: ConfigService) => ({
+        connection: redisOptionsFromUrl(
+          config.getOrThrow<string>('redis.url'),
+        ) as ConnectionOptions,
+      }),
     }),
+    RedisModule,
+    AppThrottlerModule,
     CommonModule,
     ProvidersModule.forRoot(),
     DatabaseModule,
+    AuditModule,
+    ConfigStoreModule,
+    QueueModule,
     HealthModule,
-    SchedulerModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: AppThrottlerGuard },
     { provide: APP_FILTER, useClass: DomainExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
   ],

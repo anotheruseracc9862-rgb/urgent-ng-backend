@@ -40,6 +40,12 @@ export abstract class BaseSweeper {
    * Whether this sweeper is currently running.
    */
   private running = false;
+
+  /**
+   * True while a sweep is in progress, so a slow sweep is never overlapped by
+   * the next tick of the same sweeper.
+   */
+  private sweeping = false;
   
   /**
    * Interval handle for stopping.
@@ -100,10 +106,11 @@ export abstract class BaseSweeper {
    * Catches and logs errors to prevent the loop from dying.
    */
   private async sweep(): Promise<void> {
-    if (!this.running) {
+    if (!this.running || this.sweeping) {
       return;
     }
 
+    this.sweeping = true;
     try {
       const startTime = Date.now();
       const processed = await this.processBatch();
@@ -114,6 +121,8 @@ export abstract class BaseSweeper {
       }
     } catch (error) {
       this.logger.error('Sweep error', error);
+    } finally {
+      this.sweeping = false;
     }
   }
 

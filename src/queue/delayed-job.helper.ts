@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { OutboxService } from '../queue/outbox.service.js';
+import { OutboxService } from './outbox.service.js';
 
 /**
  * Helper for scheduling delayed jobs via the outbox.

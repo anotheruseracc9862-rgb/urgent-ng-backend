@@ -4,39 +4,36 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from '../database/database.module.js';
+import { RedisModule, REDIS_CLIENT } from '../common/redis/redis.module.js';
+import { AuditModule } from '../audit/audit.module.js';
 import { BusinessConfigService } from './business-config.service.js';
-import { getTestPrisma, cleanDatabase } from '../test/database.helper.js';
-import { Redis } from 'ioredis';
+import {
+  getTestPrisma,
+  cleanAll,
+} from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 
 describe('BusinessConfigService (Integration)', () => {
   let service: BusinessConfigService;
   let module: TestingModule;
   const prisma = getTestPrisma();
 
-  beforeEach(async () => {
-    await cleanDatabase();
-
-    // Also clear Redis config cache
-    const redis = new Redis({
-      host: 'localhost',
-      port: 6399,
-      db: 0,
-    });
-    await redis.flushdb();
-    await redis.quit();
-
-    module = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({ isGlobal: true }),
-        DatabaseModule,
-      ],
+  async function build(overrideRedis?: unknown): Promise<void> {
+    const builder = Test.createTestingModule({
+      imports: [testConfigModule(), RedisModule, DatabaseModule, AuditModule],
       providers: [BusinessConfigService],
-    }).compile();
+    });
+    if (overrideRedis) {
+      builder.overrideProvider(REDIS_CLIENT).useValue(overrideRedis);
+    }
+    module = await builder.compile();
+    service = module.get(BusinessConfigService);
+  }
 
-    service = module.get<BusinessConfigService>(BusinessConfigService);
-    await service.onModuleInit();
+  beforeEach(async () => {
+    await cleanAll();
+    await build();
   });
 
   afterEach(async () => {
@@ -72,8 +69,8 @@ describe('BusinessConfigService (Integration)', () => {
 
       // Insert future value
       await prisma.$executeRaw`
-        INSERT INTO config_values (key, value_json, effective_from)
-        VALUES ('OFFER_MIN_AMOUNT', '25000'::jsonb, ${future})
+        INSERT INTO config_values (key, value_json, version, effective_from)
+        VALUES ('OFFER_MIN_AMOUNT', '25000'::jsonb, 2, ${future})
       `;
 
       const value = await service.get('OFFER_MIN_AMOUNT');
@@ -247,6 +244,89 @@ describe('BusinessConfigService (Integration)', () => {
       // Should see new value after cache clear
       const value2 = await service.get('RATING_SCALE_MAX');
       expect(value2).toBe(10);
+    });
+  });
+
+  describe('resilience and validation', () => {
+    const fail = () => Promise.reject(new Error('Redis is down'));
+    const downRedis = { get: fail, mget: fail, setex: fail, del: fail, ping: fail, disconnect: () => undefined };
+
+    it('falls back to PostgreSQL when Redis is down (get, set, getAll)', async () => {
+      await module.close();
+      await build(downRedis);
+
+      await service.set('ERRAND_EXPIRY_HOURS', 36);
+
+      expect(await service.get('ERRAND_EXPIRY_HOURS')).toBe(36);
+      expect((await service.getAll()).ERRAND_EXPIRY_HOURS).toBe(36);
+    });
+
+    it('rejects a value of the wrong type', async () => {
+      await expect(
+        service.set('ERRAND_EXPIRY_HOURS', 'soon' as unknown as number),
+      ).rejects.toThrow(/expects a number/);
+      await expect(
+        service.set('FEATURE_OFFERS_ENABLED', 'false' as unknown as boolean),
+      ).rejects.toThrow(/expects a boolean/);
+    });
+
+    it('ignores a stored value of the wrong type and uses the default', async () => {
+      await prisma.$executeRaw`
+        INSERT INTO config_values (key, value_json) VALUES ('ERRAND_EXPIRY_HOURS', '"soon"'::jsonb)
+      `;
+
+      expect(await service.get('ERRAND_EXPIRY_HOURS')).toBe(24);
+    });
+
+    it('ignores soft-deleted versions', async () => {
+      await service.set('ERRAND_EXPIRY_HOURS', 48);
+      await prisma.$executeRaw`UPDATE config_values SET deleted_at = NOW() WHERE key = 'ERRAND_EXPIRY_HOURS'`;
+      await service.invalidate('ERRAND_EXPIRY_HOURS');
+
+      expect(await service.get('ERRAND_EXPIRY_HOURS')).toBe(24);
+    });
+
+    it('rejects two versions of one key with the same effective time', async () => {
+      const at = new Date(Date.now() - 1000);
+      await service.set('OFFER_MIN_AMOUNT', 21000, at);
+
+      await expect(service.set('OFFER_MIN_AMOUNT', 22000, at)).rejects.toThrow();
+    });
+
+    it('gives concurrent writers of one key distinct versions', async () => {
+      await Promise.all(
+        [1, 2, 3, 4, 5].map((n) => service.set('MAX_OPEN_OFFERS_PER_RUNNER', 10 + n)),
+      );
+
+      const rows = await prisma.$queryRaw<Array<{ version: number }>>`
+        SELECT version FROM config_values WHERE key = 'MAX_OPEN_OFFERS_PER_RUNNER' ORDER BY version
+      `;
+      expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it('audits every change', async () => {
+      const adminId = '00000000-0000-0000-0000-000000000009';
+      await service.set('VAT_RATE', 10, new Date(), adminId);
+
+      const logs = await prisma.auditLog.findMany({ where: { action: 'config.set' } });
+      expect(logs).toHaveLength(1);
+      expect(logs[0].actorType).toBe('ADMIN');
+      expect(logs[0].actorId).toBe(adminId);
+      expect(logs[0].entityType).toBe('config_value');
+      expect(logs[0].metadata).toMatchObject({ key: 'VAT_RATE' });
+      expect(logs[0].afterHash).toBeTruthy();
+    });
+
+    it('does not leave a config row when the audit write fails', async () => {
+      // an invalid actor id (not a uuid) makes the audit insert fail inside the transaction
+      await expect(
+        service.set('VAT_RATE', 12, new Date(), 'not-a-uuid'),
+      ).rejects.toThrow();
+
+      const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+        SELECT COUNT(*) AS n FROM config_values WHERE key = 'VAT_RATE'
+      `;
+      expect(Number(rows[0].n)).toBe(0);
     });
   });
 });

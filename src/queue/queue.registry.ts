@@ -89,8 +89,13 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
 
 /**
  * Get the queue name for an event type.
- * Falls back to marketplace queue if not mapped.
+ * Throws for unknown types: a typo must fail loudly (and dead-letter), not
+ * silently route to the wrong queue.
  */
 export function getQueueForEvent(eventType: string): QueueName {
-  return EVENT_TO_QUEUE_MAP[eventType] || QUEUE_NAMES.MARKETPLACE;
+  const queue = EVENT_TO_QUEUE_MAP[eventType];
+  if (!queue) {
+    throw new Error(`No queue mapped for outbox event type "${eventType}"`);
+  }
+  return queue;
 }

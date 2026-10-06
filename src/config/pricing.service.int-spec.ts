@@ -7,6 +7,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { DatabaseModule } from '../database/database.module.js';
 import { PricingService } from './pricing.service.js';
 import { getTestPrisma, cleanDatabase } from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 
 describe('PricingService (Integration)', () => {
   let service: PricingService;
@@ -17,7 +18,7 @@ describe('PricingService (Integration)', () => {
     await cleanDatabase();
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule],
+      imports: [testConfigModule(), DatabaseModule],
       providers: [PricingService],
     }).compile();
 

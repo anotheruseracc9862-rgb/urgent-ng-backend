@@ -26,7 +26,7 @@ describe('CursorService', () => {
       const decoded = service.decode(encoded);
 
       expect(decoded.sort).toBe(data.sort);
-      expect(decoded.createdAt.toISOString()).toBe(data.createdAt.toISOString());
+      expect((decoded.createdAt as Date).toISOString()).toBe(data.createdAt.toISOString());
       expect(decoded.id).toBe(data.id);
     });
 

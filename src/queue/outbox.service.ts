@@ -7,6 +7,12 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
 import { OutboxStatus, Prisma } from '@prisma/client';
 
+/** How long a claimed event may stay PROCESSING before another publisher reclaims it. */
+export const OUTBOX_LEASE_MS = 2 * 60 * 1000;
+export const OUTBOX_MAX_ATTEMPTS = 10;
+
+export type PublishFn = (event: OutboxEventRow) => Promise<void>;
+
 export interface AddOutboxEventInput {
   eventType: string;
   aggregateType?: string;
@@ -36,23 +42,7 @@ export class OutboxService implements OnModuleDestroy {
     tx: Prisma.TransactionClient,
     input: AddOutboxEventInput,
   ): Promise<string> {
-    const now = new Date();
-    const availableAt = input.delayMs
-      ? new Date(now.getTime() + input.delayMs)
-      : now;
-
-    const event = await tx.outboxEvent.create({
-      data: {
-        eventType: input.eventType,
-        aggregateType: input.aggregateType || null,
-        aggregateId: input.aggregateId || null,
-        payload: input.payload as Prisma.JsonObject,
-        occurredAt: input.occurredAt || now,
-        availableAt,
-      },
-    });
-
-    return event.id;
+    return this.insert(tx, input);
   }
 
   /**
@@ -60,30 +50,43 @@ export class OutboxService implements OnModuleDestroy {
    * Prefer using add() with a transaction in production code.
    */
   async addStandalone(input: AddOutboxEventInput): Promise<string> {
-    const now = new Date();
-    const availableAt = input.delayMs
-      ? new Date(now.getTime() + input.delayMs)
-      : now;
-
-    const event = await this.prisma.outboxEvent.create({
-      data: {
-        eventType: input.eventType,
-        aggregateType: input.aggregateType || null,
-        aggregateId: input.aggregateId || null,
-        payload: input.payload as Prisma.JsonObject,
-        occurredAt: input.occurredAt || now,
-        availableAt,
-      },
-    });
-
-    return event.id;
+    return this.insert(this.prisma, input);
   }
 
   /**
-   * Start the publisher loop (called by the worker/scheduler process).
-   * Polls pending events every 1 second and publishes them to BullMQ.
+   * Insert using the database clock for "now" and for the delay, so
+   * `available_at <= NOW()` in the publisher query is never affected by clock
+   * differences between the API host and PostgreSQL.
    */
-  startPublisher(publishFn: (events: OutboxEventBatch[]) => Promise<void>): void {
+  private async insert(
+    client: Prisma.TransactionClient,
+    input: AddOutboxEventInput,
+  ): Promise<string> {
+    const delaySeconds = (input.delayMs ?? 0) / 1000;
+
+    const rows = await client.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO outbox_events (
+        event_type, aggregate_type, aggregate_id, payload, occurred_at, available_at
+      )
+      VALUES (
+        ${input.eventType},
+        ${input.aggregateType ?? null},
+        ${input.aggregateId ?? null}::uuid,
+        ${JSON.stringify(input.payload)}::jsonb,
+        COALESCE(${input.occurredAt ?? null}::timestamptz, clock_timestamp()),
+        clock_timestamp() + make_interval(secs => ${delaySeconds})
+      )
+      RETURNING id
+    `;
+
+    return rows[0].id;
+  }
+
+  /**
+   * Start the publisher loop (called by the worker process).
+   * Polls due events every second and hands each one to `publishFn`.
+   */
+  startPublisher(publishFn: PublishFn): void {
     if (this.publisherInterval) {
       this.logger.warn('Publisher already running');
       return;
@@ -91,26 +94,23 @@ export class OutboxService implements OnModuleDestroy {
 
     this.logger.log('Starting outbox publisher');
 
-    const runPublisher = async () => {
+    const run = async () => {
       if (this.isPublishing) {
-        return; // Skip if previous run still in progress
+        return; // previous run still in progress
       }
 
       this.isPublishing = true;
       try {
         await this.publishPendingEvents(publishFn);
       } catch (error) {
-        this.logger.error('Publisher error:', error);
+        this.logger.error('Publisher error', error);
       } finally {
         this.isPublishing = false;
       }
     };
 
-    // Run immediately on start
-    runPublisher();
-
-    // Then run every 1 second
-    this.publisherInterval = setInterval(runPublisher, 1000);
+    void run();
+    this.publisherInterval = setInterval(run, 1000);
   }
 
   /**
@@ -125,125 +125,128 @@ export class OutboxService implements OnModuleDestroy {
   }
 
   /**
-   * Poll for pending events and publish them.
-   * Uses FOR UPDATE SKIP LOCKED to prevent duplicate processing.
+   * Claim one batch of due events and publish each one on its own, so one bad
+   * event never blocks or re-sends the rest of the batch.
+   *
+   * A claim marks the row PROCESSING and stamps `processing_started_at`. A
+   * row stuck in PROCESSING longer than the lease (crashed publisher) is
+   * claimed again. Publishing must therefore be idempotent: the BullMQ job id
+   * is the outbox id, so a repeat publish is a no-op.
+   *
+   * Returns the number of events published successfully.
    */
-  private async publishPendingEvents(
-    publishFn: (events: OutboxEventBatch[]) => Promise<void>,
-  ): Promise<void> {
-    const batch = await this.prisma.$transaction(async (tx) => {
-      // Lock pending events with SKIP LOCKED for concurrent safety
+  async publishPendingEvents(publishFn: PublishFn): Promise<number> {
+    const batch = await this.claimBatch();
+    let published = 0;
+
+    for (const event of batch) {
+      try {
+        await publishFn(event);
+        await this.markPublished(event.id);
+        published += 1;
+      } catch (error) {
+        this.logger.error(`Failed to publish event ${event.id}`, error);
+        await this.handleFailedEvent(event, error);
+      }
+    }
+
+    return published;
+  }
+
+  private async claimBatch(): Promise<OutboxEventRow[]> {
+    const leaseSeconds = OUTBOX_LEASE_MS / 1000;
+
+    return this.prisma.$transaction(async (tx) => {
       const events = await tx.$queryRaw<OutboxEventRow[]>`
-        SELECT 
+        SELECT
           id,
-          event_type as "eventType",
-          aggregate_type as "aggregateType",
-          aggregate_id as "aggregateId",
+          event_type AS "eventType",
+          aggregate_type AS "aggregateType",
+          aggregate_id AS "aggregateId",
           payload,
-          occurred_at as "occurredAt",
+          occurred_at AS "occurredAt",
           attempts
         FROM outbox_events
-        WHERE status IN ('PENDING', 'FAILED')
-          AND available_at <= NOW()
+        WHERE (
+            status IN ('PENDING', 'FAILED')
+            AND available_at <= NOW()
+          )
+          OR (
+            status = 'PROCESSING'
+            AND processing_started_at <= NOW() - make_interval(secs => ${leaseSeconds})
+          )
         ORDER BY occurred_at, id
-        FOR UPDATE SKIP LOCKED
         LIMIT 100
+        FOR UPDATE SKIP LOCKED
       `;
 
       if (events.length === 0) {
         return [];
       }
 
-      // Mark events as PROCESSING
-      const eventIds = events.map((e) => e.id);
+      const ids = events.map((event) => event.id);
       await tx.$executeRaw`
         UPDATE outbox_events
-        SET status = 'PROCESSING'::' OutboxStatus'
-        WHERE id = ANY(${eventIds}::uuid[])
+        SET status = 'PROCESSING'::"OutboxStatus",
+            processing_started_at = NOW()
+        WHERE id = ANY(${ids}::uuid[])
       `;
 
       return events;
     });
+  }
 
-    if (batch.length === 0) {
-      return;
-    }
-
-    this.logger.debug(`Publishing ${batch.length} outbox events`);
-
-    // Publish to BullMQ
-    try {
-      await publishFn(batch);
-
-      // Mark as published
-      const eventIds = batch.map((e) => e.id);
-      await this.prisma.$executeRaw`
-        UPDATE outbox_events
-        SET 
-          status = 'PUBLISHED'::"OutboxStatus",
+  private async markPublished(id: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE outbox_events
+      SET status = 'PUBLISHED'::"OutboxStatus",
           processed_at = NOW(),
+          processing_started_at = NULL,
           attempts = attempts + 1
-        WHERE id = ANY(${eventIds}::uuid[])
-      `;
-    } catch (error) {
-      this.logger.error('Failed to publish batch:', error);
-
-      // Handle failures with exponential backoff
-      await this.handleFailedBatch(batch, error);
-    }
+      WHERE id = ${id}::uuid
+    `;
   }
 
   /**
-   * Handle failed events with exponential backoff and dead-lettering
+   * Failed events retry with exponential backoff, then dead-letter.
    */
-  private async handleFailedBatch(
-    batch: OutboxEventRow[],
+  private async handleFailedEvent(
+    event: OutboxEventRow,
     error: unknown,
   ): Promise<void> {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const attempts = event.attempts + 1;
 
-    for (const event of batch) {
-      const newAttempts = event.attempts + 1;
-
-      if (newAttempts >= 10) {
-        // Dead letter after 10 attempts
-        await this.prisma.outboxEvent.update({
-          where: { id: event.id },
-          data: {
-            status: OutboxStatus.DEAD_LETTERED,
-            attempts: newAttempts,
-            lastError: errorMessage,
-            processedAt: new Date(),
-          },
-        });
-
-        this.logger.error(
-          `Event ${event.id} dead-lettered after ${newAttempts} attempts`,
-        );
-      } else {
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, up to 5 minutes
-        const backoffMs = Math.min(
-          Math.pow(2, newAttempts - 1) * 1000,
-          5 * 60 * 1000,
-        );
-        const availableAt = new Date(Date.now() + backoffMs);
-
-        await this.prisma.outboxEvent.update({
-          where: { id: event.id },
-          data: {
-            status: OutboxStatus.FAILED,
-            attempts: newAttempts,
-            lastError: errorMessage,
-            availableAt,
-          },
-        });
-
-        this.logger.warn(
-          `Event ${event.id} failed (attempt ${newAttempts}), retry in ${backoffMs}ms`,
-        );
-      }
+    if (attempts >= OUTBOX_MAX_ATTEMPTS) {
+      await this.prisma.outboxEvent.update({
+        where: { id: event.id },
+        data: {
+          status: OutboxStatus.DEAD_LETTERED,
+          attempts,
+          lastError: errorMessage,
+          processedAt: new Date(),
+          processingStartedAt: null,
+        },
+      });
+      this.logger.error(`Event ${event.id} dead-lettered after ${attempts} attempts`);
+      return;
     }
+
+    // 1s, 2s, 4s ... capped at 5 minutes
+    const backoffMs = Math.min(2 ** (attempts - 1) * 1000, 5 * 60 * 1000);
+    await this.prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: {
+        status: OutboxStatus.FAILED,
+        attempts,
+        lastError: errorMessage,
+        availableAt: new Date(Date.now() + backoffMs),
+        processingStartedAt: null,
+      },
+    });
+    this.logger.warn(
+      `Event ${event.id} failed (attempt ${attempts}), retry in ${backoffMs}ms`,
+    );
   }
 
   /**
@@ -301,5 +304,3 @@ export interface OutboxEventRow {
   lastError?: string | null;
   processedAt?: Date | null;
 }
-
-export type OutboxEventBatch = OutboxEventRow;

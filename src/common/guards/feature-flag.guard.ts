@@ -1,25 +1,15 @@
-import {
-  Injectable,
-  CanActivate,
-  ExecutionContext,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { BusinessConfigService } from '../../config/business-config.service.js';
+import { BusinessConfigService, BusinessConfig } from '../../config/business-config.service.js';
+import { DomainException } from '../exceptions/domain.exception.js';
+import { FEATURE_DISABLED } from '../constants/error-codes.js';
 
 export const REQUIRES_FLAG_KEY = 'requiresFlag';
 
 /**
  * Kill switch guard (P1-08)
- * Blocks routes when a feature flag is disabled.
- * Per PRD §28.2.
- * 
- * Usage:
- * ```typescript
- * @Post('register')
- * @RequiresFlag('registrations_enabled')
- * async register() { ... }
- * ```
+ * Blocks routes when a feature flag is disabled. Per PRD section 28.2.
+ * Apply it with `@RequiresFlag('FEATURE_OFFERS_ENABLED')` on a route or class.
  */
 @Injectable()
 export class FeatureFlagGuard implements CanActivate {
@@ -29,26 +19,18 @@ export class FeatureFlagGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const flagKey = this.reflector.get<string>(
+    const flagKey = this.reflector.getAllAndOverride<keyof BusinessConfig | undefined>(
       REQUIRES_FLAG_KEY,
-      context.getHandler(),
+      [context.getHandler(), context.getClass()],
     );
 
     if (!flagKey) {
-      // No flag requirement, allow
       return true;
     }
 
-    // Check if flag is enabled
-    // Cast to any since kill switch flags are added dynamically
-    const isEnabled = await this.configService.get(flagKey as any);
-
-    if (isEnabled !== true && isEnabled !== 'true') {
-      throw new ServiceUnavailableException({
-        code: 'FEATURE_DISABLED',
-        message: `This feature is temporarily disabled`,
-        flagKey, // Include for debugging (remove in production)
-      });
+    const enabled = await this.configService.get(flagKey);
+    if (enabled !== true) {
+      throw DomainException.of(FEATURE_DISABLED);
     }
 
     return true;

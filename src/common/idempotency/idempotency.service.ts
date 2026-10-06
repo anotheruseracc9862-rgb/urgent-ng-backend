@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service.js';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
+import { stableStringify } from '../utils/stable-json.js';
 
 /**
  * Idempotency service (P1-05)
@@ -25,6 +26,8 @@ export class IdempotencyService {
   ): Promise<{
     responseStatus: number | null;
     responseBody: any | null;
+    /** The earlier attempt failed and may be retried with the same key. */
+    failed: boolean;
   } | null> {
     const requestHash = this.hashRequest(requestBody);
 
@@ -52,6 +55,7 @@ export class IdempotencyService {
     return {
       responseStatus: existing.responseStatus,
       responseBody: existing.responseBody,
+      failed: existing.failedAt !== null && existing.responseStatus === null,
     };
   }
 
@@ -85,7 +89,20 @@ export class IdempotencyService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        return false;
+        // A failed earlier attempt (same body) may be claimed again. The
+        // conditional update lets exactly one concurrent retry win.
+        const reclaimed = await this.prisma.idempotencyKey.updateMany({
+          where: {
+            userId,
+            operation,
+            key,
+            requestHash,
+            responseStatus: null,
+            failedAt: { not: null },
+          },
+          data: { failedAt: null },
+        });
+        return reclaimed.count === 1;
       }
       throw error;
     }
@@ -111,8 +128,24 @@ export class IdempotencyService {
       },
       data: {
         responseStatus: status,
-        responseBody: body as any,
+        responseBody: body === undefined ? Prisma.DbNull : (body as Prisma.InputJsonValue),
+        failedAt: null,
       },
+    });
+  }
+
+  /**
+   * Mark an in-flight key as failed so the client can retry with the same key.
+   * A completed key (has a response) is left alone.
+   */
+  async markFailed(
+    userId: string,
+    operation: string,
+    key: string,
+  ): Promise<void> {
+    await this.prisma.idempotencyKey.updateMany({
+      where: { userId, operation, key, responseStatus: null },
+      data: { failedAt: new Date() },
     });
   }
 
@@ -136,20 +169,11 @@ export class IdempotencyService {
   }
 
   /**
-   * Hash request body for comparison.
-   * Uses deterministic JSON serialization.
+   * Hash the request body. Keys are sorted at every depth, so equal payloads
+   * hash equal and any nested difference changes the hash.
    */
   private hashRequest(body: unknown): string {
-    if (body === null || body === undefined) {
-      return createHash('sha256').update('null').digest('hex');
-    }
-
-    // Sort keys for deterministic hashing
-    const normalized = JSON.stringify(
-      body,
-      Object.keys(body as object).sort(),
-    );
-    return createHash('sha256').update(normalized).digest('hex');
+    return createHash('sha256').update(stableStringify(body)).digest('hex');
   }
 }
 

@@ -1,8 +1,11 @@
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdempotencyService, IdempotencyConflictError } from './idempotency.service.js';
 import { DatabaseModule } from '../../database/database.module.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { Prisma } from '@prisma/client';
+import { cleanDatabase } from '../../test/database.helper.js';
+import { testConfigModule } from '../../test/test-modules.js';
 
 describe('IdempotencyService (integration)', () => {
   let service: IdempotencyService;
@@ -10,7 +13,7 @@ describe('IdempotencyService (integration)', () => {
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule],
+      imports: [testConfigModule(), DatabaseModule],
       providers: [IdempotencyService],
     }).compile();
 
@@ -20,7 +23,7 @@ describe('IdempotencyService (integration)', () => {
 
   beforeEach(async () => {
     // Clean up idempotency keys
-    await prisma.idempotencyKey.deleteMany({});
+    await cleanDatabase();
   });
 
   afterAll(async () => {
@@ -53,7 +56,7 @@ describe('IdempotencyService (integration)', () => {
       expect(record!.operation).toBe(operation);
       expect(record!.key).toBe(key);
       expect(record!.responseStatus).toBeNull();
-      expect(record!.responseBody).toEqual(Prisma.DbNull);
+      expect(record!.responseBody).toBeNull();
     });
 
     it('should return false on duplicate idempotency key', async () => {
@@ -92,7 +95,7 @@ describe('IdempotencyService (integration)', () => {
 
       expect(result).toBeDefined();
       expect(result!.responseStatus).toBeNull();
-      expect(result!.responseBody).toEqual(Prisma.DbNull);
+      expect(result!.responseBody).toBeNull();
     });
 
     it('should check and return existing key with response', async () => {
@@ -278,6 +281,86 @@ describe('IdempotencyService (integration)', () => {
 
       expect(result1).toBeDefined();
       expect(result2).toBeDefined();
+    });
+  });
+
+  describe('request hashing', () => {
+    const userId = '123e4567-e89b-12d3-a456-426614174000';
+
+    it('treats key order as irrelevant at every depth', async () => {
+      await service.store(userId, 'op', 'key-order-1', { a: 1, nested: { x: 1, y: 2 } });
+
+      await expect(
+        service.check(userId, 'op', 'key-order-1', { nested: { y: 2, x: 1 }, a: 1 }),
+      ).resolves.not.toBeNull();
+    });
+
+    it('detects a change in a NESTED value (old replacer-array bug)', async () => {
+      await service.store(userId, 'op', 'key-nested-1', { payment: { amount: 100 } });
+
+      await expect(
+        service.check(userId, 'op', 'key-nested-1', { payment: { amount: 999999 } }),
+      ).rejects.toThrow(IdempotencyConflictError);
+    });
+
+    it('detects a change inside an array', async () => {
+      await service.store(userId, 'op', 'key-array-1', { items: [{ id: 1 }] });
+
+      await expect(
+        service.check(userId, 'op', 'key-array-1', { items: [{ id: 2 }] }),
+      ).rejects.toThrow(IdempotencyConflictError);
+    });
+  });
+
+  describe('failure handling', () => {
+    const userId = '123e4567-e89b-12d3-a456-426614174000';
+    const body = { action: 'create' };
+
+    it('marks an in-flight key as failed and lets the same body claim it again', async () => {
+      await service.store(userId, 'op', 'fail-1', body);
+      await service.markFailed(userId, 'op', 'fail-1');
+
+      const failed = await service.check(userId, 'op', 'fail-1', body);
+      expect(failed?.failed).toBe(true);
+
+      expect(await service.store(userId, 'op', 'fail-1', body)).toBe(true);
+      const reclaimed = await service.check(userId, 'op', 'fail-1', body);
+      expect(reclaimed?.failed).toBe(false);
+    });
+
+    it('does not let a different body claim a failed key', async () => {
+      await service.store(userId, 'op', 'fail-2', body);
+      await service.markFailed(userId, 'op', 'fail-2');
+
+      expect(await service.store(userId, 'op', 'fail-2', { action: 'other' })).toBe(false);
+    });
+
+    it('lets exactly one of several concurrent retries claim a failed key', async () => {
+      await service.store(userId, 'op', 'fail-3', body);
+      await service.markFailed(userId, 'op', 'fail-3');
+
+      const results = await Promise.all(
+        [1, 2, 3, 4].map(() => service.store(userId, 'op', 'fail-3', body)),
+      );
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('leaves a completed key untouched when markFailed is called', async () => {
+      await service.store(userId, 'op', 'done-1', body);
+      await service.updateResponse(userId, 'op', 'done-1', 201, { ok: true });
+      await service.markFailed(userId, 'op', 'done-1');
+
+      const result = await service.check(userId, 'op', 'done-1', body);
+      expect(result?.responseStatus).toBe(201);
+      expect(result?.failed).toBe(false);
+    });
+
+    it('does not claim a completed key', async () => {
+      await service.store(userId, 'op', 'done-2', body);
+      await service.updateResponse(userId, 'op', 'done-2', 201, { ok: true });
+
+      expect(await service.store(userId, 'op', 'done-2', body)).toBe(false);
     });
   });
 });

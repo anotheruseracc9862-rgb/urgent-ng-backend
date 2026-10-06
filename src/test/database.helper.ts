@@ -15,17 +15,13 @@ let redis: Redis | null = null;
 const PROTECTED_TABLES = ['_prisma_migrations', 'spatial_ref_sys'];
 
 /**
- * Get or create shared Prisma client for tests
+ * Shared Prisma client for tests (the test database, via DATABASE_URL).
  */
 export function getTestPrisma(): PrismaClient {
   assertSafeTestDatabase();
   if (!prisma) {
     prisma = new PrismaClient({
-      datasources: {
-        db: {
-          url: process.env.DATABASE_URL,
-        },
-      },
+      datasources: { db: { url: process.env.DATABASE_URL } },
     });
   }
   return prisma;
@@ -45,9 +41,9 @@ export function getTestRedis(): Redis {
 }
 
 /**
- * Remove all rows from every application table (for test cleanup).
- * Keeps table structure. Runs as one statement, so it works on a pooled
- * connection, and never touches Prisma or PostGIS system tables.
+ * Remove all rows from every application table (for test cleanup), . Keeps table structure. Runs as one
+ * statement, so it works on a pooled connection, and never touches Prisma or
+ * PostGIS system tables.
  */
 export async function cleanDatabase(): Promise<void> {
   const client = getTestPrisma();

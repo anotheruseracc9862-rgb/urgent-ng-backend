@@ -1,139 +1,176 @@
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
-import { softDeleteExtension } from './soft-delete.extension.js';
 import { DatabaseModule } from './database.module.js';
 import { PrismaService } from './prisma.service.js';
+import { SOFT_DELETABLE_MODELS, withDeleted } from './soft-delete.extension.js';
+import { cleanDatabase } from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 
-describe('Soft Delete Extension (integration)', () => {
+describe('Soft delete and delete guards (integration)', () => {
+  let module: TestingModule;
   let prisma: PrismaService;
-  let extendedPrisma: ReturnType<typeof PrismaClient.prototype.$extends<typeof softDeleteExtension>>;
 
   beforeAll(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule],
+    module = await Test.createTestingModule({
+      imports: [testConfigModule(), DatabaseModule],
     }).compile();
+    prisma = module.get(PrismaService);
+  });
 
-    prisma = module.get<PrismaService>(PrismaService);
-    
-    // Create extended client with soft delete
-    extendedPrisma = prisma.$extends(softDeleteExtension) as any;
+  beforeEach(async () => {
+    await cleanDatabase();
   });
 
   afterAll(async () => {
-    await prisma.$disconnect();
+    await module.close();
   });
 
-  describe('never-deleted tables (append-only)', () => {
-    it('should prevent DELETE on audit_logs', async () => {
-      // Create an audit log
-      const log = await prisma.auditLog.create({
-        data: {
-          actorId: '123e4567-e89b-12d3-a456-426614174000',
-          action: 'TEST_ACTION',
-          targetType: 'Test',
-          targetId: '123e4567-e89b-12d3-a456-426614174001',
-          metadata: {},
-        },
-      });
-
-      // Try to delete it - should be rejected by trigger
-      await expect(
-        prisma.auditLog.delete({ where: { id: log.id } })
-      ).rejects.toThrow(/Deletes are never allowed on table audit_logs/);
+  const newProduct = (code: string) =>
+    prisma.commercialProduct.create({
+      data: { code, name: code, type: 'RUNNER_PRO' },
     });
 
-    it('should prevent DELETE on config_values', async () => {
-      // Try to delete a config value
-      const config = await prisma.configValue.findFirst();
-      
-      if (config) {
-        await expect(
-          prisma.configValue.delete({ where: { id: config.id } })
-        ).rejects.toThrow(/Deletes are never allowed on table config_values/);
+  describe('which models are soft-deletable', () => {
+    it('covers models with a deletedAt column and nothing else', () => {
+      expect(SOFT_DELETABLE_MODELS.has('ConfigValue')).toBe(true);
+      expect(SOFT_DELETABLE_MODELS.has('CommercialProduct')).toBe(true);
+
+      for (const model of ['AuditLog', 'PriceVersion', 'OutboxEvent', 'IdempotencyKey']) {
+        expect(SOFT_DELETABLE_MODELS.has(model)).toBe(false);
       }
     });
+  });
 
-    it('should prevent DELETE on outbox_events', async () => {
-      // Create an outbox event
-      const event = await prisma.outboxEvent.create({
-        data: {
-          eventType: 'test.event',
-          payload: { test: true },
-        },
-      });
+  describe('prisma.client (extension)', () => {
+    it('turns delete into a soft delete and hides the row from reads', async () => {
+      const product = await newProduct('SOFT_1');
 
-      // Try to delete it - should be rejected by trigger
-      await expect(
-        prisma.outboxEvent.delete({ where: { id: event.id } })
-      ).rejects.toThrow(/Deletes are never allowed on table outbox_events/);
+      await prisma.client.commercialProduct.delete({ where: { id: product.id } });
+
+      expect(await prisma.client.commercialProduct.findUnique({ where: { id: product.id } })).toBeNull();
+      expect(await prisma.client.commercialProduct.findMany()).toHaveLength(0);
+      expect(await prisma.client.commercialProduct.count()).toBe(0);
+
+      const stillThere = await prisma.commercialProduct.findUniqueOrThrow({ where: { id: product.id } });
+      expect(stillThere.deletedAt).not.toBeNull();
     });
 
-    it('should prevent DELETE on idempotency_keys', async () => {
-      // Create an idempotency key
-      const key = await prisma.idempotencyKey.create({
+    it('turns deleteMany into a soft delete of only the matching rows', async () => {
+      await newProduct('KEEP_1');
+      await newProduct('GONE_1');
+      await newProduct('GONE_2');
+
+      const result = (await prisma.client.commercialProduct.deleteMany({
+        where: { code: { startsWith: 'GONE' } },
+      })) as { count: number };
+
+      expect(result.count).toBe(2);
+      const visible = await prisma.client.commercialProduct.findMany();
+      expect(visible.map((p) => p.code)).toEqual(['KEEP_1']);
+      expect(await prisma.commercialProduct.count()).toBe(3);
+    });
+
+    it('shows deleted rows inside withDeleted()', async () => {
+      const product = await newProduct('SOFT_2');
+      await prisma.client.commercialProduct.delete({ where: { id: product.id } });
+
+      const all = await withDeleted(() => prisma.client.commercialProduct.findMany());
+
+      expect(all).toHaveLength(1);
+      expect(all[0].deletedAt).not.toBeNull();
+    });
+
+    it('lets an explicit deletedAt filter win', async () => {
+      const product = await newProduct('SOFT_3');
+      await prisma.client.commercialProduct.delete({ where: { id: product.id } });
+
+      const deleted = await prisma.client.commercialProduct.findMany({
+        where: { deletedAt: { not: null } },
+      });
+
+      expect(deleted).toHaveLength(1);
+    });
+
+    it('does not update an already deleted row', async () => {
+      const product = await newProduct('SOFT_4');
+      await prisma.client.commercialProduct.delete({ where: { id: product.id } });
+
+      await expect(
+        prisma.client.commercialProduct.update({ where: { id: product.id }, data: { name: 'x' } }),
+      ).rejects.toThrow();
+      const result = await prisma.client.commercialProduct.updateMany({
+        where: { id: product.id },
+        data: { name: 'x' },
+      });
+      expect(result.count).toBe(0);
+    });
+
+    it('lets a code be reused after the old row is soft-deleted', async () => {
+      const product = await newProduct('REUSE_1');
+      await prisma.client.commercialProduct.delete({ where: { id: product.id } });
+
+      await expect(newProduct('REUSE_1')).resolves.toBeDefined();
+      await expect(newProduct('REUSE_1')).rejects.toThrow(); // duplicate among live rows
+    });
+
+    it('deletes rows of models without deletedAt for real (transient tables)', async () => {
+      const event = await prisma.outboxEvent.create({
+        data: { eventType: 'test.event', payload: {} },
+      });
+
+      await prisma.client.outboxEvent.delete({ where: { id: event.id } });
+
+      expect(await prisma.outboxEvent.count()).toBe(0);
+    });
+  });
+
+  describe('database guards', () => {
+    it('rejects a raw hard DELETE on soft-deletable and never-deleted tables (trigger)', async () => {
+      const product = await newProduct('RAW_2');
+
+      await expect(
+        prisma.$executeRaw`DELETE FROM commercial_products WHERE id = ${product.id}::uuid`,
+      ).rejects.toThrow(/Hard deletes are not allowed/);
+
+      await prisma.$executeRaw`
+        INSERT INTO price_versions (product_id, amount_kobo, effective_from)
+        VALUES (${product.id}::uuid, ${100}::bigint, NOW())
+      `;
+      await expect(prisma.$executeRaw`DELETE FROM price_versions`).rejects.toThrow(
+        /Hard deletes are not allowed/,
+      );
+
+      await prisma.$executeRaw`INSERT INTO config_values (key, value_json) VALUES ('K', '1'::jsonb)`;
+      await expect(prisma.$executeRaw`DELETE FROM config_values`).rejects.toThrow(
+        /Hard deletes are not allowed/,
+      );
+    });
+
+    it('price versions are immutable (insert a new version instead of updating)', async () => {
+      const product = await newProduct('RAW_3');
+      await prisma.$executeRaw`
+        INSERT INTO price_versions (product_id, amount_kobo, effective_from)
+        VALUES (${product.id}::uuid, ${100}::bigint, NOW())
+      `;
+
+      await expect(
+        prisma.$executeRaw`UPDATE price_versions SET amount_kobo = 1`,
+      ).rejects.toThrow(/immutable/);
+    });
+
+    it('allows plain deletes on transient tables (cleanup jobs)', async () => {
+      await prisma.outboxEvent.create({ data: { eventType: 'test.event', payload: {} } });
+      await prisma.idempotencyKey.create({
         data: {
           userId: '123e4567-e89b-12d3-a456-426614174000',
-          operation: 'test-op',
-          key: 'test-key',
-          requestHash: 'hash',
+          operation: 'op',
+          key: 'k1',
+          requestHash: 'h',
         },
       });
 
-      // Try to delete it - should be rejected by trigger
-      await expect(
-        prisma.idempotencyKey.delete({ where: { id: key.id } })
-      ).rejects.toThrow(/Deletes are never allowed on table idempotency_keys/);
-    });
-  });
-
-  describe('documentation and notes', () => {
-    it('should document soft-deletable models', () => {
-      // The extension itself documents which models are soft-deletable
-      // This test exists to ensure the documentation stays in sync
-      const softDeletableModels = [
-        'user',
-        'profile',
-        'errand',
-        'offer',
-        'assignment',
-        'message',
-        'conversation',
-        'notification',
-        'dispute',
-        'report',
-        'enforcementAction',
-      ];
-
-      // If this test fails, update the documentation in soft-delete.extension.ts
-      expect(softDeletableModels.length).toBeGreaterThan(0);
-    });
-
-    it('should document never-deleted models', () => {
-      // Never-deleted (append-only) tables
-      const neverDeletedModels = [
-        'audit_logs',
-        'outbox_events',
-        'idempotency_keys',
-        'config_values',
-        'commercial_products',
-        'price_versions',
-      ];
-
-      // If this test fails, update the triggers in the migration
-      expect(neverDeletedModels.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe('soft delete notes for future implementation', () => {
-    it('should note that soft-deletable table tests will be added with user/errand schemas', () => {
-      // When users, errands, and other business tables are created in Phase 2+,
-      // their migrations will call create_soft_delete_trigger(table_name),
-      // and tests will verify:
-      // 1. DELETE converts to UPDATE setting deletedAt
-      // 2. Reads filter out deletedAt IS NOT NULL rows
-      // 3. Re-creating with same unique key succeeds after soft delete
-      
-      expect(true).toBe(true); // Placeholder
+      await expect(prisma.$executeRaw`DELETE FROM outbox_events`).resolves.toBe(1);
+      await expect(prisma.$executeRaw`DELETE FROM idempotency_keys`).resolves.toBe(1);
     });
   });
 });

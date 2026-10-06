@@ -27,7 +27,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "openapi": "node dist/scripts/generate-openapi.js",
-    "start:scheduler": "node dist/scheduler.js",
+    "start:scheduler": "node dist/scheduler/main.js",
     "check": "npm run lint && npm run build && npm test",
     "test:int": "vitest run --config ./vitest.config.int.ts",
     "test:all": "npm test && npm run test:int && npm run test:e2e",

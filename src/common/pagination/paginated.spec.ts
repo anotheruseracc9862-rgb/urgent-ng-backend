@@ -29,7 +29,7 @@ describe('toPage', () => {
 
     const decoded = cursors.decode(page.meta.nextCursor as string);
     expect(decoded.id).toBe('id-2');
-    expect(decoded.createdAt.toISOString()).toBe(rows[1].createdAt.toISOString());
+    expect((decoded.createdAt as Date).toISOString()).toBe(rows[1].createdAt.toISOString());
   });
 
   it('uses a custom sort value in the cursor', () => {

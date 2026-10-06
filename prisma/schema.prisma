@@ -587,92 +587,75 @@ enum BlocklistType {
 // ========================================
 
 // P1-01: Demo migration patterns
-model DemoLocation {
-  id          String                     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  name        String
-  point       Unsupported("geography(Point,4326)")
-  searchText  Unsupported("tsvector")?
-  createdAt   DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  @@index([point], type: Gist)
-  @@index([searchText], type: Gin)
-  @@map("demo_locations")
-}
-
-model DemoConstraint {
-  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  code       String    @unique
-  amount     Int
-  status     String
-  email      String?
-  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-
-  @@unique([code, status], map: "demo_constraints_code_status_unique")
-  @@map("demo_constraints")
-}
+// ---------------------------------------------------------------------------
+// Models. Partial and expression indexes, CHECK constraints, triggers and the
+// uuid_generate_v7() function live in the SQL migrations because Prisma cannot
+// express them (Backend PRD section 26.1). Never edit an applied migration.
+// ---------------------------------------------------------------------------
 
 // P1-02: Config store and pricing tables
 model ConfigValue {
-  id                String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  key               String
-  valueJson         Json      @map("value_json")
-  version           Int       @default(1)
-  effectiveFrom     DateTime  @default(now()) @map("effective_from") @db.Timestamptz(3)
-  updatedByAdminId  String?   @map("updated_by_admin_id") @db.Uuid
-  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  id               String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  key              String
+  valueJson        Json      @map("value_json")
+  version          Int       @default(1)
+  effectiveFrom    DateTime  @default(now()) @map("effective_from") @db.Timestamptz(6)
+  updatedByAdminId String?   @map("updated_by_admin_id") @db.Uuid
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  @@index([key, effectiveFrom])
+  @@index([key, effectiveFrom(sort: Desc)], map: "config_values_key_effective_idx")
   @@map("config_values")
 }
 
 model CommercialProduct {
-  id          String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  code        String         @unique
-  name        String
-  description String?
-  type        String
-  active      Boolean        @default(true)
-  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
-
+  id            String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  code          String
+  name          String
+  description   String?
+  type          String
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
   priceVersions PriceVersion[]
 
   @@map("commercial_products")
 }
 
 model PriceVersion {
-  id                String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  productId         String             @map("product_id") @db.Uuid
-  amountKobo        BigInt             @map("amount_kobo")
-  currency          String             @default("NGN")
-  effectiveFrom     DateTime           @map("effective_from") @db.Date
-  notes             String?
-  createdByAdminId  String?            @map("created_by_admin_id") @db.Uuid
-  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  id               String            @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  productId        String            @map("product_id") @db.Uuid
+  amountKobo       BigInt            @map("amount_kobo")
+  currency         String            @default("NGN") @db.Char(3)
+  effectiveFrom    DateTime          @map("effective_from") @db.Timestamptz(6)
+  notes            String?
+  createdByAdminId String?           @map("created_by_admin_id") @db.Uuid
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  product          CommercialProduct @relation(fields: [productId], references: [id], onUpdate: NoAction)
 
-  product           CommercialProduct  @relation(fields: [productId], references: [id])
-
-  @@index([productId, effectiveFrom])
+  @@unique([productId, effectiveFrom], map: "price_versions_product_effective_unique")
+  @@index([productId, effectiveFrom(sort: Desc)], map: "price_versions_product_effective_idx")
   @@map("price_versions")
 }
 
-// P1-03: Audit log
+// P1-03: Audit log (append-only: UPDATE and DELETE are rejected by triggers)
 model AuditLog {
-  id           String          @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  actorType    AuditActorType  @map("actor_type")
-  actorId      String?         @map("actor_id") @db.Uuid
-  action       String
-  entityType   String?         @map("entity_type")
-  entityId     String?         @map("entity_id") @db.Uuid
-  requestId    String?         @map("request_id")
-  beforeHash   String?         @map("before_hash")
-  afterHash    String?         @map("after_hash")
-  reasonCode   String?         @map("reason_code")
-  metadata     Json?
-  ip           String?
-  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  id         String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  actorType  AuditActorType @map("actor_type")
+  actorId    String?        @map("actor_id") @db.Uuid
+  action     String
+  entityType String?        @map("entity_type")
+  entityId   String?        @map("entity_id") @db.Uuid
+  requestId  String?        @map("request_id")
+  beforeHash String?        @map("before_hash")
+  afterHash  String?        @map("after_hash")
+  reasonCode String?        @map("reason_code")
+  metadata   Json?
+  ip         String?
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([actorType, actorId])
   @@index([entityType, entityId])
@@ -681,28 +664,27 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// P1-04: Outbox and queues
+// P1-04: Outbox (transient table: only the retention role may delete)
 model OutboxEvent {
-  id            String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  eventType     String       @map("event_type")
-  aggregateType String?      @map("aggregate_type")
-  aggregateId   String?      @map("aggregate_id") @db.Uuid
-  payload       Json
-  occurredAt    DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(3)
-  status        OutboxStatus @default(PENDING)
-  attempts      Int          @default(0)
-  availableAt   DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
-  processedAt   DateTime?    @map("processed_at") @db.Timestamptz(3)
-  lastError     String?      @map("last_error")
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  eventType           String       @map("event_type")
+  aggregateType       String?      @map("aggregate_type")
+  aggregateId         String?      @map("aggregate_id") @db.Uuid
+  payload             Json
+  occurredAt          DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  status              OutboxStatus @default(PENDING)
+  attempts            Int          @default(0)
+  availableAt         DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  processedAt         DateTime?    @map("processed_at") @db.Timestamptz(3)
+  lastError           String?      @map("last_error")
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  processingStartedAt DateTime?    @map("processing_started_at") @db.Timestamptz(6)
 
-  @@index([status, availableAt, occurredAt, id], map: "outbox_events_poll_idx")
-  @@index([status, occurredAt], map: "outbox_events_dead_letter_idx")
   @@index([aggregateType, aggregateId, occurredAt, id], map: "outbox_events_aggregate_idx")
   @@map("outbox_events")
 }
 
-// P1-05: Idempotency keys
+// P1-05: Idempotency keys (transient table: only the retention role may delete)
 model IdempotencyKey {
   id             String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
   userId         String    @map("user_id") @db.Uuid
@@ -712,6 +694,7 @@ model IdempotencyKey {
   responseStatus Int?      @map("response_status")
   responseBody   Json?     @map("response_body")
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  failedAt       DateTime? @map("failed_at") @db.Timestamptz(6)
 
   @@unique([userId, operation, key], map: "idempotency_keys_user_operation_key_unique")
   @@index([createdAt], map: "idempotency_keys_created_at_idx")

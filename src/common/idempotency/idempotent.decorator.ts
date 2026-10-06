@@ -1,4 +1,5 @@
-import { SetMetadata } from '@nestjs/common';
+import { applyDecorators, SetMetadata, UseInterceptors } from '@nestjs/common';
+import { IdempotencyInterceptor } from './idempotency.interceptor.js';
 
 export const IDEMPOTENT_KEY = 'idempotent';
 
@@ -8,20 +9,6 @@ export interface IdempotentOptions {
    * Used to namespace idempotency keys per operation type.
    */
   operation: string;
-
-  /**
-   * TTL in seconds for idempotency records.
-   * After this time, the idempotency key can be reused.
-   * Defaults to 24 hours (86400 seconds).
-   */
-  ttlSeconds?: number;
-
-  /**
-   * Whether to extract userId from request user object.
-   * If false, operation is not user-scoped.
-   * Defaults to true.
-   */
-  requireUser?: boolean;
 }
 
 /**
@@ -37,7 +24,12 @@ export interface IdempotentOptions {
  * }
  * ```
  *
- * The decorator metadata is read by IdempotencyInterceptor.
+ * The decorator also applies IdempotencyInterceptor, so a route is protected
+ * by this one decorator. The module that owns the controller must import
+ * IdempotencyModule.
  */
 export const Idempotent = (options: IdempotentOptions) =>
-  SetMetadata(IDEMPOTENT_KEY, options);
+  applyDecorators(
+    SetMetadata(IDEMPOTENT_KEY, options),
+    UseInterceptors(IdempotencyInterceptor),
+  );

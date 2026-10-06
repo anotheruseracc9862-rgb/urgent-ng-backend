@@ -38,4 +38,5 @@ export async function setup(): Promise<void> {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: env.databaseUrl },
   });
+
 }

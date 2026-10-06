@@ -6,7 +6,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DatabaseModule } from '../database/database.module.js';
 import { AuditService } from './audit.service.js';
-import { getTestPrisma, cleanDatabase } from '../test/database.helper.js';
+import {
+  getTestPrisma,
+  cleanDatabase,
+} from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 import { AuditActorType } from '@prisma/client';
 
 describe('AuditService (Integration)', () => {
@@ -18,7 +22,7 @@ describe('AuditService (Integration)', () => {
     await cleanDatabase();
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule],
+      imports: [testConfigModule(), DatabaseModule],
       providers: [AuditService],
     }).compile();
 
@@ -151,7 +155,7 @@ describe('AuditService (Integration)', () => {
           // Force transaction to fail
           throw new Error('Transaction failed');
         });
-      } catch (error) {
+      } catch {
         // Expected
       }
 
@@ -160,57 +164,64 @@ describe('AuditService (Integration)', () => {
     });
   });
 
+  describe('snapshot hashes', () => {
+    it('is stable for the same snapshot regardless of key order', async () => {
+      await service.record({
+        actorType: AuditActorType.USER,
+        action: 'A',
+        after: { a: 1, nested: { x: 1, y: 2 } },
+      });
+      await service.record({
+        actorType: AuditActorType.USER,
+        action: 'B',
+        after: { nested: { y: 2, x: 1 }, a: 1 },
+      });
+
+      const logs = await prisma.auditLog.findMany({ orderBy: { action: 'asc' } });
+      expect(logs[0].afterHash).toBe(logs[1].afterHash);
+    });
+
+    it('changes when a NESTED value changes', async () => {
+      await service.record({
+        actorType: AuditActorType.ADMIN,
+        action: 'A',
+        before: { price: { amount: 100 } },
+        after: { price: { amount: 999999 } },
+      });
+
+      const [log] = await prisma.auditLog.findMany();
+      expect(log.beforeHash).not.toBe(log.afterHash);
+    });
+  });
+
   describe('append-only enforcement', () => {
-    it('should prevent UPDATE on audit_logs table', async () => {
-      // Create an audit log
-      await service.record({
-        actorType: AuditActorType.USER,
-        action: 'TEST_ACTION',
-      });
+    async function createLog(): Promise<string> {
+      await service.record({ actorType: AuditActorType.USER, action: 'TEST_ACTION' });
+      const [log] = await prisma.auditLog.findMany();
+      return log.id;
+    }
 
-      const logs = await prisma.auditLog.findMany();
-      const logId = logs[0].id;
+    it('rejects UPDATE on audit_logs (trigger)', async () => {
+      const id = await createLog();
 
-      // Attempt to update - should be blocked by trigger
       await expect(
-        prisma.$executeRaw`
-          UPDATE audit_logs SET action = 'MODIFIED' WHERE id = ${logId}::uuid
-        `,
-      ).rejects.toThrow(/audit_logs table is append-only/i);
+        prisma.$executeRaw`UPDATE audit_logs SET action = 'MODIFIED' WHERE id = ${id}::uuid`,
+      ).rejects.toThrow(/append-only/i);
     });
 
-    it('should prevent DELETE on audit_logs table', async () => {
-      // Create an audit log
-      await service.record({
-        actorType: AuditActorType.USER,
-        action: 'TEST_ACTION',
-      });
+    it('rejects DELETE on audit_logs (trigger)', async () => {
+      const id = await createLog();
 
-      const logs = await prisma.auditLog.findMany();
-      const logId = logs[0].id;
-
-      // Attempt to delete - should be blocked by trigger
       await expect(
-        prisma.$executeRaw`
-          DELETE FROM audit_logs WHERE id = ${logId}::uuid
-        `,
-      ).rejects.toThrow(/audit_logs table is append-only/i);
+        prisma.$executeRaw`DELETE FROM audit_logs WHERE id = ${id}::uuid`,
+      ).rejects.toThrow(/append-only|Hard deletes are not allowed/i);
     });
 
-    it('should allow INSERT (append) operations', async () => {
-      await service.record({
-        actorType: AuditActorType.USER,
-        action: 'FIRST_ACTION',
-      });
+    it('allows INSERT (append) operations', async () => {
+      await service.record({ actorType: AuditActorType.USER, action: 'FIRST_ACTION' });
+      await service.record({ actorType: AuditActorType.USER, action: 'SECOND_ACTION' });
 
-      await service.record({
-        actorType: AuditActorType.USER,
-        action: 'SECOND_ACTION',
-      });
-
-      const logs = await prisma.auditLog.findMany({
-        orderBy: { createdAt: 'asc' },
-      });
+      const logs = await prisma.auditLog.findMany({ orderBy: { createdAt: 'asc' } });
 
       expect(logs).toHaveLength(2);
       expect(logs[0].action).toBe('FIRST_ACTION');

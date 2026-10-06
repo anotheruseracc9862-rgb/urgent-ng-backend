@@ -1,29 +1,27 @@
-import { Test, TestingModule } from '@nestjs/testing';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { Test } from '@nestjs/testing';
 import { Controller, Get, INestApplication } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER } from '@nestjs/core';
 import request from 'supertest';
-import { FeatureFlagGuard } from './feature-flag.guard.js';
 import { RequiresFlag } from '../decorators/requires-flag.decorator.js';
 import { DatabaseModule } from '../../database/database.module.js';
-import { ConfigModule } from '@nestjs/config';
-import configuration from '../../config/configuration.js';
+import { RedisModule } from '../redis/redis.module.js';
+import { ConfigStoreModule } from '../../config/config-store.module.js';
 import { BusinessConfigService } from '../../config/business-config.service.js';
-import { PrismaService } from '../../database/prisma.service.js';
-import Redis from 'ioredis';
+import { DomainExceptionFilter } from '../filters/domain-exception.filter.js';
+import { cleanAll } from '../../test/database.helper.js';
+import { testConfigModule } from '../../test/test-modules.js';
 
-/**
- * Test controller with feature flags
- */
 @Controller('test-flags')
 class TestFlagController {
   @Get('registrations')
-  @RequiresFlag('registrations_enabled')
+  @RequiresFlag('FEATURE_REGISTRATIONS_ENABLED')
   registrations() {
     return { success: true };
   }
 
   @Get('errands')
-  @RequiresFlag('errand_posting_enabled')
+  @RequiresFlag('FEATURE_ERRAND_POSTING_ENABLED')
   errands() {
     return { success: true };
   }
@@ -34,183 +32,82 @@ class TestFlagController {
   }
 }
 
+@Controller('test-class-flag')
+@RequiresFlag('FEATURE_OFFERS_ENABLED')
+class ClassFlagController {
+  @Get()
+  list() {
+    return { success: true };
+  }
+}
+
 describe('FeatureFlagGuard (integration)', () => {
   let app: INestApplication;
-  let prisma: PrismaService;
-  let redis: Redis;
+  let config: BusinessConfigService;
 
   beforeAll(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({
-          isGlobal: true,
-          load: [configuration],
-        }),
-        DatabaseModule,
-      ],
-      controllers: [TestFlagController],
-      providers: [
-        BusinessConfigService,
-        {
-          provide: APP_GUARD,
-          useClass: FeatureFlagGuard,
-        },
-      ],
+    const moduleRef = await Test.createTestingModule({
+      imports: [testConfigModule(), RedisModule, DatabaseModule, ConfigStoreModule],
+      controllers: [TestFlagController, ClassFlagController],
+      providers: [{ provide: APP_FILTER, useClass: DomainExceptionFilter }],
     }).compile();
 
-    app = module.createNestApplication();
+    app = moduleRef.createNestApplication();
     await app.init();
-
-    prisma = module.get<PrismaService>(PrismaService);
-    
-    const configService = module.get(BusinessConfigService);
-    redis = configService['redis'];
+    config = moduleRef.get(BusinessConfigService);
   });
 
   beforeEach(async () => {
-    // Clear Redis cache
-    await redis.flushdb();
-
-    // Reset flags to enabled
-    await prisma.$executeRaw`
-      UPDATE config_values 
-      SET value = 'true' 
-      WHERE key IN ('registrations_enabled', 'errand_posting_enabled')
-    `;
+    await cleanAll();
   });
 
   afterAll(async () => {
     await app.close();
-    await prisma.$disconnect();
   });
 
-  describe('flag enabled', () => {
-    it('should allow access when flag is true', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(200);
+  const get = (path: string) => request(app.getHttpServer()).get(path);
 
-      expect(response.body.success).toBe(true);
-    });
+  it('allows a route whose flag is on by default', async () => {
+    const res = await get('/test-flags/registrations').expect(200);
+    expect(res.body.success).toBe(true);
   });
 
-  describe('flag disabled', () => {
-    it('should block access when flag is false', async () => {
-      // Disable registrations
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'false' 
-        WHERE key = 'registrations_enabled'
-      `;
-
-      // Clear cache to pick up new value
-      await redis.flushdb();
-
-      const response = await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(503);
-
-      expect(response.body.error).toHaveProperty('code', 'FEATURE_DISABLED');
-    });
-
-    it('should return stable error code', async () => {
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'false' 
-        WHERE key = 'errand_posting_enabled'
-      `;
-
-      await redis.flushdb();
-
-      const response = await request(app.getHttpServer())
-        .get('/test-flags/errands')
-        .expect(503);
-
-      expect(response.body.error.code).toBe('FEATURE_DISABLED');
-    });
+  it('allows a route with no flag', async () => {
+    await get('/test-flags/no-flag').expect(200);
   });
 
-  describe('no flag requirement', () => {
-    it('should always allow access without @RequiresFlag decorator', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/test-flags/no-flag')
-        .expect(200);
+  it('blocks a route when its flag is switched off, with the standard error and no flag name', async () => {
+    await config.set('FEATURE_REGISTRATIONS_ENABLED', false);
 
-      expect(response.body.success).toBe(true);
-    });
+    const res = await get('/test-flags/registrations').expect(503);
+
+    expect(res.body.error.code).toBe('FEATURE_DISABLED');
+    expect(JSON.stringify(res.body)).not.toContain('FEATURE_REGISTRATIONS_ENABLED');
+    expect(JSON.stringify(res.body)).not.toContain('flagKey');
   });
 
-  describe('flag toggle without restart', () => {
-    it('should immediately block after flag is disabled', async () => {
-      // First request succeeds
-      await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(200);
+  it('only blocks the route that owns the flag', async () => {
+    await config.set('FEATURE_REGISTRATIONS_ENABLED', false);
 
-      // Disable flag
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'false' 
-        WHERE key = 'registrations_enabled'
-      `;
-
-      // Clear cache (simulates TTL expiry or invalidation)
-      await redis.flushdb();
-
-      // Second request blocked
-      await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(503);
-    });
-
-    it('should immediately allow after flag is re-enabled', async () => {
-      // Disable flag
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'false' 
-        WHERE key = 'registrations_enabled'
-      `;
-      await redis.flushdb();
-
-      // Request blocked
-      await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(503);
-
-      // Re-enable flag
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'true' 
-        WHERE key = 'registrations_enabled'
-      `;
-      await redis.flushdb();
-
-      // Request allowed
-      await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(200);
-    });
+    await get('/test-flags/errands').expect(200);
+    await get('/test-flags/no-flag').expect(200);
   });
 
-  describe('multiple flags', () => {
-    it('should independently control different features', async () => {
-      // Disable only registrations
-      await prisma.$executeRaw`
-        UPDATE config_values 
-        SET value = 'false' 
-        WHERE key = 'registrations_enabled'
-      `;
-      await redis.flushdb();
+  it('takes effect immediately after the flag changes (cache invalidated on write)', async () => {
+    await get('/test-flags/errands').expect(200);
 
-      // Registrations blocked
-      await request(app.getHttpServer())
-        .get('/test-flags/registrations')
-        .expect(503);
+    await config.set('FEATURE_ERRAND_POSTING_ENABLED', false);
+    await get('/test-flags/errands').expect(503);
 
-      // Errands still allowed
-      await request(app.getHttpServer())
-        .get('/test-flags/errands')
-        .expect(200);
-    });
+    await config.set('FEATURE_ERRAND_POSTING_ENABLED', true);
+    await get('/test-flags/errands').expect(200);
+  });
+
+  it('supports the decorator on a whole controller class', async () => {
+    await get('/test-class-flag').expect(200);
+
+    await config.set('FEATURE_OFFERS_ENABLED', false);
+    const res = await get('/test-class-flag').expect(503);
+    expect(res.body.error.code).toBe('FEATURE_DISABLED');
   });
 });

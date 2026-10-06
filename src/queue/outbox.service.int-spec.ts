@@ -5,8 +5,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DatabaseModule } from '../database/database.module.js';
-import { OutboxService, OutboxEventBatch } from './outbox.service.js';
-import { getTestPrisma, cleanDatabase } from '../test/database.helper.js';
+import { OutboxService, OutboxEventRow } from './outbox.service.js';
+import {
+  getTestPrisma,
+  cleanDatabase,
+} from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 import { OutboxStatus } from '@prisma/client';
 
 describe('OutboxService (Integration)', () => {
@@ -18,7 +22,7 @@ describe('OutboxService (Integration)', () => {
     await cleanDatabase();
 
     module = await Test.createTestingModule({
-      imports: [DatabaseModule],
+      imports: [testConfigModule(), DatabaseModule],
       providers: [OutboxService],
     }).compile();
 
@@ -30,274 +34,256 @@ describe('OutboxService (Integration)', () => {
     await module?.close();
   });
 
+  const ok = vi.fn(async (_event: OutboxEventRow) => undefined);
+
   describe('add()', () => {
-    it('should add outbox event within a transaction', async () => {
-      const eventId = await prisma.$transaction(async (tx) => {
-        return service.add(tx, {
+    it('adds an outbox event within a transaction', async () => {
+      const eventId = await prisma.$transaction(async (tx) =>
+        service.add(tx, {
           eventType: 'user.created',
           aggregateType: 'User',
           aggregateId: '00000000-0000-0000-0000-000000000001',
-          payload: { userId: '00000000-0000-0000-0000-000000000001', email: 'test@example.com' },
-        });
-      });
+          payload: { userId: '00000000-0000-0000-0000-000000000001' },
+        }),
+      );
 
-      expect(eventId).toBeDefined();
+      const event = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
 
-      const event = await prisma.outboxEvent.findUnique({
-        where: { id: eventId },
-      });
-
-      expect(event).toBeDefined();
       expect(event?.eventType).toBe('user.created');
       expect(event?.aggregateType).toBe('User');
       expect(event?.status).toBe(OutboxStatus.PENDING);
       expect(event?.attempts).toBe(0);
     });
 
-    it('should roll back outbox event if transaction fails', async () => {
-      try {
-        await prisma.$transaction(async (tx) => {
-          await service.add(tx, {
-            eventType: 'test.event',
-            payload: { test: 'data' },
-          });
-
+    it('rolls back the outbox event if the transaction fails', async () => {
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await service.add(tx, { eventType: 'test.event', payload: { test: 'data' } });
           throw new Error('Transaction failed');
-        });
-      } catch (error) {
-        // Expected
-      }
+        }),
+      ).rejects.toThrow('Transaction failed');
 
-      const events = await prisma.outboxEvent.findMany();
-      expect(events).toHaveLength(0);
+      expect(await prisma.outboxEvent.findMany()).toHaveLength(0);
     });
 
-    it('should support delayed events', async () => {
-      const eventId = await prisma.$transaction(async (tx) => {
-        return service.add(tx, {
-          eventType: 'delayed.event',
-          payload: { test: 'data' },
-          delayMs: 5000, // 5 seconds
-        });
+    it('supports delayed events', async () => {
+      const eventId = await service.addStandalone({
+        eventType: 'delayed.event',
+        payload: {},
+        delayMs: 5000,
       });
 
-      const event = await prisma.outboxEvent.findUnique({
-        where: { id: eventId },
-      });
-
+      const event = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
       expect(event?.availableAt.getTime()).toBeGreaterThan(Date.now());
     });
   });
 
-  describe('addStandalone()', () => {
-    it('should add event outside of transaction', async () => {
-      const eventId = await service.addStandalone({
-        eventType: 'test.event',
-        payload: { test: 'data' },
-      });
+  describe('publishPendingEvents()', () => {
+    it('publishes each due event on its own and marks it PUBLISHED', async () => {
+      const first = await service.addStandalone({ eventType: 'event.one', payload: { n: 1 } });
+      const second = await service.addStandalone({ eventType: 'event.two', payload: { n: 2 } });
+      const publish = vi.fn(async (_event: OutboxEventRow) => undefined);
 
-      const event = await prisma.outboxEvent.findUnique({
-        where: { id: eventId },
-      });
+      const count = await service.publishPendingEvents(publish);
 
-      expect(event).toBeDefined();
-      expect(event?.eventType).toBe('test.event');
-    });
-  });
+      expect(count).toBe(2);
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish.mock.calls.map(([event]) => event.id)).toEqual([first, second]);
 
-  describe('publisher', () => {
-    it('should publish pending events', async () => {
-      // Create pending events
-      await service.addStandalone({
-        eventType: 'event.one',
-        payload: { order: 1 },
-      });
-
-      await service.addStandalone({
-        eventType: 'event.two',
-        payload: { order: 2 },
-      });
-
-      // Mock publish function
-      const publishedEvents: OutboxEventBatch[] = [];
-      const publishFn = vi.fn(async (events: OutboxEventBatch[]) => {
-        publishedEvents.push(...events);
-      });
-
-      // Start publisher (will run immediately)
-      service.startPublisher(publishFn);
-
-      // Wait for publisher to process
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      expect(publishFn).toHaveBeenCalled();
-      expect(publishedEvents).toHaveLength(2);
-      expect(publishedEvents[0].eventType).toBe('event.one');
-      expect(publishedEvents[1].eventType).toBe('event.two');
-
-      // Check events are marked as published
-      const events = await prisma.outboxEvent.findMany({
-        orderBy: { occurredAt: 'asc' },
-      });
-
-      expect(events[0].status).toBe(OutboxStatus.PUBLISHED);
-      expect(events[1].status).toBe(OutboxStatus.PUBLISHED);
-      expect(events[0].processedAt).toBeDefined();
-      expect(events[1].processedAt).toBeDefined();
-    });
-
-    it('should handle failed events with exponential backoff', async () => {
-      await service.addStandalone({
-        eventType: 'failing.event',
-        payload: { test: 'data' },
-      });
-
-      // Publish function that always fails
-      const publishFn = vi.fn(async () => {
-        throw new Error('Publish failed');
-      });
-
-      service.startPublisher(publishFn);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const event = await prisma.outboxEvent.findFirst();
-      expect(event?.status).toBe(OutboxStatus.FAILED);
-      expect(event?.attempts).toBe(1);
-      expect(event?.lastError).toContain('Publish failed');
-      expect(event?.availableAt.getTime()).toBeGreaterThan(Date.now());
-    });
-
-    it('should dead-letter events after 10 attempts', async () => {
-      // Create event with 9 attempts already
-      const eventId = await service.addStandalone({
-        eventType: 'dead.letter.test',
-        payload: { test: 'data' },
-      });
-
-      await prisma.outboxEvent.update({
-        where: { id: eventId },
-        data: { attempts: 9 },
-      });
-
-      const publishFn = vi.fn(async () => {
-        throw new Error('Always fails');
-      });
-
-      service.startPublisher(publishFn);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const event = await prisma.outboxEvent.findFirst();
-      expect(event?.status).toBe(OutboxStatus.DEAD_LETTERED);
-      expect(event?.attempts).toBe(10);
-    });
-
-    it('should skip events not yet available', async () => {
-      // Create event available in the future
-      await service.addStandalone({
-        eventType: 'future.event',
-        payload: { test: 'data' },
-        delayMs: 60000, // 1 minute
-      });
-
-      const publishFn = vi.fn();
-      service.startPublisher(publishFn);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      expect(publishFn).not.toHaveBeenCalled();
-
-      const event = await prisma.outboxEvent.findFirst();
-      expect(event?.status).toBe(OutboxStatus.PENDING);
-    });
-
-    it('should use SKIP LOCKED to prevent duplicate processing', async () => {
-      // Create many events
-      for (let i = 0; i < 10; i++) {
-        await service.addStandalone({
-          eventType: `event.${i}`,
-          payload: { index: i },
-        });
+      for (const id of [first, second]) {
+        const event = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+        expect(event.status).toBe(OutboxStatus.PUBLISHED);
+        expect(event.attempts).toBe(1);
+        expect(event.processedAt).not.toBeNull();
+        expect(event.processingStartedAt).toBeNull();
       }
+    });
 
-      const publishedIds = new Set<string>();
-      const publishFn = async (events: OutboxEventBatch[]) => {
-        for (const event of events) {
-          if (publishedIds.has(event.id)) {
-            throw new Error(`Duplicate processing of event ${event.id}`);
-          }
-          publishedIds.add(event.id);
-        }
+    it('does not publish an event twice', async () => {
+      await service.addStandalone({ eventType: 'event.one', payload: {} });
+
+      await service.publishPendingEvents(ok);
+      ok.mockClear();
+      await service.publishPendingEvents(ok);
+
+      expect(ok).not.toHaveBeenCalled();
+    });
+
+    it('a failing event does not block or re-send the others in the batch', async () => {
+      const good = await service.addStandalone({ eventType: 'event.good', payload: {} });
+      const bad = await service.addStandalone({ eventType: 'event.bad', payload: {} });
+      const later = await service.addStandalone({ eventType: 'event.later', payload: {} });
+      const publish = vi.fn(async (event: OutboxEventRow) => {
+        if (event.id === bad) throw new Error('queue unavailable');
+      });
+
+      const count = await service.publishPendingEvents(publish);
+
+      expect(count).toBe(2);
+      expect(publish).toHaveBeenCalledTimes(3);
+
+      const rows = await prisma.outboxEvent.findMany({ orderBy: { occurredAt: 'asc' } });
+      expect(rows.map((row) => [row.id, row.status])).toEqual([
+        [good, OutboxStatus.PUBLISHED],
+        [bad, OutboxStatus.FAILED],
+        [later, OutboxStatus.PUBLISHED],
+      ]);
+      expect(rows[1].attempts).toBe(1);
+      expect(rows[1].lastError).toBe('queue unavailable');
+      expect(rows[1].availableAt.getTime()).toBeGreaterThan(Date.now());
+      expect(rows[1].processingStartedAt).toBeNull();
+    });
+
+    it('retries a failed event with exponential backoff', async () => {
+      const id = await service.addStandalone({ eventType: 'event.retry', payload: {} });
+      const fail = async () => {
+        throw new Error('nope');
       };
 
-      service.startPublisher(publishFn);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await service.publishPendingEvents(fail);
+      const afterFirst = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
 
-      expect(publishedIds.size).toBe(10);
+      // not due yet: not picked up
+      ok.mockClear();
+      await service.publishPendingEvents(ok);
+      expect(ok).not.toHaveBeenCalled();
+
+      // make it due, fail again: backoff doubles (about 2s after the second failure)
+      await prisma.$executeRaw`UPDATE outbox_events SET available_at = NOW() WHERE id = ${id}::uuid`;
+      await service.publishPendingEvents(fail);
+      const afterSecond = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+
+      expect(afterSecond.attempts).toBe(2);
+      const firstDelay = afterFirst.availableAt.getTime() - Date.now();
+      const secondDelay = afterSecond.availableAt.getTime() - Date.now();
+      expect(firstDelay).toBeLessThanOrEqual(1000);
+      expect(secondDelay).toBeGreaterThan(1000);
+      expect(secondDelay).toBeLessThanOrEqual(2000);
+    });
+
+    it('dead-letters an event after 10 failed attempts', async () => {
+      const id = await service.addStandalone({ eventType: 'event.doomed', payload: {} });
+      await prisma.$executeRaw`UPDATE outbox_events SET attempts = 9 WHERE id = ${id}::uuid`;
+
+      await service.publishPendingEvents(async () => {
+        throw new Error('still broken');
+      });
+
+      const event = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+      expect(event.status).toBe(OutboxStatus.DEAD_LETTERED);
+      expect(event.attempts).toBe(10);
+      expect(event.lastError).toBe('still broken');
+    });
+
+    it('skips events that are not yet available', async () => {
+      await service.addStandalone({ eventType: 'event.future', payload: {}, delayMs: 60_000 });
+
+      ok.mockClear();
+      const count = await service.publishPendingEvents(ok);
+
+      expect(count).toBe(0);
+      expect(ok).not.toHaveBeenCalled();
+    });
+
+    it('reclaims an event stuck in PROCESSING past the lease (crashed publisher)', async () => {
+      const id = await service.addStandalone({ eventType: 'event.stuck', payload: {} });
+      await prisma.$executeRaw`
+        UPDATE outbox_events
+        SET status = 'PROCESSING'::"OutboxStatus", processing_started_at = NOW() - INTERVAL '5 minutes'
+        WHERE id = ${id}::uuid
+      `;
+
+      ok.mockClear();
+      await service.publishPendingEvents(ok);
+
+      expect(ok).toHaveBeenCalledTimes(1);
+      const event = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+      expect(event.status).toBe(OutboxStatus.PUBLISHED);
+    });
+
+    it('does not reclaim an event whose lease is still fresh', async () => {
+      const id = await service.addStandalone({ eventType: 'event.inflight', payload: {} });
+      await prisma.$executeRaw`
+        UPDATE outbox_events
+        SET status = 'PROCESSING'::"OutboxStatus", processing_started_at = NOW()
+        WHERE id = ${id}::uuid
+      `;
+
+      ok.mockClear();
+      await service.publishPendingEvents(ok);
+
+      expect(ok).not.toHaveBeenCalled();
+    });
+
+    it('two publishers running at once never publish the same event twice', async () => {
+      for (let n = 0; n < 30; n++) {
+        await service.addStandalone({ eventType: 'event.bulk', payload: { n } });
+      }
+      const seen: string[] = [];
+      const publish = async (event: OutboxEventRow) => {
+        seen.push(event.id);
+      };
+
+      await Promise.all([
+        service.publishPendingEvents(publish),
+        service.publishPendingEvents(publish),
+        service.publishPendingEvents(publish),
+      ]);
+
+      expect(seen).toHaveLength(30);
+      expect(new Set(seen).size).toBe(30);
     });
   });
 
-  describe('retryDeadLettered()', () => {
-    it('should reset dead-lettered event to pending', async () => {
-      const eventId = await service.addStandalone({
-        eventType: 'dead.letter',
-        payload: { test: 'data' },
-      });
+  describe('startPublisher()', () => {
+    it('polls and publishes new events until stopped', async () => {
+      const id = await service.addStandalone({ eventType: 'event.polled', payload: {} });
+      const publish = vi.fn(async (_event: OutboxEventRow) => undefined);
 
-      // Mark as dead-lettered
-      await prisma.outboxEvent.update({
-        where: { id: eventId },
-        data: {
-          status: OutboxStatus.DEAD_LETTERED,
-          attempts: 10,
-          lastError: 'Too many failures',
+      service.startPublisher(publish);
+
+      await vi.waitFor(
+        async () => {
+          const event = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+          expect(event.status).toBe(OutboxStatus.PUBLISHED);
         },
-      });
+        { timeout: 5000, interval: 100 },
+      );
 
-      await service.retryDeadLettered(eventId);
-
-      const event = await prisma.outboxEvent.findUnique({
-        where: { id: eventId },
-      });
-
-      expect(event?.status).toBe(OutboxStatus.PENDING);
-      expect(event?.attempts).toBe(0);
-      expect(event?.lastError).toBeNull();
+      service.stopPublisher();
+      expect(publish).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe('getDeadLettered()', () => {
-    it('should retrieve dead-lettered events', async () => {
-      // Create mix of events
-      const deadId1 = await service.addStandalone({
-        eventType: 'dead.one',
-        payload: { test: 'data' },
-      });
+  describe('dead letters', () => {
+    it('resets a dead-lettered event to PENDING', async () => {
+      const id = await service.addStandalone({ eventType: 'event.dead', payload: {} });
+      await prisma.$executeRaw`
+        UPDATE outbox_events SET status = 'DEAD_LETTERED'::"OutboxStatus", attempts = 10, last_error = 'x'
+        WHERE id = ${id}::uuid
+      `;
 
-      const deadId2 = await service.addStandalone({
-        eventType: 'dead.two',
-        payload: { test: 'data' },
-      });
+      await service.retryDeadLettered(id);
 
-      await service.addStandalone({
-        eventType: 'pending.event',
-        payload: { test: 'data' },
-      });
+      const event = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+      expect(event.status).toBe(OutboxStatus.PENDING);
+      expect(event.attempts).toBe(0);
+      expect(event.lastError).toBeNull();
+    });
 
-      // Mark two as dead-lettered
-      await prisma.outboxEvent.update({
-        where: { id: deadId1 },
-        data: { status: OutboxStatus.DEAD_LETTERED, attempts: 10 },
-      });
+    it('lists dead-lettered events', async () => {
+      const id = await service.addStandalone({ eventType: 'event.dead', payload: {} });
+      await service.addStandalone({ eventType: 'event.alive', payload: {} });
+      await prisma.$executeRaw`
+        UPDATE outbox_events SET status = 'DEAD_LETTERED'::"OutboxStatus", last_error = 'boom'
+        WHERE id = ${id}::uuid
+      `;
 
-      await prisma.outboxEvent.update({
-        where: { id: deadId2 },
-        data: { status: OutboxStatus.DEAD_LETTERED, attempts: 10 },
-      });
+      const dead = await service.getDeadLettered();
 
-      const deadLettered = await service.getDeadLettered();
-
-      expect(deadLettered).toHaveLength(2);
-      expect(deadLettered[0].eventType).toMatch(/^dead\./);
-      expect(deadLettered[1].eventType).toMatch(/^dead\./);
+      expect(dead).toHaveLength(1);
+      expect(dead[0].id).toBe(id);
+      expect(dead[0].lastError).toBe('boom');
     });
   });
 });

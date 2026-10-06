@@ -1,8 +1,11 @@
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BaseSweeper } from './base-sweeper.js';
 import { DatabaseModule } from '../database/database.module.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma } from '@prisma/client';
+import { cleanDatabase } from '../test/database.helper.js';
+import { testConfigModule } from '../test/test-modules.js';
 
 /**
  * Test sweeper that processes idempotency keys as due rows.
@@ -49,7 +52,7 @@ describe('BaseSweeper (integration)', () => {
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      imports: [DatabaseModule],
+      imports: [testConfigModule(), DatabaseModule],
     }).compile();
 
     prisma = module.get<PrismaService>(PrismaService);
@@ -58,7 +61,7 @@ describe('BaseSweeper (integration)', () => {
 
   beforeEach(async () => {
     // Clean up test data
-    await prisma.idempotencyKey.deleteMany({});
+    await cleanDatabase();
     sweeper.processedIds = [];
   });
 
@@ -180,7 +183,7 @@ describe('BaseSweeper (integration)', () => {
         // Lock row1 for update
         await tx.$queryRaw`
           SELECT id FROM idempotency_keys
-          WHERE id = ${row1.id}
+          WHERE id = ${row1.id}::uuid
           FOR UPDATE
         `;
 
@@ -207,7 +210,7 @@ describe('BaseSweeper (integration)', () => {
 
     it('should not start twice', () => {
       sweeper.start();
-      const logSpy = jest.spyOn(sweeper['logger'], 'warn');
+      const logSpy = vi.spyOn(sweeper['logger'], 'warn');
       sweeper.start();
       expect(logSpy).toHaveBeenCalledWith('Sweeper already running');
       sweeper.stop();
@@ -237,6 +240,40 @@ describe('BaseSweeper (integration)', () => {
 
       // Verify row was processed
       expect(sweeper.processedIds.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('overlap guard', () => {
+    it('does not start a new sweep while the previous one is still running', async () => {
+      let running = 0;
+      let maxRunning = 0;
+      let calls = 0;
+
+      class SlowSweeper extends BaseSweeper {
+        protected readonly intervalMs = 20;
+
+        constructor(prisma: PrismaService) {
+          super(prisma, 'SlowSweeper');
+        }
+
+        protected async processBatch(): Promise<number> {
+          calls += 1;
+          running += 1;
+          maxRunning = Math.max(maxRunning, running);
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          running -= 1;
+          return 0;
+        }
+      }
+
+      const slow = new SlowSweeper(prisma);
+      slow.start();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      slow.stop();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(maxRunning).toBe(1);
+      expect(calls).toBeLessThanOrEqual(3);
     });
   });
 });
