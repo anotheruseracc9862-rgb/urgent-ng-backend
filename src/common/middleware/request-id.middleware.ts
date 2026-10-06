@@ -13,6 +13,9 @@ export class RequestIdMiddleware implements NestMiddleware {
     // Store in headers for downstream use
     req.headers['x-request-id'] = requestId;
     
+    // Set on response header
+    res.setHeader('x-request-id', requestId);
+    
     // Bind to Pino context
     this.logger.assign({ requestId });
     
