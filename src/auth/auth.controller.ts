@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Ip, HttpCode, HttpStatus, Get, Delete, Param, Req, Res, Headers } from '@nestjs/common';
+import { Controller, Post, Body, Ip, HttpCode, HttpStatus, Get, Delete, Param, Req, Res, Headers, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { RegistrationService } from './registration.service.js';
 import { OtpService, OtpPurpose } from './otp.service.js';
@@ -7,6 +7,9 @@ import { SessionService } from './session.service.js';
 import { RegisterDto, SendOtpDto, VerifyOtpDto } from './dto/register.dto.js';
 import { LoginDto, RefreshTokenDto, PasswordResetRequestDto, PasswordResetConfirmDto } from './dto/login.dto.js';
 import { RateLimit } from '../common/decorators/rate-limit.decorator.js';
+import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
+import { AccountStatusGuard, AllowDeactivated } from './guards/account-status.guard.js';
+import { CurrentUser, type AuthenticatedUser } from './decorators/current-user.decorator.js';
 import * as argon2 from 'argon2';
 
 /**
@@ -274,12 +277,11 @@ export class AuthController {
   /**
    * List user sessions
    * GET /auth/sessions
-   * 
-   * TODO: Add authentication guard when available (P2-04)
    */
   @Get('sessions')
-  async listSessions(@Body() body: { userId: string }) {
-    const sessions = await this.sessionService.listUserSessions(body.userId);
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async listSessions(@CurrentUser() user: AuthenticatedUser) {
+    const sessions = await this.sessionService.listUserSessions(user.userId);
 
     return {
       success: true,
@@ -290,12 +292,15 @@ export class AuthController {
   /**
    * Revoke a specific session
    * DELETE /auth/sessions/:id
-   * 
-   * TODO: Add authentication guard when available (P2-04)
    */
   @Delete('sessions/:id')
   @HttpCode(HttpStatus.OK)
-  async revokeSession(@Param('id') sessionId: string) {
+  @UseGuards(ConsumerAuthGuard, AccountStatusGuard)
+  async revokeSession(
+    @Param('id') sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    // TODO: Add ownership check - verify session belongs to user
     await this.sessionService.revokeSession(sessionId);
 
     return {

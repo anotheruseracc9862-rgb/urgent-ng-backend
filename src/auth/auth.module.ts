@@ -9,6 +9,11 @@ import { BlocklistService } from './blocklist.service.js';
 import { SessionService } from './session.service.js';
 import { LoginService } from './login.service.js';
 import { FakeOtpDeliveryProvider } from './otp-delivery.provider.js';
+import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
+import { AccountStatusGuard } from './guards/account-status.guard.js';
+import { RestrictionGuard } from './guards/restriction.guard.js';
+import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
+import { AuthorizationHelper } from './helpers/authorization.helper.js';
 
 @Module({
   imports: [
@@ -32,11 +37,27 @@ import { FakeOtpDeliveryProvider } from './otp-delivery.provider.js';
     BlocklistService,
     SessionService,
     LoginService,
+    ConsumerAuthGuard,
+    AccountStatusGuard,
+    RestrictionGuard,
+    PolicyAcceptanceGuard,
+    AuthorizationHelper,
     {
       provide: 'IOtpDeliveryProvider',
       useClass: FakeOtpDeliveryProvider,
     },
   ],
-  exports: [OtpService, BlocklistService, RegistrationService, SessionService, LoginService],
+  exports: [
+    OtpService,
+    BlocklistService,
+    RegistrationService,
+    SessionService,
+    LoginService,
+    ConsumerAuthGuard,
+    AccountStatusGuard,
+    RestrictionGuard,
+    PolicyAcceptanceGuard,
+    AuthorizationHelper,
+  ],
 })
 export class AuthModule {}
