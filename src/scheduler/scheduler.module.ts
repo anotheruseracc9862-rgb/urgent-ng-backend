@@ -1,9 +1,13 @@
 import { Module } from '@nestjs/common';
-import { ScheduleModule } from '@nestjs/schedule';
+import { DatabaseModule } from '../database/database.module.js';
+import { QueueModule } from '../queue/queue.module.js';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
+import { DelayedJobHelper } from './delayed-job.helper.js';
+import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
 
-// Cron and sweeper jobs live here and run only in the scheduler process
-// (npm run start:scheduler), never in the API process (PRD 1 section 61).
 @Module({
-  imports: [ScheduleModule.forRoot()],
+  imports: [DatabaseModule, QueueModule, IdempotencyModule],
+  providers: [DelayedJobHelper, IdempotencyCleanupSweeper],
+  exports: [DelayedJobHelper],
 })
 export class SchedulerModule {}

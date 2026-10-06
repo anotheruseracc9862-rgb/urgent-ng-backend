@@ -14,6 +14,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware.j
 import { resolveRequestId } from './common/middleware/request-id.js';
 import { CommonModule } from './common/common.module.js';
 import { ProvidersModule } from './common/providers/providers.module.js';
+import { SchedulerModule } from './scheduler/scheduler.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -64,6 +65,7 @@ const isTest = process.env.NODE_ENV === 'test';
     ProvidersModule.forRoot(),
     DatabaseModule,
     HealthModule,
+    SchedulerModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
