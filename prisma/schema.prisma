@@ -739,15 +739,17 @@ model User {
   deletedAt           DateTime?  @map("deleted_at") @db.Timestamptz(3)
 
   // Relations
-  profile           Profile?
-  authSessions      AuthSession[]
-  consentRecords    ConsentRecord[]
-  blocksGiven       Block[]                  @relation("BlockerRelation")
-  blocksReceived    Block[]                  @relation("BlockedRelation")
-  notificationPrefs NotificationPreference[]
-  devices           Device[]
-  restrictions      UserRestriction[]
-  media             Media[]
+  profile              Profile?
+  authSessions         AuthSession[]
+  consentRecords       ConsentRecord[]
+  blocksGiven          Block[]                  @relation("BlockerRelation")
+  blocksReceived       Block[]                  @relation("BlockedRelation")
+  notificationPrefs    NotificationPreference[]
+  devices              Device[]
+  restrictions         UserRestriction[]
+  media                Media[]
+  runnerProfile        RunnerProfile?
+  verificationAttempts VerificationAttempt[]
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1060,10 +1062,60 @@ model Media {
   updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz(3)
 
-  profilePhotoOf Profile[] @relation("ProfilePhoto")
+  profilePhotoOf       Profile[]             @relation("ProfilePhoto")
+  verificationSelfieOf VerificationAttempt[]
 
   @@index([ownerId, purpose], map: "media_owner_purpose_idx")
   @@index([status], map: "media_status_idx")
   @@index([deletedAt], map: "media_deleted_at_idx")
   @@map("media")
+}
+
+// P4-01: Runner profile (Backend PRD 10.1). The operating area is one circle: centre + radius.
+// The centre is a PostGIS geography point, written and read with raw SQL only.
+model RunnerProfile {
+  userId              String                               @id @map("user_id") @db.Uuid
+  user                User                                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  transport           TransportMethod
+  areaCenter          Unsupported("geography(Point,4326)") @map("area_center")
+  areaRadiusKm        Decimal                              @default(5) @map("area_radius_km") @db.Decimal(4, 1)
+  availability        RunnerAvailability                   @default(UNAVAILABLE)
+  excludedCategoryIds String[]                             @default([]) @map("excluded_category_ids") @db.Uuid
+  createdAt           DateTime                             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?                            @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([areaCenter], type: Gist, map: "runner_profiles_area_center_idx")
+  @@index([availability], map: "runner_profiles_availability_idx")
+  @@map("runner_profiles")
+}
+
+// P4-02: One row per verification attempt (Backend PRD 10.2, A.3). The NIN and the selfie are
+// never stored here: only masked attributes, the provider reference and a keyed hash of the
+// identity (duplicate detection).
+model VerificationAttempt {
+  id                     String                     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId                 String                     @map("user_id") @db.Uuid
+  user                   User                       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  provider               String
+  providerRequestId      String?                    @map("provider_request_id")
+  status                 VerificationStatus
+  failureReason          VerificationFailureReason? @map("failure_reason")
+  providerStatus         String?                    @map("provider_status")
+  attemptNumber          Int                        @map("attempt_number")
+  identityRefHmac        String?                    @map("identity_ref_hmac")
+  maskedAttributes       Json?                      @map("masked_attributes")
+  confidence             Decimal?                   @db.Decimal(5, 2)
+  selfieMediaId          String?                    @map("selfie_media_id") @db.Uuid
+  selfie                 Media?                     @relation(fields: [selfieMediaId], references: [id], onDelete: SetNull)
+  countsAgainstAllowance Boolean                    @default(true) @map("counts_against_allowance")
+  startedAt              DateTime                   @map("started_at") @db.Timestamptz(3)
+  completedAt            DateTime?                  @map("completed_at") @db.Timestamptz(3)
+  expiresAt              DateTime?                  @map("expires_at") @db.Timestamptz(3)
+  createdAt              DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt              DateTime?                  @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt], map: "verification_attempts_user_created_idx")
+  @@map("verification_attempts")
 }

@@ -66,6 +66,8 @@ export interface BusinessConfig {
   ANONYMISATION_DAYS: number;
   VERIFICATION_ATTEMPTS_PER_FEE: number;
   VERIFICATION_RETRY_COOLDOWN_HOURS: number;
+  /** Days a successful verification stays valid. 0 means it does not expire. */
+  VERIFICATION_VALIDITY_DAYS: number;
   STAGED_SELFIE_RETENTION_DAYS: number;
   KYC_SELFIE_MATCH_THRESHOLD: number;
   KYC_REQUEST_TIMEOUT_SECONDS: number;
@@ -182,6 +184,7 @@ export const DEFAULTS: BusinessConfig = {
   ANONYMISATION_DAYS: 30,
   VERIFICATION_ATTEMPTS_PER_FEE: 3,
   VERIFICATION_RETRY_COOLDOWN_HOURS: 24,
+  VERIFICATION_VALIDITY_DAYS: 0, // the PRD names no expiry period: verification does not expire until an admin sets one
   STAGED_SELFIE_RETENTION_DAYS: 30,
   KYC_SELFIE_MATCH_THRESHOLD: 90,
   KYC_REQUEST_TIMEOUT_SECONDS: 30,
