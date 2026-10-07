@@ -420,13 +420,14 @@ enum AdminStatus {
 }
 
 enum AdminAuthEventType {
-  LOGIN
+  LOGIN_SUCCESS
   LOGIN_FAILED
+  LOCKOUT
   LOGOUT
-  TOTP_ENABLED
-  TOTP_DISABLED
-  PASSWORD_CHANGED
-  ACCOUNT_LOCKED
+  MFA_ENROLLED
+  MFA_FAILED
+  SESSION_REVOKED
+  TOKEN_REUSE
 }
 
 enum ConsentType {
@@ -714,37 +715,39 @@ model IdempotencyKey {
 // P2-01: Identity and access
 
 model User {
-  id                   String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  name                 String
-  firstName            String       @map("first_name")
-  lastName             String       @map("last_name")
-  email                String?      @unique(map: "users_email_unique")
-  emailVerifiedAt      DateTime?    @map("email_verified_at") @db.Timestamptz(3)
-  phoneE164            String?      @unique(map: "users_phone_unique") @map("phone_e164")
-  phoneVerifiedAt      DateTime?    @map("phone_verified_at") @db.Timestamptz(3)
-  passwordHash         String       @map("password_hash")
-  status               UserStatus   @default(ACTIVE)
-  startMode            StartMode?   @map("start_mode")
-  failedLoginCount     Int          @default(0) @map("failed_login_count")
-  lockedUntil          DateTime?    @map("locked_until") @db.Timestamptz(3)
-  lastLoginAt          DateTime?    @map("last_login_at") @db.Timestamptz(3)
-  deactivatedAt        DateTime?    @map("deactivated_at") @db.Timestamptz(3)
-  deletionRequestedAt  DateTime?    @map("deletion_requested_at") @db.Timestamptz(3)
-  deletionScheduledAt  DateTime?    @map("deletion_scheduled_at") @db.Timestamptz(3)
-  anonymisedAt         DateTime?    @map("anonymised_at") @db.Timestamptz(3)
-  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt            DateTime?    @map("deleted_at") @db.Timestamptz(3)
+  id                  String     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name                String
+  firstName           String     @map("first_name")
+  lastName            String     @map("last_name")
+  email               String?    @unique(map: "users_email_unique")
+  emailVerifiedAt     DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  phoneE164           String?    @unique(map: "users_phone_unique") @map("phone_e164")
+  phoneVerifiedAt     DateTime?  @map("phone_verified_at") @db.Timestamptz(3)
+  passwordHash        String     @map("password_hash")
+  status              UserStatus @default(ACTIVE)
+  startMode           StartMode? @map("start_mode")
+  failedLoginCount    Int        @default(0) @map("failed_login_count")
+  firstFailedLoginAt  DateTime?  @map("first_failed_login_at") @db.Timestamptz(3)
+  lockedUntil         DateTime?  @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt         DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  deactivatedAt       DateTime?  @map("deactivated_at") @db.Timestamptz(3)
+  deletionRequestedAt DateTime?  @map("deletion_requested_at") @db.Timestamptz(3)
+  deletionScheduledAt DateTime?  @map("deletion_scheduled_at") @db.Timestamptz(3)
+  anonymisedAt        DateTime?  @map("anonymised_at") @db.Timestamptz(3)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?  @map("deleted_at") @db.Timestamptz(3)
 
   // Relations
-  profile              Profile?
-  authSessions         AuthSession[]
-  consentRecords       ConsentRecord[]
-  blocksGiven          Block[]       @relation("BlockerRelation")
-  blocksReceived       Block[]       @relation("BlockedRelation")
-  notificationPrefs    NotificationPreference[]
-  devices              Device[]
-  restrictions         UserRestriction[]
+  profile           Profile?
+  authSessions      AuthSession[]
+  consentRecords    ConsentRecord[]
+  blocksGiven       Block[]                  @relation("BlockerRelation")
+  blocksReceived    Block[]                  @relation("BlockedRelation")
+  notificationPrefs NotificationPreference[]
+  devices           Device[]
+  restrictions      UserRestriction[]
+  media             Media[]
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -752,30 +755,31 @@ model User {
 }
 
 model Profile {
-  userId     String     @id @db.Uuid @map("user_id")
-  user       User       @relation(fields: [userId], references: [id], onDelete: Restrict)
-  photoMediaId String?  @db.Uuid @map("photo_media_id")
-  homePoint  String?    @map("home_point") @db.VarChar
-  homeArea   String?    @map("home_area")
-  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt  DateTime?  @map("deleted_at") @db.Timestamptz(3)
+  userId       String    @id @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  photoMediaId String?   @map("photo_media_id") @db.Uuid
+  photo        Media?    @relation("ProfilePhoto", fields: [photoMediaId], references: [id], onDelete: SetNull)
+  homePoint    String?   @map("home_point") @db.VarChar
+  homeArea     String?   @map("home_area")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   @@map("profiles")
 }
 
 model AuthSession {
-  id                   String     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId               String     @db.Uuid @map("user_id")
-  user                 User       @relation(fields: [userId], references: [id], onDelete: Restrict)
-  familyId             String     @db.Uuid @map("family_id")
-  tokenHash            String     @unique @map("token_hash")
-  userAgent            String?    @map("user_agent")
-  ip                   String?    @db.Inet
-  expiresAt            DateTime   @map("expires_at") @db.Timestamptz(3)
-  revokedAt            DateTime?  @map("revoked_at") @db.Timestamptz(3)
-  replacedByTokenHash  String?    @map("replaced_by_token_hash")
-  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId              String    @map("user_id") @db.Uuid
+  user                User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  familyId            String    @map("family_id") @db.Uuid
+  tokenHash           String    @unique @map("token_hash")
+  userAgent           String?   @map("user_agent")
+  ip                  String?   @db.Inet
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt           DateTime? @map("revoked_at") @db.Timestamptz(3)
+  replacedByTokenHash String?   @map("replaced_by_token_hash")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([userId, revokedAt], map: "auth_sessions_user_revoked_idx")
   @@index([familyId], map: "auth_sessions_family_idx")
@@ -784,13 +788,13 @@ model AuthSession {
 }
 
 model PolicyVersion {
-  id                    String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  type                  ConsentType
-  version               String
-  documentRef           String      @map("document_ref")
-  publishedAt           DateTime    @map("published_at") @db.Timestamptz(3)
-  requiresReacceptance  Boolean     @default(false) @map("requires_reacceptance")
-  createdAt             DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                   String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  type                 ConsentType
+  version              String
+  documentRef          String      @map("document_ref")
+  publishedAt          DateTime    @map("published_at") @db.Timestamptz(3)
+  requiresReacceptance Boolean     @default(false) @map("requires_reacceptance")
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([type, version], map: "policy_versions_type_version_unique")
   @@map("policy_versions")
@@ -798,13 +802,13 @@ model PolicyVersion {
 
 model ConsentRecord {
   id              String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId          String      @db.Uuid @map("user_id")
+  userId          String      @map("user_id") @db.Uuid
   user            User        @relation(fields: [userId], references: [id], onDelete: Restrict)
   consentType     ConsentType @map("consent_type")
   documentVersion String      @map("document_version")
   acceptedAt      DateTime    @map("accepted_at") @db.Timestamptz(3)
   withdrawnAt     DateTime?   @map("withdrawn_at") @db.Timestamptz(3)
-  ipAddress       String?     @db.Inet @map("ip_address")
+  ipAddress       String?     @map("ip_address") @db.Inet
   userAgent       String?     @map("user_agent")
 
   @@index([userId, consentType, acceptedAt], map: "consent_records_user_type_idx")
@@ -812,43 +816,43 @@ model ConsentRecord {
 }
 
 model Block {
-  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  blockerId  String    @db.Uuid @map("blocker_id")
-  blocker    User      @relation("BlockerRelation", fields: [blockerId], references: [id], onDelete: Restrict)
-  blockedId  String    @db.Uuid @map("blocked_id")
-  blocked    User      @relation("BlockedRelation", fields: [blockedId], references: [id], onDelete: Restrict)
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(3)
+  id        String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  blockerId String    @map("blocker_id") @db.Uuid
+  blocker   User      @relation("BlockerRelation", fields: [blockerId], references: [id], onDelete: Restrict)
+  blockedId String    @map("blocked_id") @db.Uuid
+  blocked   User      @relation("BlockedRelation", fields: [blockedId], references: [id], onDelete: Restrict)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   @@unique([blockerId, blockedId], map: "blocks_blocker_blocked_unique")
   @@map("blocks")
 }
 
 model BlocklistEntry {
-  id                    String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  type                  BlocklistType
-  valueHash             String         @map("value_hash")
-  reason                String
-  sourceEnforcementId   String?        @db.Uuid @map("source_enforcement_id")
-  expiresAt             DateTime?      @map("expires_at") @db.Timestamptz(3)
-  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  deletedAt             DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  id                  String        @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  type                BlocklistType
+  valueHash           String        @map("value_hash")
+  reason              String
+  sourceEnforcementId String?       @map("source_enforcement_id") @db.Uuid
+  expiresAt           DateTime?     @map("expires_at") @db.Timestamptz(3)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt           DateTime?     @map("deleted_at") @db.Timestamptz(3)
 
   @@unique([type, valueHash], map: "blocklist_entries_type_hash_unique")
   @@map("blocklist_entries")
 }
 
 model NotificationPreference {
-  id              String                @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId          String                @db.Uuid @map("user_id")
-  user            User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id              String               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId          String               @map("user_id") @db.Uuid
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
   channel         NotificationChannel
   category        NotificationCategory
   enabled         Boolean
-  quietHoursStart DateTime?             @db.Time @map("quiet_hours_start")
-  quietHoursEnd   DateTime?             @db.Time @map("quiet_hours_end")
-  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt       DateTime?             @map("deleted_at") @db.Timestamptz(3)
+  quietHoursStart DateTime?            @map("quiet_hours_start") @db.Time
+  quietHoursEnd   DateTime?            @map("quiet_hours_end") @db.Time
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?            @map("deleted_at") @db.Timestamptz(3)
 
   @@unique([userId, channel, category], map: "notification_prefs_user_channel_category_unique")
   @@map("notification_preferences")
@@ -856,10 +860,10 @@ model NotificationPreference {
 
 model Device {
   id         String     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId     String     @db.Uuid @map("user_id")
+  userId     String     @map("user_id") @db.Uuid
   user       User       @relation(fields: [userId], references: [id], onDelete: Restrict)
   type       DeviceType
-  pushToken  String     @unique @map("push_token")
+  pushToken  String     @map("push_token")
   active     Boolean    @default(true)
   lastSeenAt DateTime?  @map("last_seen_at") @db.Timestamptz(3)
   createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -867,21 +871,22 @@ model Device {
   deletedAt  DateTime?  @map("deleted_at") @db.Timestamptz(3)
 
   @@index([userId], map: "devices_user_idx")
+  @@index([pushToken], map: "devices_push_token_idx")
   @@map("devices")
 }
 
 model UserRestriction {
-  id                   String            @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId               String            @db.Uuid @map("user_id")
-  user                 User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  type                 UserRestrictionType
-  status               RestrictionStatus @default(ACTIVE)
-  startsAt             DateTime          @map("starts_at") @db.Timestamptz(3)
-  endsAt               DateTime?         @map("ends_at") @db.Timestamptz(3)
-  enforcementActionId  String            @db.Uuid @map("enforcement_action_id")
-  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt            DateTime?         @map("deleted_at") @db.Timestamptz(3)
+  id                  String              @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId              String              @map("user_id") @db.Uuid
+  user                User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  type                UserRestrictionType
+  status              RestrictionStatus   @default(ACTIVE)
+  startsAt            DateTime            @map("starts_at") @db.Timestamptz(3)
+  endsAt              DateTime?           @map("ends_at") @db.Timestamptz(3)
+  enforcementActionId String              @map("enforcement_action_id") @db.Uuid
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?           @map("deleted_at") @db.Timestamptz(3)
 
   @@index([userId, status, type], map: "user_restrictions_user_status_type_idx")
   @@index([endsAt], map: "user_restrictions_ends_at_idx")
@@ -891,36 +896,38 @@ model UserRestriction {
 // P2-06: Admin identity and RBAC
 
 model Admin {
-  id                String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  email             String         @unique @map("email")
-  passwordHash      String         @map("password_hash")
-  totpSecret        String?        @map("totp_secret")
-  totpEnabled       Boolean        @default(false) @map("totp_enabled")
-  status            AdminStatus    @default(ACTIVE)
-  failedLoginCount  Int            @default(0) @map("failed_login_count")
-  lockedUntil       DateTime?      @map("locked_until") @db.Timestamptz(3)
-  lastLoginAt       DateTime?      @map("last_login_at") @db.Timestamptz(3)
-  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  id                 String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  email              String      @unique(map: "admins_email_key")
+  displayName        String      @map("display_name")
+  passwordHash       String      @map("password_hash")
+  status             AdminStatus @default(INVITED)
+  mfaEnabled         Boolean     @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted String?     @map("mfa_secret_encrypted")
+  failedLoginCount   Int         @default(0) @map("failed_login_count")
+  firstFailedLoginAt DateTime?   @map("first_failed_login_at") @db.Timestamptz(3)
+  lockedUntil        DateTime?   @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt        DateTime?   @map("last_login_at") @db.Timestamptz(3)
+  deactivatedAt      DateTime?   @map("deactivated_at") @db.Timestamptz(3)
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?   @map("deleted_at") @db.Timestamptz(3)
 
-  // Relations
-  roleAssignments   AdminRoleAssignment[]
-  sessions          AdminSession[]
-  authEvents        AdminAuthEvent[]
+  roleAssignments AdminRoleAssignment[]
+  sessions        AdminSession[]
+  authEvents      AdminAuthEvent[]
 
   @@index([status], map: "admins_status_idx")
   @@map("admins")
 }
 
 model AdminRole {
-  id          String                  @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  name        String                  @unique
+  id          String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String    @unique(map: "admin_roles_name_key")
   description String?
-  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  // Relations
   permissions AdminRolePermission[]
   assignments AdminRoleAssignment[]
 
@@ -928,71 +935,135 @@ model AdminRole {
 }
 
 model AdminPermission {
-  id          String                  @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  name        String                  @unique
+  key         String  @id
   description String?
-  category    String
-  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  // Relations
-  roles       AdminRolePermission[]
+  roles AdminRolePermission[]
 
-  @@index([category], map: "admin_permissions_category_idx")
   @@map("admin_permissions")
 }
 
 model AdminRolePermission {
-  roleId       String           @db.Uuid @map("role_id")
-  permissionId String           @db.Uuid @map("permission_id")
-  role         AdminRole        @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission   AdminPermission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  id            String          @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  roleId        String          @map("role_id") @db.Uuid
+  permissionKey String          @map("permission_key")
+  deletedAt     DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  role          AdminRole       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission    AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
 
-  @@id([roleId, permissionId])
+  @@index([roleId], map: "admin_role_permissions_role_idx")
   @@map("admin_role_permissions")
 }
 
 model AdminRoleAssignment {
-  adminId    String    @db.Uuid @map("admin_id")
-  roleId     String    @db.Uuid @map("role_id")
-  admin      Admin     @relation(fields: [adminId], references: [id], onDelete: Cascade)
-  role       AdminRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  assignedAt DateTime  @default(now()) @map("assigned_at") @db.Timestamptz(3)
-  assignedBy String    @db.Uuid @map("assigned_by")
+  id        String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  adminId   String    @map("admin_id") @db.Uuid
+  roleId    String    @map("role_id") @db.Uuid
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  admin     Admin     @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  role      AdminRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
-  @@id([adminId, roleId])
+  @@index([adminId], map: "admin_role_assignments_admin_idx")
   @@map("admin_role_assignments")
 }
 
 model AdminSession {
-  id                  String     @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  adminId             String     @db.Uuid @map("admin_id")
-  admin               Admin      @relation(fields: [adminId], references: [id], onDelete: Restrict)
-  tokenHash           String     @unique @map("token_hash")
-  userAgent           String?    @map("user_agent")
-  ip                  String?    @db.Inet
-  expiresAt           DateTime   @map("expires_at") @db.Timestamptz(3)
-  revokedAt           DateTime?  @map("revoked_at") @db.Timestamptz(3)
-  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  adminId             String    @map("admin_id") @db.Uuid
+  admin               Admin     @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  familyId            String    @map("family_id") @db.Uuid
+  tokenHash           String    @unique(map: "admin_sessions_token_hash_key") @map("token_hash")
+  replacedByTokenHash String?   @map("replaced_by_token_hash")
+  userAgent           String?   @map("user_agent")
+  ip                  String?   @db.Inet
+  mfaVerifiedAt       DateTime? @map("mfa_verified_at") @db.Timestamptz(3)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt           DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([adminId, revokedAt], map: "admin_sessions_admin_revoked_idx")
+  @@index([familyId], map: "admin_sessions_family_idx")
   @@index([expiresAt], map: "admin_sessions_expires_at_idx")
   @@map("admin_sessions")
 }
 
 model AdminAuthEvent {
-  id        String           @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  adminId   String?          @db.Uuid @map("admin_id")
-  admin     Admin?           @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  id        String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  adminId   String?            @map("admin_id") @db.Uuid
+  admin     Admin?             @relation(fields: [adminId], references: [id], onDelete: Restrict)
   event     AdminAuthEventType
-  email     String
-  ip        String?          @db.Inet
-  userAgent String?          @map("user_agent")
-  success   Boolean
+  email     String?
   reason    String?
-  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  ip        String?            @db.Inet
+  userAgent String?            @map("user_agent")
+  requestId String?            @map("request_id")
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([adminId, createdAt], map: "admin_auth_events_admin_created_idx")
-  @@index([email, createdAt], map: "admin_auth_events_email_created_idx")
   @@map("admin_auth_events")
+}
+
+// Reference data (Backend PRD A.5, section 11.2)
+model Category {
+  id                  String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  key                 String    @unique(map: "categories_key_key")
+  name                String
+  requiresPickup      Boolean   @map("requires_pickup")
+  requiresDestination Boolean   @map("requires_destination")
+  sortOrder           Int       @default(0) @map("sort_order")
+  isPopular           Boolean   @default(false) @map("is_popular")
+  active              Boolean   @default(true)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("categories")
+}
+
+model ProhibitedItemRule {
+  id            String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  category      String
+  keyword       String
+  description   String?
+  status        String
+  effectiveFrom DateTime  @map("effective_from") @db.Timestamptz(3)
+  policyVersion String    @map("policy_version")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([status, keyword], map: "prohibited_item_rules_status_keyword_idx")
+  @@map("prohibited_item_rules")
+}
+
+// P3-01: Media (Backend PRD 23 and A.8). A row is created when an upload is requested; the
+// object lives in storage under `storageKey`. The original upload is replaced by the processed
+// copy when processing finishes.
+model Media {
+  id               String           @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  ownerId          String           @map("owner_id") @db.Uuid
+  owner            User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  purpose          MediaPurpose
+  storageKey       String           @unique(map: "media_storage_key_unique") @map("storage_key")
+  mimeType         String           @map("mime_type")
+  sizeBytes        BigInt           @map("size_bytes")
+  checksum         String?
+  width            Int?
+  height           Int?
+  status           MediaStatus      @default(PENDING)
+  moderationStatus ModerationStatus @default(NONE) @map("moderation_status")
+  thumbnailKey     String?          @map("thumbnail_key")
+  rejectionReason  String?          @map("rejection_reason")
+  confirmedAt      DateTime?        @map("confirmed_at") @db.Timestamptz(3)
+  processedAt      DateTime?        @map("processed_at") @db.Timestamptz(3)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  profilePhotoOf Profile[] @relation("ProfilePhoto")
+
+  @@index([ownerId, purpose], map: "media_owner_purpose_idx")
+  @@index([status], map: "media_status_idx")
+  @@index([deletedAt], map: "media_deleted_at_idx")
+  @@map("media")
 }

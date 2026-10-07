@@ -73,7 +73,7 @@ describe('BaseSweeper (integration)', () => {
   describe('manual sweep', () => {
     it('should process due rows', async () => {
       const userId = '123e4567-e89b-12d3-a456-426614174000';
-      const createdAt = new Date(Date.now() - 2000); // 2 seconds ago
+      const createdAt = new Date(Date.now() - 20000); // 2 seconds ago
 
       // Create a "due" row
       const row1 = await prisma.idempotencyKey.create({
@@ -103,7 +103,7 @@ describe('BaseSweeper (integration)', () => {
 
     it('should skip rows already processed', async () => {
       const userId = '123e4567-e89b-12d3-a456-426614174000';
-      const createdAt = new Date(Date.now() - 2000);
+      const createdAt = new Date(Date.now() - 20000);
 
       // Create a processed row (has responseStatus)
       await prisma.idempotencyKey.create({
@@ -147,7 +147,7 @@ describe('BaseSweeper (integration)', () => {
 
     it('should use FOR UPDATE SKIP LOCKED to avoid double-processing', async () => {
       const userId = '123e4567-e89b-12d3-a456-426614174000';
-      const createdAt = new Date(Date.now() - 2000);
+      const createdAt = new Date(Date.now() - 20000);
 
       // Create two due rows
       const row1 = await prisma.idempotencyKey.create({
@@ -218,7 +218,7 @@ describe('BaseSweeper (integration)', () => {
 
     it('should process rows on interval', async () => {
       const userId = '123e4567-e89b-12d3-a456-426614174000';
-      const createdAt = new Date(Date.now() - 2000);
+      const createdAt = new Date(Date.now() - 20000);
 
       // Create a due row
       await prisma.idempotencyKey.create({

@@ -16,6 +16,8 @@ import { RATE_LIMIT_POLICIES } from '../decorators/rate-limit.decorator.js';
       useFactory: (redis: Redis) => ({
         throttlers: [RATE_LIMIT_POLICIES.global],
         storage: new RedisThrottlerStorage(redis),
+        // Only honoured in tests (NODE_ENV=test), so HTTP tests can log in many times.
+        skipIf: () => process.env.NODE_ENV === 'test' && process.env.RATE_LIMIT_DISABLED === 'true',
       }),
     }),
   ],

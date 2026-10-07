@@ -27,8 +27,6 @@ describe('DelayedJobHelper (integration)', () => {
   describe('schedule', () => {
     it('schedules a delayed job in the outbox', async () => {
       const payload = { action: 'test', data: 'value' };
-      const before = Date.now();
-
       await helper.schedule('test.delayed', payload, 5000);
 
       const events = await prisma.outboxEvent.findMany({ where: { eventType: 'test.delayed' } });
@@ -36,10 +34,12 @@ describe('DelayedJobHelper (integration)', () => {
       expect(events[0].payload).toEqual(payload);
       expect(events[0].status).toBe('PENDING');
 
-      // about 5 s ahead (allow a second of clock difference between host and database)
-      const delay = events[0].availableAt.getTime() - before;
-      expect(delay).toBeGreaterThan(4000);
-      expect(delay).toBeLessThan(6500);
+      // about 5 s ahead of the DATABASE clock (the host clock may differ from it)
+      const [{ delay }] = await prisma.$queryRaw<Array<{ delay: number }>>`
+        SELECT extract(epoch FROM (available_at - now()))::float AS delay FROM outbox_events WHERE id = ${events[0].id}::uuid
+      `;
+      expect(delay).toBeGreaterThan(4);
+      expect(delay).toBeLessThan(5.5);
     });
 
     it('schedules with aggregate information', async () => {
@@ -62,7 +62,11 @@ describe('DelayedJobHelper (integration)', () => {
       await helper.scheduleAt('test.scheduled', { message: 'hello' }, runAt);
 
       const [event] = await prisma.outboxEvent.findMany({ where: { eventType: 'test.scheduled' } });
-      expect(Math.abs(event.availableAt.getTime() - runAt.getTime())).toBeLessThan(1500);
+      const [{ delay }] = await prisma.$queryRaw<Array<{ delay: number }>>`
+        SELECT extract(epoch FROM (available_at - now()))::float AS delay FROM outbox_events WHERE id = ${event.id}::uuid
+      `;
+      expect(delay).toBeGreaterThan(8);
+      expect(delay).toBeLessThan(10.5);
     });
 
     it('treats a time in the past as immediately due', async () => {

@@ -1,134 +1,79 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
-import { AdminStatus } from '@prisma/client';
-import * as argon2 from 'argon2';
+import { PasswordService } from '../auth/password.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { RESOURCE_CONFLICT, RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
+import type { AdminPermissionKey } from './admin.permissions.js';
 
+export interface AdminView {
+  id: string;
+  email: string;
+  displayName: string;
+  roles: string[];
+  permissions: AdminPermissionKey[];
+}
+
+/** Admin accounts. There is no public registration: admins are created by the CLI or by another admin. */
 @Injectable()
 export class AdminUserService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passwords: PasswordService,
+  ) {}
 
-  /**
-   * Create a new admin user
-   * Used by CLI and super-admin endpoints
-   */
-  async createAdmin(email: string, password: string, roleIds: string[]) {
-    // Hash password with Argon2id
-    const passwordHash = await argon2.hash(password, {
-      type: argon2.argon2id,
-      memoryCost: 65536, // 64 MB
-      timeCost: 3,
-      parallelism: 4,
-    });
-
-    // Create admin with role assignments in transaction
-    const admin = await this.prisma.admin.create({
-      data: {
-        email,
-        passwordHash,
-        status: AdminStatus.ACTIVE,
-        roleAssignments: {
-          create: roleIds.map((roleId) => ({
-            roleId,
-            assignedBy: '00000000-0000-0000-0000-000000000000', // System
-          })),
-        },
-      },
-      include: {
-        roleAssignments: {
-          include: {
-            role: true,
-          },
-        },
-      },
-    });
-
-    return admin;
-  }
-
-  /**
-   * Find admin by email
-   */
-  async findByEmail(email: string) {
-    return this.prisma.admin.findUnique({
-      where: { email, deletedAt: null },
-      include: {
-        roleAssignments: {
-          include: {
-            role: {
-              include: {
-                permissions: {
-                  include: {
-                    permission: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-  }
-
-  /**
-   * Find admin by ID
-   */
-  async findById(id: string) {
-    return this.prisma.admin.findUnique({
-      where: { id, deletedAt: null },
-      include: {
-        roleAssignments: {
-          include: {
-            role: {
-              include: {
-                permissions: {
-                  include: {
-                    permission: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-  }
-
-  /**
-   * Update admin status
-   */
-  async updateStatus(adminId: string, status: AdminStatus) {
-    const admin = await this.prisma.admin.findUnique({
-      where: { id: adminId },
-    });
-
-    if (!admin) {
-      throw new NotFoundException('Admin not found');
+  /** Create an ACTIVE admin with the named roles. MFA is enrolled at the first login. */
+  async create(input: { email: string; displayName: string; password: string; roles: string[] }): Promise<string> {
+    const email = input.email.trim().toLowerCase();
+    const roles = await this.prisma.client.adminRole.findMany({ where: { name: { in: input.roles } } });
+    if (roles.length !== new Set(input.roles).size) {
+      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'One of the roles does not exist.' });
+    }
+    if (await this.prisma.client.admin.findFirst({ where: { email } })) {
+      throw DomainException.of(RESOURCE_CONFLICT, { message: 'An admin with this email already exists.' });
     }
 
-    return this.prisma.admin.update({
-      where: { id: adminId },
-      data: { status },
+    const passwordHash = await this.passwords.hash(input.password);
+    const admin = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.admin.create({
+        data: { email, displayName: input.displayName.trim(), passwordHash, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      await tx.adminRoleAssignment.createMany({
+        data: roles.map((role) => ({ adminId: created.id, roleId: role.id })),
+      });
+      return created;
     });
+    return admin.id;
   }
 
-  /**
-   * Get all permissions for an admin (across all their roles)
-   */
-  async getAdminPermissions(adminId: string): Promise<string[]> {
+  findByEmail(email: string) {
+    return this.prisma.client.admin.findFirst({ where: { email: email.trim().toLowerCase() } });
+  }
+
+  findById(id: string) {
+    return this.prisma.client.admin.findFirst({ where: { id } });
+  }
+
+  /** Roles and permissions of an admin, read live so a permission change applies on the next request. */
+  async rolesAndPermissions(adminId: string): Promise<{ roles: string[]; permissions: AdminPermissionKey[] }> {
+    const rows = await this.prisma.$queryRaw<Array<{ role: string; permission: AdminPermissionKey | null }>>`
+      SELECT r.name AS role, rp.permission_key AS permission
+      FROM admin_role_assignments a
+      JOIN admin_roles r ON r.id = a.role_id AND r.deleted_at IS NULL
+      LEFT JOIN admin_role_permissions rp ON rp.role_id = r.id AND rp.deleted_at IS NULL
+      WHERE a.admin_id = ${adminId}::uuid AND a.deleted_at IS NULL
+    `;
+    return {
+      roles: [...new Set(rows.map((row) => row.role))],
+      permissions: [...new Set(rows.flatMap((row) => (row.permission ? [row.permission] : [])))],
+    };
+  }
+
+  async view(adminId: string): Promise<AdminView> {
     const admin = await this.findById(adminId);
-    
     if (!admin) {
-      return [];
+      throw DomainException.of(RESOURCE_NOT_FOUND);
     }
-
-    const permissions = new Set<string>();
-    
-    for (const assignment of admin.roleAssignments) {
-      for (const rolePermission of assignment.role.permissions) {
-        permissions.add(rolePermission.permission.name);
-      }
-    }
-
-    return Array.from(permissions);
+    return { id: admin.id, email: admin.email, displayName: admin.displayName, ...(await this.rolesAndPermissions(adminId)) };
   }
 }

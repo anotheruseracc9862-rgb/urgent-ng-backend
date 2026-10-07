@@ -22,6 +22,9 @@ const isProduction = (env: EnvironmentVariables): boolean =>
 const usesRealKyc = (env: EnvironmentVariables): boolean =>
   env.KYC_PROVIDER === 'real';
 
+const usesRealStorage = (env: EnvironmentVariables): boolean =>
+  env.STORAGE_PROVIDER === 'real';
+
 const defaultToFake =({ value }: { value: unknown }) => value || 'fake';
 
 /**
@@ -80,20 +83,6 @@ export class EnvironmentVariables {
   })
   HMAC_SECRET?: string;
 
-  @ValidateIf(isProduction)
-  @IsString()
-  @MinLength(32, {
-    message: 'OTP_HMAC_SECRET must be at least 32 characters in production',
-  })
-  OTP_HMAC_SECRET?: string;
-
-  @ValidateIf(isProduction)
-  @IsString()
-  @MinLength(32, {
-    message: 'BLOCKLIST_HMAC_SECRET must be at least 32 characters in production',
-  })
-  BLOCKLIST_HMAC_SECRET?: string;
-
   // Provider modes: "fake" (default) uses in-process fakes, "real" calls the vendor.
   @IsOptional()
   @Transform(defaultToFake)
@@ -140,6 +129,27 @@ export class EnvironmentVariables {
   @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   STORAGE_PROVIDER: ProviderMode = 'fake';
+
+  // S3 settings are only required when the storage provider is "real".
+  @ValidateIf(usesRealStorage)
+  @IsString()
+  @IsNotEmpty()
+  AWS_REGION?: string;
+
+  @ValidateIf(usesRealStorage)
+  @IsString()
+  @IsNotEmpty()
+  AWS_S3_BUCKET?: string;
+
+  @ValidateIf(usesRealStorage)
+  @IsString()
+  @IsNotEmpty()
+  AWS_ACCESS_KEY_ID?: string;
+
+  @ValidateIf(usesRealStorage)
+  @IsString()
+  @IsNotEmpty()
+  AWS_SECRET_ACCESS_KEY?: string;
 
   @IsOptional()
   @Transform(defaultToFake)

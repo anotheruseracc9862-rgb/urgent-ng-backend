@@ -1,31 +1,24 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
-/**
- * Current User Decorator (P2-04)
- * 
- * Extracts the authenticated user from the request.
- * Must be used with ConsumerAuthGuard.
- * 
- * Usage:
- * ```typescript
- * @Get('/profile')
- * @UseGuards(ConsumerAuthGuard)
- * async getProfile(@CurrentUser() user: AuthenticatedUser) {
- *   return user;
- * }
- * ```
- */
-
+/** The signed-in consumer, attached to the request by ConsumerAuthGuard. */
 export interface AuthenticatedUser {
   userId: string;
-  status: string;
+  /** Session family id (the `sid` claim): identifies this login on this device. */
+  sessionId: string;
+  status: 'ACTIVE' | 'DEACTIVATED' | 'SUSPENDED' | 'DELETION_PENDING' | 'DELETED';
   phoneVerified: boolean;
   emailVerified: boolean;
 }
 
+/**
+ * ```ts
+ * @Get('me')
+ * @ConsumerAuth()
+ * me(@CurrentUser() user: AuthenticatedUser) { ... }
+ * ```
+ */
 export const CurrentUser = createParamDecorator(
-  (data: unknown, ctx: ExecutionContext): AuthenticatedUser => {
-    const request = ctx.switchToHttp().getRequest();
-    return request.user;
+  (_data: unknown, ctx: ExecutionContext): AuthenticatedUser => {
+    return ctx.switchToHttp().getRequest().user;
   },
 );

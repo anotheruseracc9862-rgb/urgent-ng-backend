@@ -1,104 +1,122 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import type { StartMode } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
-import { UserStatus } from '@prisma/client';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 
-export interface UpdateProfileData {
-  firstName?: string;
-  lastName?: string;
+export interface MeView {
+  id: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  phoneVerified: boolean;
+  email: string | null;
+  emailVerified: boolean;
+  status: string;
+  startMode: StartMode | null;
+  photoMediaId: string | null;
+  deletionScheduledAt: Date | null;
+  createdAt: Date;
 }
 
+export interface PublicProfileView {
+  id: string;
+  firstName: string;
+  lastInitial: string;
+  photoMediaId: string | null;
+  memberSince: Date;
+}
+
+/**
+ * The signed-in user's own profile, and the small public view of another user.
+ * Nothing sensitive (password hash, lockout state, deletion internals of others) is selected.
+ */
 @Injectable()
 export class ProfileService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Get user profile
-   * Returns User + Profile data
-   */
-  async getProfile(userId: string) {
-    const user = await this.prisma.user.findUnique({
+  async getMe(userId: string): Promise<MeView> {
+    const user = await this.prisma.client.user.findUnique({
       where: { id: userId },
-      include: {
-        profile: true,
+      select: {
+        id: true,
+        name: true,
+        firstName: true,
+        lastName: true,
+        phoneE164: true,
+        phoneVerifiedAt: true,
+        email: true,
+        emailVerifiedAt: true,
+        status: true,
+        startMode: true,
+        deletionScheduledAt: true,
+        createdAt: true,
+        profile: { select: { photoMediaId: true } },
       },
     });
-
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw DomainException.of(RESOURCE_NOT_FOUND);
     }
-
     return {
       id: user.id,
-      phoneE164: user.phoneE164,
-      email: user.email,
+      name: user.name,
       firstName: user.firstName,
       lastName: user.lastName,
-      phoneVerifiedAt: user.phoneVerifiedAt,
-      emailVerifiedAt: user.emailVerifiedAt,
+      phone: user.phoneE164,
+      phoneVerified: user.phoneVerifiedAt !== null,
+      email: user.email,
+      emailVerified: user.emailVerifiedAt !== null,
       status: user.status,
+      startMode: user.startMode,
+      photoMediaId: user.profile?.photoMediaId ?? null,
+      deletionScheduledAt: user.deletionScheduledAt,
       createdAt: user.createdAt,
-      profile: user.profile,
     };
   }
 
-  /**
-   * Update user profile
-   * Updates firstName/lastName on User model
-   */
-  async updateProfile(userId: string, data: UpdateProfileData) {
-    // Validate user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
+  /** `name` replaces first and last name together; `startMode` is a preference only (Backend PRD 9.1). */
+  async updateMe(userId: string, changes: { name?: string; startMode?: StartMode }): Promise<MeView> {
+    const data: { name?: string; firstName?: string; lastName?: string; startMode?: StartMode } = {};
+    if (changes.name !== undefined) {
+      const [firstName, ...rest] = changes.name.trim().split(/\s+/);
+      data.name = changes.name.trim();
+      data.firstName = firstName;
+      data.lastName = rest.join(' ') || firstName;
+    }
+    if (changes.startMode !== undefined) {
+      data.startMode = changes.startMode;
     }
 
-    // Validate name fields (1-50 chars, no special chars except spaces, hyphens, apostrophes)
-    if (data.firstName !== undefined) {
-      this.validateName(data.firstName, 'firstName');
+    if (Object.keys(data).length > 0) {
+      const result = await this.prisma.client.user.updateMany({ where: { id: userId }, data });
+      if (result.count === 0) {
+        throw DomainException.of(RESOURCE_NOT_FOUND);
+      }
     }
-    if (data.lastName !== undefined) {
-      this.validateName(data.lastName, 'lastName');
-    }
-
-    // Update User fields (firstName, lastName)
-    const userUpdates: { firstName?: string; lastName?: string } = {};
-    if (data.firstName !== undefined) userUpdates.firstName = data.firstName;
-    if (data.lastName !== undefined) userUpdates.lastName = data.lastName;
-
-    // Execute update if there are changes
-    if (Object.keys(userUpdates).length > 0) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: userUpdates,
-      });
-    }
-
-    // Return updated profile
-    return this.getProfile(userId);
+    return this.getMe(userId);
   }
 
-  /**
-   * Validate name fields
-   * 1-50 chars, only letters, spaces, hyphens, apostrophes
-   */
-  private validateName(name: string, field: string) {
-    if (!name || name.trim().length === 0) {
-      throw new BadRequestException(`${field} cannot be empty`);
+  async getPublic(userId: string): Promise<PublicProfileView> {
+    const user = await this.prisma.client.user.findFirst({
+      where: { id: userId, status: { in: ['ACTIVE', 'DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] } },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        createdAt: true,
+        profile: { select: { photoMediaId: true } },
+      },
+    });
+    if (!user) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
     }
-
-    if (name.length < 1 || name.length > 50) {
-      throw new BadRequestException(`${field} must be between 1 and 50 characters`);
-    }
-
-    // Allow letters (any Unicode letter), spaces, hyphens, apostrophes
-    const namePattern = /^[\p{L}\s'\-]+$/u;
-    if (!namePattern.test(name)) {
-      throw new BadRequestException(
-        `${field} can only contain letters, spaces, hyphens, and apostrophes`,
-      );
-    }
+    return {
+      id: user.id,
+      firstName: user.firstName,
+      lastInitial: user.lastName.charAt(0).toUpperCase(),
+      photoMediaId: user.profile?.photoMediaId ?? null,
+      memberSince: user.createdAt,
+    };
   }
 }

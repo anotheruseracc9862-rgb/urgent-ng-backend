@@ -30,6 +30,9 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'user.created': QUEUE_NAMES.NOTIFICATIONS,
   'user.deactivated': QUEUE_NAMES.NOTIFICATIONS,
 
+  // Media events
+  'media.confirmed': QUEUE_NAMES.MEDIA,
+
   // Verification events
   'verification.completed': QUEUE_NAMES.VERIFICATION,
   'verification.failed': QUEUE_NAMES.VERIFICATION,

@@ -1,32 +1,33 @@
-import { IsEmail, IsString, MinLength, IsArray, IsOptional } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class AdminLoginDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   @IsEmail()
-  email: string;
+  @MaxLength(255)
+  email!: string;
 
   @IsString()
-  @MinLength(8)
-  password: string;
+  @MinLength(1)
+  @MaxLength(128)
+  password!: string;
+}
 
-  @IsOptional()
+export class MfaTokenDto {
   @IsString()
-  totpCode?: string;
+  @MaxLength(2000)
+  mfaToken!: string;
+}
+
+export class MfaVerifyDto extends MfaTokenDto {
+  @Matches(/^\d{6}$/, { message: 'The code is 6 digits' })
+  code!: string;
 }
 
 export class AdminRefreshDto {
+  /** Non-browser clients send it here; the admin web app uses the `ung_admin_rt` cookie. */
+  @IsOptional()
   @IsString()
-  refreshToken: string;
-}
-
-export class CreateAdminDto {
-  @IsEmail()
-  email: string;
-
-  @IsString()
-  @MinLength(8)
-  password: string;
-
-  @IsArray()
-  @IsString({ each: true })
-  roleIds: string[];
+  @MaxLength(200)
+  refreshToken?: string;
 }

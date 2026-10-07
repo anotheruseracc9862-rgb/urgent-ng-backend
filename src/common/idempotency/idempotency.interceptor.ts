@@ -53,7 +53,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
       );
     }
 
-    const userId: string | undefined = request.user?.id;
+    // ConsumerAuthGuard puts `userId` on the request user; tests may supply `id`.
+    const userId: string | undefined = request.user?.userId ?? request.user?.id;
     if (!userId) {
       throw new BadRequestException('User authentication required');
     }

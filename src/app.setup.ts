@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import type { AppConfig } from './config/configuration.js';
 
 /**
@@ -19,6 +20,8 @@ export function configureApp(app: INestApplication): void {
       contentSecurityPolicy: process.env.NODE_ENV === 'production',
     }),
   );
+
+  app.use(cookieParser());
 
   app.enableCors({
     origin: config.getOrThrow('corsOrigins'),

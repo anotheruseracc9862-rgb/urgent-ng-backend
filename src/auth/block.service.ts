@@ -1,147 +1,74 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
 
+export interface BlockedUserView {
+  userId: string;
+  firstName: string;
+  lastInitial: string;
+  blockedAt: Date;
+}
+
+/**
+ * Blocking (Backend PRD 9.7). A block stops new direct messages and new offers
+ * between the pair; it never deletes records. Unblocking is a soft delete, so the
+ * pair can be blocked again later.
+ */
 @Injectable()
 export class BlockService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Block a user (bidirectional blocking)
-   * Both users cannot see each other's errands or interact
-   * Per PRD §9.8
-   */
-  async blockUser(blockerId: string, blockedId: string) {
+  /** Idempotent: blocking someone already blocked succeeds. */
+  async block(blockerId: string, blockedId: string): Promise<void> {
     if (blockerId === blockedId) {
-      throw new BadRequestException('Cannot block yourself');
+      throw DomainException.of(VALIDATION_ERROR, { message: 'You cannot block yourself.' });
     }
 
-    // Check if already blocked
-    const existingBlock = await this.prisma.block.findUnique({
-      where: {
-        blockerId_blockedId: {
-          blockerId,
-          blockedId,
-        },
-      },
+    const target = await this.prisma.client.user.findFirst({
+      where: { id: blockedId, status: { not: 'DELETED' } },
+      select: { id: true },
     });
-
-    if (existingBlock) {
-      throw new BadRequestException('User is already blocked');
+    if (!target) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
     }
 
-    // Verify both users exist
-    const [blocker, blocked] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: blockerId } }),
-      this.prisma.user.findUnique({ where: { id: blockedId } }),
-    ]);
-
-    if (!blocker || !blocked) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Create block
-    const block = await this.prisma.block.create({
-      data: {
-        blockerId,
-        blockedId,
-      },
-    });
-
-    return {
-      success: true,
-      message: 'User blocked successfully',
-      blockId: block.id,
-    };
+    await this.prisma.$executeRaw`
+      INSERT INTO blocks (blocker_id, blocked_id)
+      VALUES (${blockerId}::uuid, ${blockedId}::uuid)
+      ON CONFLICT (blocker_id, blocked_id) WHERE deleted_at IS NULL DO NOTHING
+    `;
   }
 
-  /**
-   * Unblock a user
-   */
-  async unblockUser(blockerId: string, blockedId: string) {
-    const block = await this.prisma.block.findUnique({
-      where: {
-        blockerId_blockedId: {
-          blockerId,
-          blockedId,
-        },
-      },
-    });
-
-    if (!block) {
-      throw new NotFoundException('Block not found');
-    }
-
-    await this.prisma.block.delete({
-      where: {
-        blockerId_blockedId: {
-          blockerId,
-          blockedId,
-        },
-      },
-    });
-
-    return {
-      success: true,
-      message: 'User unblocked successfully',
-    };
+  /** Idempotent: unblocking someone not blocked succeeds. */
+  async unblock(blockerId: string, blockedId: string): Promise<void> {
+    await this.prisma.client.block.deleteMany({ where: { blockerId, blockedId } });
   }
 
-  /**
-   * Check if user A has blocked user B
-   */
-  async isBlocked(blockerId: string, blockedId: string): Promise<boolean> {
-    const block = await this.prisma.block.findUnique({
-      where: {
-        blockerId_blockedId: {
-          blockerId,
-          blockedId,
-        },
-      },
+  async list(blockerId: string): Promise<BlockedUserView[]> {
+    const blocks = await this.prisma.client.block.findMany({
+      where: { blockerId },
+      include: { blocked: { select: { id: true, firstName: true, lastName: true } } },
+      orderBy: { createdAt: 'desc' },
     });
-
-    return !!block;
+    return blocks.map((block) => ({
+      userId: block.blocked.id,
+      firstName: block.blocked.firstName,
+      lastInitial: block.blocked.lastName.charAt(0).toUpperCase(),
+      blockedAt: block.createdAt,
+    }));
   }
 
-  /**
-   * Check if there's a bidirectional block between two users
-   * (either direction counts as blocked)
-   */
-  async areUsersBlocked(userId1: string, userId2: string): Promise<boolean> {
-    const blocks = await this.prisma.block.findMany({
+  /** True when either user has blocked the other. */
+  async existsBetween(userA: string, userB: string): Promise<boolean> {
+    const count = await this.prisma.client.block.count({
       where: {
         OR: [
-          { blockerId: userId1, blockedId: userId2 },
-          { blockerId: userId2, blockedId: userId1 },
+          { blockerId: userA, blockedId: userB },
+          { blockerId: userB, blockedId: userA },
         ],
       },
     });
-
-    return blocks.length > 0;
-  }
-
-  /**
-   * List all users blocked by this user
-   */
-  async listBlocks(userId: string) {
-    const blocks = await this.prisma.block.findMany({
-      where: { blockerId: userId, deletedAt: null },
-      include: {
-        blocked: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            status: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return blocks.map((block) => ({
-      blockId: block.id,
-      blockedUser: block.blocked,
-      createdAt: block.createdAt,
-    }));
+    return count > 0;
   }
 }

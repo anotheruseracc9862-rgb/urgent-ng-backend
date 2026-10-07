@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from '../app.module.js';
+import { MediaWorker } from '../media/media.worker.js';
 import { OutboxPublisher } from '../queue/outbox.publisher.js';
 
 // Worker entry point: same modules as the API, booted as a standalone
@@ -14,6 +15,7 @@ async function bootstrap(): Promise<void> {
   app.useLogger(logger);
 
   app.get(OutboxPublisher).start();
+  app.get(MediaWorker).start();
   logger.log('Urgent.ng worker started');
 }
 await bootstrap();

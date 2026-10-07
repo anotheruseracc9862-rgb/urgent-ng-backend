@@ -1,167 +1,87 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { DeviceType, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
-import { DeviceType } from '@prisma/client';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 
+export interface DeviceView {
+  id: string;
+  type: DeviceType;
+  active: boolean;
+  lastSeenAt: Date | null;
+  createdAt: Date;
+}
+
+/**
+ * Push devices (Backend PRD A.3). A push token belongs to one live device row. When
+ * the same token is registered by another account (shared phone, new owner) it moves
+ * to that account, so the previous owner stops getting this device's notifications.
+ */
 @Injectable()
 export class DeviceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Register or update a device for push notifications
-   * Per PRD §9.8
-   */
-  async registerDevice(
-    userId: string,
-    deviceType: DeviceType,
-    pushToken: string,
-  ) {
-    // Verify user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Check if device already exists with this push token
-    const existingDevice = await this.prisma.device.findUnique({
-      where: { pushToken },
-    });
-
-    if (existingDevice) {
-      // Update existing device
-      if (existingDevice.userId !== userId) {
-        // Token moved to different user - update ownership
-        const device = await this.prisma.device.update({
-          where: { pushToken },
-          data: {
-            userId,
-            type: deviceType,
-            active: true,
-            lastSeenAt: new Date(),
-          },
-        });
-
-        return {
-          success: true,
-          message: 'Device updated successfully',
-          deviceId: device.id,
-        };
-      } else {
-        // Same user - just update timestamp
-        const device = await this.prisma.device.update({
-          where: { pushToken },
-          data: {
-            active: true,
-            lastSeenAt: new Date(),
-          },
-        });
-
-        return {
-          success: true,
-          message: 'Device refreshed successfully',
-          deviceId: device.id,
-        };
+  async register(userId: string, type: DeviceType, pushToken: string): Promise<DeviceView> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const existing = await this.prisma.client.device.findFirst({ where: { pushToken } });
+      try {
+        const device = existing
+          ? await this.prisma.client.device.update({
+              where: { id: existing.id },
+              data: { userId, type, active: true, lastSeenAt: new Date() },
+            })
+          : await this.prisma.client.device.create({
+              data: { userId, type, pushToken, active: true, lastSeenAt: new Date() },
+            });
+        return this.view(device);
+      } catch (error) {
+        // Two registrations of the same token raced: the unique index let one win, retry as an update.
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+          throw error;
+        }
       }
     }
-
-    // Create new device
-    const device = await this.prisma.device.create({
-      data: {
-        userId,
-        type: deviceType,
-        pushToken,
-        active: true,
-        lastSeenAt: new Date(),
-      },
-    });
-
-    return {
-      success: true,
-      message: 'Device registered successfully',
-      deviceId: device.id,
-    };
+    throw new Error('Could not register the device');
   }
 
-  /**
-   * Deactivate a device (soft delete)
-   */
-  async deactivateDevice(userId: string, deviceId: string) {
-    const device = await this.prisma.device.findUnique({
-      where: { id: deviceId },
+  async list(userId: string): Promise<DeviceView[]> {
+    const devices = await this.prisma.client.device.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
     });
+    return devices.map((device) => this.view(device));
+  }
 
+  /** Remove one of the user's own devices (soft delete). */
+  async remove(userId: string, deviceId: string): Promise<void> {
+    const device = await this.prisma.client.device.findFirst({ where: { id: deviceId, userId } });
     if (!device) {
-      throw new NotFoundException('Device not found');
+      throw DomainException.of(RESOURCE_NOT_FOUND);
     }
+    await this.prisma.client.device.delete({ where: { id: deviceId } });
+  }
 
-    if (device.userId !== userId) {
-      throw new BadRequestException('Device does not belong to this user');
-    }
-
-    await this.prisma.device.update({
-      where: { id: deviceId },
-      data: {
-        active: false,
-        deletedAt: new Date(),
-      },
+  /** Active push tokens for a user (used by the notification module later). */
+  async activeTokens(userId: string): Promise<Array<{ id: string; type: DeviceType; pushToken: string }>> {
+    return this.prisma.client.device.findMany({
+      where: { userId, active: true },
+      select: { id: true, type: true, pushToken: true },
     });
+  }
 
+  private view(device: {
+    id: string;
+    type: DeviceType;
+    active: boolean;
+    lastSeenAt: Date | null;
+    createdAt: Date;
+  }): DeviceView {
     return {
-      success: true,
-      message: 'Device deactivated successfully',
+      id: device.id,
+      type: device.type,
+      active: device.active,
+      lastSeenAt: device.lastSeenAt,
+      createdAt: device.createdAt,
     };
-  }
-
-  /**
-   * List user's devices
-   */
-  async listDevices(userId: string) {
-    const devices = await this.prisma.device.findMany({
-      where: {
-        userId,
-        deletedAt: null,
-      },
-      orderBy: { lastSeenAt: 'desc' },
-      select: {
-        id: true,
-        type: true,
-        active: true,
-        lastSeenAt: true,
-        createdAt: true,
-        // Don't expose push token
-      },
-    });
-
-    return devices;
-  }
-
-  /**
-   * Get active devices for a user (for push notification targeting)
-   */
-  async getActiveDevices(userId: string) {
-    return this.prisma.device.findMany({
-      where: {
-        userId,
-        active: true,
-        deletedAt: null,
-      },
-      select: {
-        id: true,
-        type: true,
-        pushToken: true,
-      },
-    });
-  }
-
-  /**
-   * Update device last seen timestamp
-   */
-  async updateLastSeen(deviceId: string) {
-    await this.prisma.device.update({
-      where: { id: deviceId },
-      data: { lastSeenAt: new Date() },
-    });
   }
 }

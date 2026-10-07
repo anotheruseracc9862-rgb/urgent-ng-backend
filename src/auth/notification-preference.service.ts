@@ -1,133 +1,64 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { NotificationCategory, NotificationChannel } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
-import { NotificationChannel, NotificationCategory } from '@prisma/client';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { VALIDATION_ERROR } from '../common/constants/error-codes.js';
 
-export interface NotificationPreferences {
-  transactional: ChannelPreferences;
-  safety: ChannelPreferences;
-  marketplace: ChannelPreferences;
-  messaging: ChannelPreferences;
-  marketing: ChannelPreferences;
+export interface PreferenceEntry {
+  category: NotificationCategory;
+  channel: NotificationChannel;
+  enabled: boolean;
 }
 
-export interface ChannelPreferences {
-  push: boolean;
-  email: boolean;
-  inApp: boolean;
-}
+/** Notifications the user cannot switch off: they carry account, payment and safety information. */
+const ALWAYS_ON: NotificationCategory[] = [NotificationCategory.TRANSACTIONAL, NotificationCategory.SAFETY];
 
-export interface UpdatePreferencesData {
-  transactional?: Partial<ChannelPreferences>;
-  safety?: Partial<ChannelPreferences>;
-  marketplace?: Partial<ChannelPreferences>;
-  messaging?: Partial<ChannelPreferences>;
-  marketing?: Partial<ChannelPreferences>;
-}
-
+/**
+ * Notification preferences (Backend PRD 9.6, section 17). The result is always the
+ * complete matrix of category x channel. Defaults: everything on, except MARKETING
+ * which is opt-in (it also needs the separate marketing consent).
+ */
 @Injectable()
 export class NotificationPreferenceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Get user notification preferences
-   * Returns structured preferences by category and channel
-   * Per PRD §9.8
-   */
-  async getPreferences(userId: string): Promise<NotificationPreferences> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+  async get(userId: string): Promise<PreferenceEntry[]> {
+    const stored = await this.prisma.client.notificationPreference.findMany({ where: { userId } });
+    const byKey = new Map(stored.map((pref) => [`${pref.category}:${pref.channel}`, pref.enabled]));
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Fetch all notification preferences for this user
-    const preferences = await this.prisma.notificationPreference.findMany({
-      where: { userId },
-    });
-
-    // Build structured response with defaults (all enabled)
-    const result: NotificationPreferences = {
-      transactional: { push: true, email: true, inApp: true },
-      safety: { push: true, email: true, inApp: true },
-      marketplace: { push: true, email: true, inApp: true },
-      messaging: { push: true, email: true, inApp: true },
-      marketing: { push: true, email: true, inApp: true },
-    };
-
-    // Apply user preferences
-    for (const pref of preferences) {
-      const category = pref.category.toLowerCase() as keyof NotificationPreferences;
-      const channel = pref.channel.toLowerCase().replace('_', '') as keyof ChannelPreferences;
-      
-      if (result[category] && channel in result[category]) {
-        result[category][channel] = pref.enabled;
+    const matrix: PreferenceEntry[] = [];
+    for (const category of Object.values(NotificationCategory)) {
+      for (const channel of Object.values(NotificationChannel)) {
+        matrix.push({
+          category,
+          channel,
+          enabled: byKey.get(`${category}:${channel}`) ?? category !== NotificationCategory.MARKETING,
+        });
       }
     }
-
-    return result;
+    return matrix;
   }
 
-  /**
-   * Update user notification preferences
-   * Updates specific category/channel combinations
-   * Per PRD §9.8
-   */
-  async updatePreferences(userId: string, data: UpdatePreferencesData): Promise<NotificationPreferences> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
+  /** Set the given entries (others are untouched). Transactional and safety notices cannot be disabled. */
+  async set(userId: string, entries: PreferenceEntry[]): Promise<PreferenceEntry[]> {
+    const forbidden = entries.filter((entry) => ALWAYS_ON.includes(entry.category) && !entry.enabled);
+    if (forbidden.length > 0) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: 'Account, payment and safety notifications cannot be turned off.',
+        details: { categories: [...new Set(forbidden.map((entry) => entry.category))] },
+      });
     }
 
-    // Build list of preference updates
-    const updates: Array<{ category: NotificationCategory; channel: NotificationChannel; enabled: boolean }> = [];
-
-    for (const [category, channels] of Object.entries(data)) {
-      if (channels) {
-        for (const [channel, enabled] of Object.entries(channels)) {
-          if (typeof enabled === 'boolean') {
-            const categoryEnum = category.toUpperCase() as NotificationCategory;
-            const channelEnum = (channel === 'inApp' ? 'IN_APP' : channel.toUpperCase()) as NotificationChannel;
-            
-            updates.push({
-              category: categoryEnum,
-              channel: channelEnum,
-              enabled,
-            });
-          }
-        }
-      }
-    }
-
-    // Execute updates in transaction
     await this.prisma.$transaction(
-      updates.map((update) =>
-        this.prisma.notificationPreference.upsert({
-          where: {
-            userId_channel_category: {
-              userId,
-              channel: update.channel,
-              category: update.category,
-            },
-          },
-          create: {
-            userId,
-            channel: update.channel,
-            category: update.category,
-            enabled: update.enabled,
-          },
-          update: {
-            enabled: update.enabled,
-          },
-        }),
+      entries.map(
+        (entry) => this.prisma.$executeRaw`
+          INSERT INTO notification_preferences (user_id, channel, category, enabled, updated_at)
+          VALUES (${userId}::uuid, ${entry.channel}::"NotificationChannel", ${entry.category}::"NotificationCategory", ${entry.enabled}, now())
+          ON CONFLICT (user_id, channel, category) WHERE deleted_at IS NULL
+          DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()
+        `,
       ),
     );
-
-    // Return updated preferences
-    return this.getPreferences(userId);
+    return this.get(userId);
   }
 }

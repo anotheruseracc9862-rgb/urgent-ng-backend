@@ -17,7 +17,7 @@ export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
     {
       provide: REDIS_CLIENT,
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
+      useFactory: async (config: ConfigService) => {
         const url = config.getOrThrow<string>('redis.url');
         const client = new Redis({
           ...redisOptionsFromUrl(url),
@@ -27,6 +27,19 @@ export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
         });
         // A down Redis must not crash the process with an unhandled 'error' event.
         client.on('error', () => undefined);
+
+        // Wait (briefly) for the connection so the first request after boot does not
+        // hit a half-open client. If Redis is down we continue without it: callers
+        // degrade to PostgreSQL and the client reconnects in the background.
+        if (client.status !== 'ready') {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 3000);
+            client.once('ready', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        }
         return client;
       },
     },

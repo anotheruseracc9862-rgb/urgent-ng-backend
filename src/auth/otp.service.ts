@@ -1,331 +1,253 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
-import { createHmac, randomInt } from 'crypto';
-import type {
-  IOtpDeliveryProvider,
-  OtpDeliveryPayload,
-} from './otp-delivery.provider.js';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { REDIS_CLIENT } from '../common/redis/redis.module.js';
+import { OTP_PROVIDER, type IOtpProvider } from '../common/providers/otp.provider.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import {
+  OTP_DELIVERY_FAILED,
+  OTP_EXPIRED,
+  OTP_INVALID,
+  OTP_RATE_LIMITED,
+} from '../common/constants/error-codes.js';
+import { hmacSign } from '../common/utils/crypto.helper.js';
+import { AuthAuditService, type RequestContext } from './auth-audit.service.js';
+import { maskIdentifier, type Identifier } from './identifier.js';
 
 /**
- * OTP Service (P2-02)
- * Per PRD §9.2:
- * - 6-digit cryptographically random code
- * - 10-minute TTL
- * - Stored hashed in Redis
- * - Maximum 5 verification attempts per code
- * - 60s resend cooldown
- * - Maximum 5 OTPs per destination per hour
- * - Maximum 10 OTPs per IP per hour
- * - OTP values are NEVER logged
+ * OTP service (Backend PRD 9.2).
+ *
+ * - 6-digit code from a cryptographic RNG, hashed (keyed HMAC bound to the
+ *   destination and purpose) before it is stored in Redis. The code itself is
+ *   never returned, logged or audited.
+ * - Every limit is enforced inside one Lua script, so concurrent requests cannot
+ *   slip past the resend cooldown, the hourly caps or the attempt cap.
+ * - Limits come from admin-editable config (OTP_* keys).
+ * - Sending is refused (not silently allowed) when Redis is down: OTP state lives
+ *   only in Redis by design.
  */
 
 export enum OtpPurpose {
   REGISTRATION = 'REGISTRATION',
   PASSWORD_RESET = 'PASSWORD_RESET',
-  PHONE_VERIFICATION = 'PHONE_VERIFICATION',
-  EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
 }
 
-export interface OtpSendResult {
-  success: boolean;
-  code?: string; // SECURITY: Only for immediate delivery, never log this!
-  remainingAttempts?: number;
-  retryAfterSeconds?: number;
-  error?: string;
-}
+/**
+ * KEYS: 1 code, 2 cooldown, 3 destination counter, 4 ip counter (may be the empty key)
+ * ARGV: hash, ttl, cooldown, destLimit, ipLimit, useIp(0/1)
+ * Returns { status, retryAfterSeconds }  status 0 = issued, 1 = cooldown, 2 = destination cap, 3 = ip cap
+ */
+const ISSUE_SCRIPT = `
+local cooldown = redis.call('PTTL', KEYS[2])
+if cooldown > 0 then
+  return { 1, math.ceil(cooldown / 1000) }
+end
+local dest = redis.call('INCR', KEYS[3])
+if dest == 1 then redis.call('EXPIRE', KEYS[3], 3600) end
+if dest > tonumber(ARGV[4]) then
+  return { 2, redis.call('TTL', KEYS[3]) }
+end
+if ARGV[6] == '1' then
+  local ip = redis.call('INCR', KEYS[4])
+  if ip == 1 then redis.call('EXPIRE', KEYS[4], 3600) end
+  if ip > tonumber(ARGV[5]) then
+    return { 3, redis.call('TTL', KEYS[4]) }
+  end
+end
+redis.call('DEL', KEYS[1])
+redis.call('HSET', KEYS[1], 'hash', ARGV[1], 'attempts', 0)
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+redis.call('SET', KEYS[2], '1', 'EX', tonumber(ARGV[3]))
+return { 0, 0 }
+`;
 
-export interface OtpVerifyResult {
-  success: boolean;
-  remainingAttempts?: number;
-  error?: string;
-}
+/**
+ * KEYS: 1 code
+ * ARGV: hash, maxAttempts
+ * Returns { status, remainingAttempts }  status 0 = ok, 1 = wrong, 2 = missing/expired, 3 = attempts used up
+ */
+const VERIFY_SCRIPT = `
+local stored = redis.call('HGET', KEYS[1], 'hash')
+if not stored then return { 2, 0 } end
+local attempts = redis.call('HINCRBY', KEYS[1], 'attempts', 1)
+if attempts > tonumber(ARGV[2]) then return { 3, 0 } end
+if stored == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  return { 0, tonumber(ARGV[2]) - attempts }
+end
+return { 1, tonumber(ARGV[2]) - attempts }
+`;
 
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
-  private readonly redis: Redis;
-  private readonly hmacSecret: string;
-
-  // Configuration from BusinessConfigService (via config)
-  private readonly OTP_TTL_SECONDS = 600; // 10 minutes
-  private readonly OTP_MAX_ATTEMPTS = 5;
-  private readonly OTP_RESEND_COOLDOWN_SECONDS = 60;
-  private readonly OTP_HOURLY_LIMIT_PER_DESTINATION = 5;
-  private readonly OTP_HOURLY_LIMIT_PER_IP = 10;
 
   constructor(
     private readonly config: ConfigService,
-    @Inject('IOtpDeliveryProvider')
-    private readonly deliveryProvider: IOtpDeliveryProvider,
-  ) {
-    this.redis = new Redis(this.config.getOrThrow<string>('redis.url'));
-    this.hmacSecret = this.config.getOrThrow<string>('security.otpHmacSecret');
+    private readonly businessConfig: BusinessConfigService,
+    private readonly audit: AuthAuditService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(OTP_PROVIDER) private readonly provider: IOtpProvider,
+  ) {}
+
+  /**
+   * Issue and deliver a code. Throws OTP_RATE_LIMITED (cooldown or hourly caps)
+   * or OTP_DELIVERY_FAILED. Nothing is returned: the code only goes to the provider.
+   *
+   * `deliver: false` runs the same counters and cooldown but sends nothing and stores
+   * a code nobody knows. Used for destinations that have no account, so a caller
+   * cannot tell a registered number from an unregistered one by the rate-limit answers.
+   */
+  async send(
+    identifier: Identifier,
+    purpose: OtpPurpose,
+    ctx: RequestContext = {},
+    options: { deliver?: boolean } = {},
+  ): Promise<void> {
+    const [ttlMinutes, cooldown, destLimit, ipLimit] = await Promise.all([
+      this.businessConfig.get('OTP_TTL_MINUTES'),
+      this.businessConfig.get('OTP_RESEND_COOLDOWN_SECONDS'),
+      this.businessConfig.get('OTP_MAX_PER_DESTINATION_PER_HOUR'),
+      this.businessConfig.get('OTP_MAX_PER_IP_PER_HOUR'),
+    ]);
+
+    const deliver = options.deliver !== false;
+    const code = deliver
+      ? randomInt(0, 1_000_000).toString().padStart(6, '0')
+      : randomBytes(16).toString('hex');
+    const keys = this.keys(identifier, purpose, ctx.ip);
+
+    let result: [number, number];
+    try {
+      result = (await this.redis.eval(
+        ISSUE_SCRIPT,
+        4,
+        keys.code,
+        keys.cooldown,
+        keys.destination,
+        keys.ip,
+        this.hash(identifier, purpose, code),
+        ttlMinutes * 60,
+        cooldown,
+        destLimit,
+        ipLimit,
+        ctx.ip ? '1' : '0',
+      )) as [number, number];
+    } catch (error) {
+      this.logger.error(`OTP store unavailable: ${String(error)}`);
+      throw DomainException.of(OTP_DELIVERY_FAILED);
+    }
+
+    const [status, retryAfterSeconds] = result;
+    if (status !== 0) {
+      const reason = (['', 'cooldown', 'destination_limit', 'ip_limit'] as const)[status];
+      await this.audit.record({
+        action: 'auth.otp.rate_limited',
+        metadata: { purpose, destination: maskIdentifier(identifier.value), reason },
+        ctx,
+      });
+      throw DomainException.of(OTP_RATE_LIMITED, { details: { reason, retryAfterSeconds } });
+    }
+
+    if (!deliver) {
+      return;
+    }
+
+    const delivery =
+      identifier.kind === 'phone'
+        ? await this.provider.sendSms(identifier.value, code)
+        : await this.provider.sendEmail(identifier.value, code);
+
+    if (!delivery.success) {
+      // Let the user try again straight away: the failure was not theirs.
+      await this.redis.del(keys.code, keys.cooldown).catch(() => undefined);
+      this.logger.error(
+        `OTP delivery failed (${purpose}, ${maskIdentifier(identifier.value)}): ${delivery.error ?? 'unknown'}`,
+      );
+      throw DomainException.of(OTP_DELIVERY_FAILED);
+    }
+
+    await this.audit.record({
+      action: 'auth.otp.issued',
+      metadata: { purpose, destination: maskIdentifier(identifier.value), channel: identifier.kind },
+      ctx,
+    });
   }
 
   /**
-   * Generate and send an OTP to a destination (phone or email).
-   * Returns success=false if rate limits are exceeded.
+   * Check a code. Resolves on success and burns the code. Throws OTP_INVALID
+   * (with the attempts left), OTP_EXPIRED, or OTP_RATE_LIMITED when the 5 attempts
+   * are used up.
    */
-  async sendOtp(
-    destination: string,
+  async verify(
+    identifier: Identifier,
+    code: string,
     purpose: OtpPurpose,
-    ipAddress?: string,
-  ): Promise<OtpSendResult> {
-    // Check resend cooldown
-    const cooldownKey = this.getCooldownKey(destination, purpose);
-    const cooldownTtl = await this.redis.ttl(cooldownKey);
-    if (cooldownTtl > 0) {
-      return {
-        success: false,
-        retryAfterSeconds: cooldownTtl,
-        error: 'RESEND_COOLDOWN_ACTIVE',
-      };
+    ctx: RequestContext = {},
+  ): Promise<void> {
+    const maxAttempts = await this.businessConfig.get('OTP_MAX_ATTEMPTS');
+    const keys = this.keys(identifier, purpose);
+
+    let result: [number, number];
+    try {
+      result = (await this.redis.eval(
+        VERIFY_SCRIPT,
+        1,
+        keys.code,
+        this.hash(identifier, purpose, code),
+        maxAttempts,
+      )) as [number, number];
+    } catch (error) {
+      this.logger.error(`OTP store unavailable: ${String(error)}`);
+      throw DomainException.of(OTP_EXPIRED);
     }
 
-    // Check hourly limit per destination
-    const destLimitKey = this.getDestinationLimitKey(destination, purpose);
-    const destCount = await this.redis.get(destLimitKey);
-    if (destCount && parseInt(destCount, 10) >= this.OTP_HOURLY_LIMIT_PER_DESTINATION) {
-      return {
-        success: false,
-        error: 'DESTINATION_HOURLY_LIMIT_EXCEEDED',
-      };
+    const [status, remainingAttempts] = result;
+    const metadata = { purpose, destination: maskIdentifier(identifier.value) };
+
+    if (status === 0) {
+      await this.audit.record({ action: 'auth.otp.verified', metadata, ctx });
+      return;
     }
 
-    // Check hourly limit per IP (if provided)
-    if (ipAddress) {
-      const ipLimitKey = this.getIpLimitKey(ipAddress, purpose);
-      const ipCount = await this.redis.get(ipLimitKey);
-      if (ipCount && parseInt(ipCount, 10) >= this.OTP_HOURLY_LIMIT_PER_IP) {
-        return {
-          success: false,
-          error: 'IP_HOURLY_LIMIT_EXCEEDED',
-        };
-      }
-    }
-
-    // Generate 6-digit OTP (cryptographically secure)
-    const code = this.generateOtp();
-    
-    // Hash the OTP before storing
-    const hashedCode = this.hashOtp(code);
-
-    // Store hashed OTP with metadata
-    const otpKey = this.getOtpKey(destination, purpose);
-    await this.redis.setex(
-      otpKey,
-      this.OTP_TTL_SECONDS,
-      JSON.stringify({
-        hash: hashedCode,
-        attempts: 0,
-        createdAt: Date.now(),
-      }),
-    );
-
-    // Set resend cooldown
-    await this.redis.setex(
-      cooldownKey,
-      this.OTP_RESEND_COOLDOWN_SECONDS,
-      '1',
-    );
-
-    // Increment hourly counters
-    const hourTtl = 3600; // 1 hour
-    await this.redis.incr(destLimitKey);
-    await this.redis.expire(destLimitKey, hourTtl);
-
-    if (ipAddress) {
-      const ipLimitKey = this.getIpLimitKey(ipAddress, purpose);
-      await this.redis.incr(ipLimitKey);
-      await this.redis.expire(ipLimitKey, hourTtl);
-    }
-
-    // Log OTP generation (NEVER log the actual code!)
-    this.logger.log({
-      message: 'OTP generated',
-      destination: this.maskDestination(destination),
-      purpose,
-      ipAddress,
+    await this.audit.record({
+      action: 'auth.otp.failed',
+      reasonCode: ['', 'WRONG_CODE', 'EXPIRED', 'ATTEMPTS_EXCEEDED'][status],
+      metadata,
+      ctx,
     });
 
-    // Deliver the OTP through the provider
-    const deliveryResult = await this.deliveryProvider.send({
-      identifier: destination,
-      code,
-      purpose: this.mapPurposeToDeliveryPurpose(purpose),
-    });
-
-    if (!deliveryResult.success) {
-      this.logger.error({
-        message: 'OTP delivery failed',
-        destination: this.maskDestination(destination),
-        purpose,
-        error: deliveryResult.error,
-      });
-      return {
-        success: false,
-        error: 'DELIVERY_FAILED',
-      };
+    if (status === 1) {
+      throw DomainException.of(OTP_INVALID, { details: { remainingAttempts } });
     }
+    if (status === 3) {
+      throw DomainException.of(OTP_RATE_LIMITED, { details: { reason: 'attempts_exceeded' } });
+    }
+    throw DomainException.of(OTP_EXPIRED);
+  }
 
-    // Return success (code is returned only for immediate use in testing)
+  private keys(identifier: Identifier, purpose: OtpPurpose, ip?: string) {
+    const dest = this.digest(`dest:${identifier.value}`);
     return {
-      success: true,
-      code, // SECURITY: Only for immediate delivery, never log this!
+      code: `otp:code:${purpose}:${dest}`,
+      cooldown: `otp:cooldown:${purpose}:${dest}`,
+      destination: `otp:dest-hour:${dest}`,
+      ip: `otp:ip-hour:${this.digest(`ip:${ip ?? 'none'}`)}`,
     };
   }
 
-  /**
-   * Verify an OTP code.
-   * Returns success=true if the code is correct and not expired.
-   * Increments attempt counter and may lock out after max attempts.
-   */
-  async verifyOtp(
-    destination: string,
-    code: string,
-    purpose: OtpPurpose,
-  ): Promise<OtpVerifyResult> {
-    const otpKey = this.getOtpKey(destination, purpose);
-    const otpData = await this.redis.get(otpKey);
-
-    if (!otpData) {
-      return {
-        success: false,
-        error: 'OTP_NOT_FOUND_OR_EXPIRED',
-      };
-    }
-
-    const { hash, attempts } = JSON.parse(otpData);
-
-    // Check if max attempts exceeded
-    if (attempts >= this.OTP_MAX_ATTEMPTS) {
-      return {
-        success: false,
-        remainingAttempts: 0,
-        error: 'MAX_ATTEMPTS_EXCEEDED',
-      };
-    }
-
-    // Hash the provided code and compare
-    const hashedCode = this.hashOtp(code);
-    const isValid = hashedCode === hash;
-
-    if (isValid) {
-      // Success: delete the OTP
-      await this.redis.del(otpKey);
-      
-      this.logger.log({
-        message: 'OTP verified successfully',
-        destination: this.maskDestination(destination),
-        purpose,
-      });
-
-      return { success: true };
-    } else {
-      // Failed: increment attempts
-      const newAttempts = attempts + 1;
-      const ttl = await this.redis.ttl(otpKey);
-      
-      await this.redis.setex(
-        otpKey,
-        ttl > 0 ? ttl : this.OTP_TTL_SECONDS,
-        JSON.stringify({
-          hash,
-          attempts: newAttempts,
-          createdAt: JSON.parse(otpData).createdAt,
-        }),
-      );
-
-      const remainingAttempts = this.OTP_MAX_ATTEMPTS - newAttempts;
-
-      this.logger.warn({
-        message: 'OTP verification failed',
-        destination: this.maskDestination(destination),
-        purpose,
-        remainingAttempts,
-      });
-
-      return {
-        success: false,
-        remainingAttempts,
-        error: 'INVALID_OTP',
-      };
-    }
+  /** Short digest so phone numbers, emails and IPs never appear in Redis keys. */
+  private digest(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 32);
   }
 
-  /**
-   * Generate a cryptographically secure 6-digit OTP.
-   */
-  private generateOtp(): string {
-    // Use randomInt for cryptographically secure random numbers
-    const num = randomInt(0, 1000000);
-    return num.toString().padStart(6, '0');
-  }
-
-  /**
-   * Hash an OTP using HMAC-SHA256.
-   */
-  private hashOtp(code: string): string {
-    return createHmac('sha256', this.hmacSecret)
-      .update(code)
-      .digest('hex');
-  }
-
-  /**
-   * Mask a destination for logging (show first 2 and last 2 characters).
-   */
-  private maskDestination(destination: string): string {
-    if (destination.length <= 4) return '****';
-    return destination.slice(0, 2) + '****' + destination.slice(-2);
-  }
-
-  /**
-   * Redis key for OTP storage: otp:{destination}:{purpose}
-   */
-  private getOtpKey(destination: string, purpose: OtpPurpose): string {
-    return `otp:${destination}:${purpose}`;
-  }
-
-  /**
-   * Redis key for resend cooldown: otp:cooldown:{destination}:{purpose}
-   */
-  private getCooldownKey(destination: string, purpose: OtpPurpose): string {
-    return `otp:cooldown:${destination}:${purpose}`;
-  }
-
-  /**
-   * Redis key for hourly destination limit: otp:dest-limit:{destination}:{purpose}:{hour}
-   */
-  private getDestinationLimitKey(destination: string, purpose: OtpPurpose): string {
-    const hour = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
-    return `otp:dest-limit:${destination}:${purpose}:${hour}`;
-  }
-
-  /**
-   * Redis key for hourly IP limit: otp:ip-limit:{ip}:{purpose}:{hour}
-   */
-  private getIpLimitKey(ipAddress: string, purpose: OtpPurpose): string {
-    const hour = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
-    return `otp:ip-limit:${ipAddress}:${purpose}:${hour}`;
-  }
-
-  /**
-   * Map OtpPurpose to delivery purpose string
-   */
-  private mapPurposeToDeliveryPurpose(
-    purpose: OtpPurpose,
-  ): 'registration' | 'login' | 'verification' {
-    switch (purpose) {
-      case OtpPurpose.REGISTRATION:
-        return 'registration';
-      case OtpPurpose.PASSWORD_RESET:
-        return 'login';
-      case OtpPurpose.PHONE_VERIFICATION:
-      case OtpPurpose.EMAIL_VERIFICATION:
-        return 'verification';
-      default:
-        return 'verification';
-    }
+  /** Keyed hash bound to destination and purpose: a code is useless anywhere else. */
+  private hash(identifier: Identifier, purpose: OtpPurpose, code: string): string {
+    return hmacSign(
+      `otp:${purpose}:${identifier.value}:${code}`,
+      this.config.getOrThrow<string>('security.hmacSecret'),
+    );
   }
 }

@@ -1,71 +1,63 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { AdminUserService } from '../admin-user.service.js';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
-import type { AdminJwtPayload } from '../admin-auth.service.js';
+import { DomainException } from '../../common/exceptions/domain.exception.js';
+import { AUTH_REQUIRED } from '../../common/constants/error-codes.js';
+import { AdminSessionService } from '../admin-session.service.js';
+import { AdminUserService } from '../admin-user.service.js';
+import { ADMIN_ACCESS_COOKIE } from '../admin.cookies.js';
+import type { AuthenticatedAdmin } from '../decorators/admin-auth.decorator.js';
 
 /**
- * Admin authentication guard
- * Validates JWT with 'admin' type claim and loads admin with permissions
+ * Admin authentication (Backend PRD 24.1). Separate trust boundary:
+ *
+ *  - the token is signed with a different key and has audience `urgent-admin`, so a
+ *    consumer token never verifies here (and an admin token never verifies on consumer routes);
+ *  - on EVERY request the admin must still be ACTIVE with MFA enabled, and the login
+ *    (session family) must not be revoked or expired. Deactivating an admin, revoking
+ *    a session or changing a role therefore takes effect on the next request.
  */
 @Injectable()
 export class AdminAuthGuard implements CanActivate {
   constructor(
-    private readonly jwtService: JwtService,
-    private readonly adminUserService: AdminUserService,
+    private readonly sessions: AdminSessionService,
+    private readonly admins: AdminUserService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
-
-    // Extract token from cookie or Authorization header
     const token = this.extractToken(request);
-
     if (!token) {
-      throw new UnauthorizedException('No admin token provided');
+      throw DomainException.of(AUTH_REQUIRED);
     }
 
-    try {
-      // Verify JWT
-      const payload = await this.jwtService.verifyAsync<AdminJwtPayload>(token);
+    const payload = await this.sessions.verifyAccessToken(token);
 
-      // Verify it's an admin token
-      if (payload.type !== 'admin') {
-        throw new UnauthorizedException('Invalid token type');
-      }
-
-      // Load admin with fresh permissions
-      const permissions = await this.adminUserService.getAdminPermissions(payload.sub);
-
-      // Attach to request
-      (request as any).admin = {
-        adminId: payload.sub,
-        email: payload.email,
-        roles: payload.roles,
-        permissions,
-      };
-
-      return true;
-    } catch (error) {
-      throw new UnauthorizedException('Invalid admin token');
+    const admin = await this.admins.findById(payload.sub);
+    if (!admin || admin.status !== 'ACTIVE' || !admin.mfaEnabled) {
+      throw DomainException.of(AUTH_REQUIRED);
     }
+    if (!(await this.sessions.isFamilyActive(payload.sid, admin.id))) {
+      throw DomainException.of(AUTH_REQUIRED);
+    }
+
+    const { roles, permissions } = await this.admins.rolesAndPermissions(admin.id);
+    (request as Request & { admin?: AuthenticatedAdmin }).admin = {
+      adminId: admin.id,
+      sessionId: payload.sid,
+      email: admin.email,
+      displayName: admin.displayName,
+      roles,
+      permissions,
+    };
+    return true;
   }
 
-  /**
-   * Extract JWT from cookie (ung_admin_at) or Authorization header
-   */
   private extractToken(request: Request): string | null {
-    // Try cookie first
-    if (request.cookies?.ung_admin_at) {
-      return request.cookies.ung_admin_at;
+    const header = request.headers.authorization;
+    if (typeof header === 'string' && header.startsWith('Bearer ')) {
+      return header.slice(7).trim() || null;
     }
-
-    // Fall back to Authorization header
-    const authHeader = request.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      return authHeader.substring(7);
-    }
-
-    return null;
+    const cookie = request.cookies?.[ADMIN_ACCESS_COOKIE];
+    return typeof cookie === 'string' && cookie !== '' ? cookie : null;
   }
 }

@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { SwaggerModule } from '@nestjs/swagger';
+import { buildOpenApiDocument } from './common/api/openapi.js';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
 import { configureApp } from './app.setup.js';
@@ -15,13 +16,7 @@ async function bootstrap(): Promise<void> {
   configureApp(app);
 
   if (process.env.NODE_ENV !== 'production') {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('Urgent.ng API')
-      .setDescription('Urgent.ng errand marketplace backend API')
-      .setVersion('1.0')
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    const document = buildOpenApiDocument(app);
     SwaggerModule.setup('api/docs', app, document);
   }
 

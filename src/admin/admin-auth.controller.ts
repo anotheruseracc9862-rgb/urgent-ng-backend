@@ -1,121 +1,117 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Ip, Headers, Res, UseGuards, Get } from '@nestjs/common';
-import type { Response } from 'express';
+import { ApiTags } from '@nestjs/swagger';
+import { ApiEnveloped, ApiErrors, ApiAdminAuth } from '../common/api/api-docs.js';
+import * as AR from './dto/admin-responses.dto.js';
+import { LoggedOutDto } from '../auth/dto/responses.dto.js';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { RateLimit } from '../common/decorators/rate-limit.decorator.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { AUTH_REQUIRED } from '../common/constants/error-codes.js';
+import { ReqCtx } from '../auth/decorators/request-context.decorator.js';
 import { AdminAuthService } from './admin-auth.service.js';
-import { AdminLoginDto, AdminRefreshDto } from './dto/admin-auth.dto.js';
-import { AdminAuthGuard } from './guards/admin-auth.guard.js';
-import { CurrentAdmin, type AuthenticatedAdmin } from './decorators/current-admin.decorator.js';
+import { AdminUserService } from './admin-user.service.js';
+import { AdminSessionService } from './admin-session.service.js';
+import type { AdminRequestContext } from './admin-auth-event.service.js';
+import { AdminAuth, CurrentAdmin, type AuthenticatedAdmin } from './decorators/admin-auth.decorator.js';
+import { ADMIN_REFRESH_COOKIE, clearAdminCookies, setAdminCookies } from './admin.cookies.js';
+import { AdminLoginDto, AdminRefreshDto, MfaTokenDto, MfaVerifyDto } from './dto/admin-auth.dto.js';
 
 /**
- * Admin Authentication Controller
- * Separate from consumer auth with different JWT audience and cookie
+ * Admin authentication (Backend PRD 24.1): /api/v1/admin/auth/...
+ * Public admin registration does not exist: admins are created by `npm run admin:create`.
  */
+@ApiTags('Admin auth')
 @Controller('admin/auth')
 export class AdminAuthController {
-  constructor(private readonly adminAuthService: AdminAuthService) {}
+  constructor(
+    private readonly auth: AdminAuthService,
+    private readonly admins: AdminUserService,
+    private readonly sessions: AdminSessionService,
+  ) {}
 
-  /**
-   * Admin login
-   * POST /admin/auth/login
-   * Sets HTTP-only cookie 'ung_admin_at'
-   */
+  /** Step 1. Password only; the answer says which MFA step comes next. No session yet. */
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(
-    @Body() dto: AdminLoginDto,
-    @Ip() ipAddress: string,
-    @Headers('user-agent') userAgent: string,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.adminAuthService.login(
-      dto.email,
-      dto.password,
-      userAgent,
-      ipAddress,
-    );
-
-    // Set HTTP-only cookie for web admin
-    res.cookie('ung_admin_at', result.accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: result.expiresIn * 1000,
-    });
-
-    return {
-      success: true,
-      data: {
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        adminId: result.adminId,
-      },
-    };
+  @RateLimit('auth')
+  @ApiEnveloped(AR.AdminLoginStepDto)
+  @ApiErrors(400, 401, 429)
+  login(@Body() dto: AdminLoginDto, @ReqCtx() ctx: AdminRequestContext) {
+    return this.auth.login(dto.email, dto.password, ctx);
   }
 
-  /**
-   * Refresh admin access token
-   * POST /admin/auth/refresh
-   */
+  /** First login: get the TOTP secret to put in an authenticator app. */
+  @Post('mfa/enrol')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ApiEnveloped(AR.MfaEnrolmentDto)
+  @ApiErrors(401, 409)
+  enrol(@Body() dto: MfaTokenDto) {
+    return this.auth.startEnrolment(dto.mfaToken);
+  }
+
+  /** Step 2. A valid TOTP code completes the login and sets the admin cookies. */
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ApiEnveloped(AR.AdminSessionResultDto)
+  @ApiErrors(401, 429)
+  async verify(
+    @Body() dto: MfaVerifyDto,
+    @ReqCtx() ctx: AdminRequestContext,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { admin, tokens } = await this.auth.verifyMfa(dto.mfaToken, dto.code, ctx);
+    setAdminCookies(res, tokens);
+    return { admin, expiresIn: tokens.expiresIn, refreshToken: tokens.refreshToken, accessToken: tokens.accessToken };
+  }
+
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ApiEnveloped(AR.AdminRefreshResultDto)
+  @ApiErrors(401)
   async refresh(
     @Body() dto: AdminRefreshDto,
-    @Ip() ipAddress: string,
-    @Headers('user-agent') userAgent: string,
+    @Req() req: Request,
+    @ReqCtx() ctx: AdminRequestContext,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.adminAuthService.refreshToken(
-      dto.refreshToken,
-      userAgent,
-      ipAddress,
-    );
+    const cookie = req.cookies?.[ADMIN_REFRESH_COOKIE];
+    const token = typeof cookie === 'string' && cookie !== '' ? cookie : dto.refreshToken;
+    if (!token) {
+      throw DomainException.of(AUTH_REQUIRED);
+    }
 
-    // Update cookie
-    res.cookie('ung_admin_at', result.accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: result.expiresIn * 1000,
-    });
-
-    return {
-      success: true,
-      data: {
-        expiresIn: result.expiresIn,
-      },
-    };
+    try {
+      const tokens = await this.auth.refresh(token, ctx);
+      setAdminCookies(res, tokens);
+      return { expiresIn: tokens.expiresIn, refreshToken: tokens.refreshToken, accessToken: tokens.accessToken };
+    } catch (error) {
+      clearAdminCookies(res);
+      throw error;
+    }
   }
 
-  /**
-   * Logout
-   * POST /admin/auth/logout
-   */
   @Post('logout')
   @HttpCode(HttpStatus.OK)
+  @AdminAuth()
+  @ApiAdminAuth()
+  @ApiEnveloped(LoggedOutDto)
   async logout(
-    @Body() body: { refreshToken: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+    @ReqCtx() ctx: AdminRequestContext,
     @Res({ passthrough: true }) res: Response,
   ) {
-    await this.adminAuthService.logout(body.refreshToken);
-
-    // Clear cookie
-    res.clearCookie('ung_admin_at');
-
-    return {
-      success: true,
-      message: 'Logged out successfully',
-    };
+    await this.auth.logout(admin.sessionId, admin.adminId, ctx);
+    clearAdminCookies(res);
+    return { loggedOut: true };
   }
 
-  /**
-   * Get current admin info
-   * GET /admin/auth/me
-   */
   @Get('me')
-  @UseGuards(AdminAuthGuard)
-  async getMe(@CurrentAdmin() admin: AuthenticatedAdmin) {
-    return {
-      success: true,
-      data: admin,
-    };
+  @AdminAuth()
+  @ApiAdminAuth()
+  @ApiEnveloped(AR.AdminViewDto)
+  me(@CurrentAdmin() admin: AuthenticatedAdmin) {
+    return this.admins.view(admin.adminId);
   }
 }

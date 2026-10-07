@@ -1,146 +1,136 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../database/prisma.service.js';
+import { Injectable } from '@nestjs/common';
 import { ConsentType } from '@prisma/client';
+import { PrismaService } from '../database/prisma.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { RESOURCE_CONFLICT, RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 
+export interface PolicyVersionView {
+  id: string;
+  type: ConsentType;
+  version: string;
+  documentRef: string;
+  publishedAt: Date;
+  requiresReacceptance: boolean;
+}
+
+interface PolicyRow {
+  id: string;
+  type: ConsentType;
+  version: string;
+  document_ref: string;
+  published_at: Date;
+  requires_reacceptance: boolean;
+}
+
+const toView = (row: PolicyRow): PolicyVersionView => ({
+  id: row.id,
+  type: row.type,
+  version: row.version,
+  documentRef: row.document_ref,
+  publishedAt: row.published_at,
+  requiresReacceptance: row.requires_reacceptance,
+});
+
+/**
+ * Policy versions (Backend PRD 9.6). A version is visible once `published_at` has
+ * passed (database clock). Publishing a new version can require re-acceptance.
+ */
 @Injectable()
 export class PolicyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Create a new policy version
-   * Used by admin to publish updated policies
-   */
-  async createPolicyVersion(
+  /** Admin: publish a new version. The (type, version) pair is unique. */
+  async publish(
     type: ConsentType,
     version: string,
     documentRef: string,
-    publishedAt?: Date,
-    requiresReacceptance: boolean = false,
-  ) {
-    // Check if version already exists for this type
-    const existing = await this.prisma.policyVersion.findFirst({
-      where: {
-        type,
-        version,
-      },
-    });
-
-    if (existing) {
-      throw new BadRequestException(`Policy version ${version} already exists for ${type}`);
+    options: { publishedAt?: Date; requiresReacceptance?: boolean } = {},
+  ): Promise<PolicyVersionView> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      INSERT INTO policy_versions (type, version, document_ref, published_at, requires_reacceptance)
+      VALUES (
+        ${type}::"ConsentType", ${version}, ${documentRef},
+        COALESCE(${options.publishedAt ?? null}::timestamptz, date_trunc('milliseconds', now())),
+        ${options.requiresReacceptance ?? false}
+      )
+      ON CONFLICT (type, version) DO NOTHING
+      RETURNING id, type::text AS type, version, document_ref, published_at, requires_reacceptance
+    `;
+    if (rows.length === 0) {
+      throw DomainException.of(RESOURCE_CONFLICT, {
+        message: `Policy version ${version} already exists for ${type}.`,
+      });
     }
-
-    const policyVersion = await this.prisma.policyVersion.create({
-      data: {
-        type,
-        version,
-        documentRef,
-        publishedAt: publishedAt || new Date(),
-        requiresReacceptance,
-      },
-    });
-
-    return policyVersion;
+    return toView(rows[0]);
   }
 
-  /**
-   * Get current (latest published) policy version for each type
-   * Public endpoint - no authentication required
-   */
-  async getCurrentPolicies() {
-    const now = new Date();
-
-    // Get latest published version for each policy type
-    const policies = await this.prisma.$queryRaw<any[]>`
-      SELECT DISTINCT ON (type)
-        id, type, version, document_ref, published_at, requires_reacceptance, created_at
+  /** The latest published version of each policy type. */
+  async current(): Promise<PolicyVersionView[]> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      SELECT DISTINCT ON (type) id, type::text AS type, version, document_ref, published_at, requires_reacceptance
       FROM policy_versions
-      WHERE published_at <= ${now}
+      WHERE published_at <= now()
       ORDER BY type, published_at DESC, created_at DESC
     `;
+    return rows.map(toView);
+  }
 
-    return policies.map((p) => ({
-      id: p.id,
-      type: p.type,
-      version: p.version,
-      documentRef: p.document_ref,
-      publishedAt: p.published_at,
-      requiresReacceptance: p.requires_reacceptance,
-    }));
+  /** A specific published version, or null when it does not exist or is not live yet. */
+  async findPublished(type: ConsentType, version: string): Promise<PolicyVersionView | null> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      SELECT id, type::text AS type, version, document_ref, published_at, requires_reacceptance
+      FROM policy_versions
+      WHERE type = ${type}::"ConsentType" AND version = ${version} AND published_at <= now()
+    `;
+    return rows[0] ? toView(rows[0]) : null;
+  }
+
+  async getPublished(id: string): Promise<PolicyVersionView> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      SELECT id, type::text AS type, version, document_ref, published_at, requires_reacceptance
+      FROM policy_versions WHERE id = ${id}::uuid AND published_at <= now()
+    `;
+    if (!rows[0]) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
+    }
+    return toView(rows[0]);
+  }
+
+  async history(type: ConsentType): Promise<PolicyVersionView[]> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      SELECT id, type::text AS type, version, document_ref, published_at, requires_reacceptance
+      FROM policy_versions
+      WHERE type = ${type}::"ConsentType" AND published_at <= now()
+      ORDER BY published_at DESC, created_at DESC
+    `;
+    return rows.map(toView);
   }
 
   /**
-   * Get a specific policy version
-   * Public endpoint - no authentication required
+   * Policy types whose current version this user still has to accept: no
+   * (un-withdrawn) acceptance at all, or an older version while the current one
+   * requires re-acceptance. MARKETING_COMMUNICATIONS and LOCATION_SHARING are
+   * optional and never block the user.
    */
-  async getPolicyVersion(id: string) {
-    const policy = await this.prisma.policyVersion.findUnique({
-      where: { id },
-    });
-
-    if (!policy) {
-      throw new NotFoundException('Policy version not found');
-    }
-
-    // Only return published policies to public
-    if (policy.publishedAt > new Date()) {
-      throw new NotFoundException('Policy version not yet published');
-    }
-
-    return policy;
-  }
-
-  /**
-   * Get all versions of a specific policy type
-   * Public endpoint - no authentication required
-   */
-  async getPolicyVersionsByType(type: ConsentType) {
-    const now = new Date();
-
-    const policies = await this.prisma.policyVersion.findMany({
-      where: {
-        type,
-        publishedAt: { lte: now },
-      },
-      orderBy: { publishedAt: 'desc' },
-      select: {
-        id: true,
-        type: true,
-        version: true,
-        documentRef: true,
-        publishedAt: true,
-        requiresReacceptance: true,
-        createdAt: true,
-      },
-    });
-
-    return policies;
-  }
-
-  /**
-   * Check if user needs to accept new policy versions
-   * Returns policy types that require re-acceptance
-   */
-  async checkRequiredConsents(userId: string): Promise<ConsentType[]> {
-    const currentPolicies = await this.getCurrentPolicies();
-    const requiredTypes: ConsentType[] = [];
-
-    for (const policy of currentPolicies) {
-      // Find latest consent for this type
-      const latestConsent = await this.prisma.consentRecord.findFirst({
-        where: {
-          userId,
-          consentType: policy.type,
-          withdrawnAt: null,
-        },
-        orderBy: { acceptedAt: 'desc' },
-      });
-
-      // If no consent or consent is for older version and new version requires reacceptance
-      if (!latestConsent || (policy.requiresReacceptance && latestConsent.documentVersion !== policy.version)) {
-        requiredTypes.push(policy.type);
-      }
-    }
-
-    return requiredTypes;
+  async outstandingFor(userId: string): Promise<PolicyVersionView[]> {
+    const rows = await this.prisma.$queryRaw<PolicyRow[]>`
+      WITH current AS (
+        SELECT DISTINCT ON (type) id, type, version, document_ref, published_at, requires_reacceptance
+        FROM policy_versions
+        WHERE published_at <= now()
+        ORDER BY type, published_at DESC, created_at DESC
+      )
+      SELECT c.id, c.type::text AS type, c.version, c.document_ref, c.published_at, c.requires_reacceptance
+      FROM current c
+      WHERE c.type NOT IN ('MARKETING_COMMUNICATIONS'::"ConsentType", 'LOCATION_SHARING'::"ConsentType")
+        AND NOT EXISTS (
+          SELECT 1 FROM consent_records r
+          WHERE r.user_id = ${userId}::uuid
+            AND r.consent_type = c.type
+            AND r.withdrawn_at IS NULL
+            AND (r.document_version = c.version OR NOT c.requires_reacceptance)
+        )
+    `;
+    return rows.map(toView);
   }
 }

@@ -16,6 +16,7 @@ import {
   EMAIL_PROVIDER,
   PAYMENT_PROVIDER,
 } from './index.js';
+import { S3StorageProvider, type S3Settings } from './s3-storage.provider.js';
 import {
   FakeOtpProvider,
   FakeKycProvider,
@@ -25,6 +26,16 @@ import {
   FakeEmailProvider,
   FakePaymentProvider,
 } from './fakes/index.js';
+
+function createS3Provider(config: ConfigService): S3StorageProvider {
+  const settings = config.get<S3Settings>('aws');
+  if (!settings?.bucket || !settings.region || !settings.accessKeyId || !settings.secretAccessKey) {
+    throw new Error(
+      'STORAGE_PROVIDER=real is set but AWS_REGION, AWS_S3_BUCKET, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not all set',
+    );
+  }
+  return new S3StorageProvider(settings);
+}
 
 type ProviderName = keyof AppConfig['providers'];
 
@@ -38,6 +49,7 @@ function providerFactory(
   name: ProviderName,
   createFake: () => unknown,
   describeReal: string,
+  createReal?: (config: ConfigService) => unknown,
 ): FactoryProvider {
   return {
     provide: token,
@@ -46,6 +58,9 @@ function providerFactory(
       const mode = config.get<string>(`providers.${name}`) ?? 'fake';
       if (mode === 'fake') {
         return createFake();
+      }
+      if (createReal) {
+        return createReal(config);
       }
       // The real adapter is added in its own task (see the Build Plan).
       throw new Error(
@@ -64,7 +79,7 @@ export class ProvidersModule {
       providers: [
         providerFactory(OTP_PROVIDER, 'sms', () => new FakeOtpProvider(), 'SMS (Termii)'),
         providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah'),
-        providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3'),
+        providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3', createS3Provider),
         providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM'),
         providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'Mailgun'),

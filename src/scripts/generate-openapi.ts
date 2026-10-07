@@ -4,7 +4,7 @@
  */
 
 import { NestFactory } from '@nestjs/core';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { buildOpenApiDocument } from '../common/api/openapi.js';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppModule } from '../app.module.js';
@@ -20,14 +20,7 @@ async function generate() {
   // Same prefix, versioning and pipes as the real server, so the spec paths are /api/v1/...
   configureApp(app);
 
-  const config = new DocumentBuilder()
-    .setTitle('Urgent.ng API')
-    .setDescription('Urgent.ng backend API documentation')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-
-  const document = SwaggerModule.createDocument(app, config);
+  const document = buildOpenApiDocument(app);
 
   // Write to file
   const outputPath = join(process.cwd(), 'openapi.json');

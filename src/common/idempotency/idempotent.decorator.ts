@@ -1,4 +1,5 @@
 import { applyDecorators, SetMetadata, UseInterceptors } from '@nestjs/common';
+import { ApiHeader, ApiResponse } from '@nestjs/swagger';
 import { IdempotencyInterceptor } from './idempotency.interceptor.js';
 
 export const IDEMPOTENT_KEY = 'idempotent';
@@ -32,4 +33,10 @@ export const Idempotent = (options: IdempotentOptions) =>
   applyDecorators(
     SetMetadata(IDEMPOTENT_KEY, options),
     UseInterceptors(IdempotencyInterceptor),
+    ApiHeader({
+      name: 'Idempotency-Key',
+      required: true,
+      description: '8 to 128 characters (letters, digits, . _ : -). Same key and body replays the first response.',
+    }),
+    ApiResponse({ status: 409, description: 'Key reused with a different body, or the first request is still running.' }),
   );

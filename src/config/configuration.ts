@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { ProviderMode } from './env.validation.js';
 
 export interface AppConfig {
@@ -13,19 +14,22 @@ export interface AppConfig {
   jwt: {
     secret: string;
     refreshSecret: string;
-    accessTokenTtl: number; // 15 minutes in seconds
-    refreshTokenTtl: number; // 30 days in seconds
+    adminSecret: string;
   };
   security: {
     dataEncryptionKey: string;
     hmacSecret: string;
-    otpHmacSecret: string;
-    blocklistHmacSecret: string;
   };
   dojah: {
     appId: string;
     secretKey: string;
     baseUrl: string;
+  };
+  aws: {
+    region: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    bucket: string;
   };
   providers: {
     kyc: ProviderMode;
@@ -48,7 +52,9 @@ const isProduction = process.env.NODE_ENV === 'production';
 const devSecret = (name: string) =>
   isProduction ? '' : `development-only-${name}-not-for-production`;
 
-export default (): AppConfig => ({
+export default (): AppConfig => {
+  const jwtSecret = process.env.JWT_SECRET || devSecret('jwt-secret');
+  return {
   nodeEnv:
     process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test'
       ? process.env.NODE_ENV
@@ -65,24 +71,27 @@ export default (): AppConfig => ({
     url: process.env.REDIS_URL ?? 'redis://localhost:6379',
   },
   jwt: {
-    secret: process.env.JWT_SECRET ?? '',
+    secret: jwtSecret,
     refreshSecret: process.env.JWT_REFRESH_SECRET ?? '',
-    accessTokenTtl: 15 * 60, // 15 minutes
-    refreshTokenTtl: 30 * 24 * 60 * 60, // 30 days
+    // Admin tokens are signed with a key derived from the consumer secret, so one
+    // secret to manage, yet a consumer token can never verify as an admin token.
+    adminSecret: createHmac('sha256', jwtSecret).update('urgent-admin-jwt').digest('hex'),
   },
   security: {
     dataEncryptionKey:
       process.env.DATA_ENCRYPTION_KEY || devSecret('data-encryption-key'),
     hmacSecret: process.env.HMAC_SECRET || devSecret('hmac-secret'),
-    otpHmacSecret:
-      process.env.OTP_HMAC_SECRET || devSecret('otp-hmac-secret'),
-    blocklistHmacSecret:
-      process.env.BLOCKLIST_HMAC_SECRET || devSecret('blocklist-hmac-secret'),
   },
   dojah: {
     appId: process.env.DOJAH_APP_ID ?? '',
     secretKey: process.env.DOJAH_SECRET_KEY ?? '',
     baseUrl: process.env.DOJAH_BASE_URL ?? '',
+  },
+  aws: {
+    region: process.env.AWS_REGION ?? '',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? '',
+    bucket: process.env.AWS_S3_BUCKET ?? '',
   },
   providers: {
     kyc: mode(process.env.KYC_PROVIDER),
@@ -93,4 +102,6 @@ export default (): AppConfig => ({
     storage: mode(process.env.STORAGE_PROVIDER),
     payments: mode(process.env.PAYMENTS_PROVIDER),
   },
-});
+};
+};
+

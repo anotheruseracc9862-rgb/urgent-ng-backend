@@ -1,99 +1,63 @@
-import {
-  Injectable,
-  CanActivate,
-  ExecutionContext,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { Request } from 'express';
-import { SessionService } from '../session.service.js';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import type { Request } from 'express';
 import { PrismaService } from '../../database/prisma.service.js';
+import { DomainException } from '../../common/exceptions/domain.exception.js';
+import { AUTH_REQUIRED } from '../../common/constants/error-codes.js';
+import { SessionService } from '../session.service.js';
+import { ACCESS_COOKIE } from '../auth.cookies.js';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator.js';
 
 /**
- * Consumer Authentication Guard (P2-04)
- * 
- * Validates JWT access tokens and attaches user to request.
- * Per PRD §9.3: validates audience 'urgent-consumer'.
- * 
- * Token sources (in order):
- * 1. Authorization header: Bearer <token>
- * 2. Cookie: ung_at
- * 
- * Attaches user object to request.user with:
- * - userId
- * - status
- * - phoneVerified
- * - emailVerified
+ * Consumer authentication (Backend PRD 9.3, 9.4).
+ *
+ * Token sources, in order: `Authorization: Bearer <jwt>` (mobile and other clients),
+ * then the `ung_at` cookie (web). The JWT must have audience `urgent-consumer`; an
+ * admin token never passes. The user is re-read from the database on every request,
+ * so a deleted account stops working at once.
+ *
+ * Any module that uses this guard must import AuthModule.
  */
-
 @Injectable()
 export class ConsumerAuthGuard implements CanActivate {
   constructor(
-    private readonly sessionService: SessionService,
+    private readonly sessions: SessionService,
     private readonly prisma: PrismaService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
 
-    // Extract token from Authorization header or cookie
     const token = this.extractToken(request);
     if (!token) {
-      throw new UnauthorizedException('No access token provided');
+      throw DomainException.of(AUTH_REQUIRED);
     }
 
-    // Verify token
-    let payload;
-    try {
-      payload = await this.sessionService.verifyAccessToken(token);
-    } catch (error) {
-      throw new UnauthorizedException('Invalid or expired access token');
-    }
+    const payload = await this.sessions.verifyAccessToken(token);
 
-    // Load user from database
-    const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.client.user.findUnique({
       where: { id: payload.sub },
-      select: {
-        id: true,
-        status: true,
-        phoneE164: true,
-        phoneVerifiedAt: true,
-        email: true,
-        emailVerifiedAt: true,
-        deletedAt: true,
-      },
+      select: { id: true, status: true, phoneVerifiedAt: true, emailVerifiedAt: true },
     });
-
-    if (!user || user.deletedAt) {
-      throw new UnauthorizedException('User not found');
+    if (!user || user.status === 'DELETED') {
+      throw DomainException.of(AUTH_REQUIRED);
     }
 
-    // Attach user to request
-    request.user = {
+    (request as Request & { user?: AuthenticatedUser }).user = {
       userId: user.id,
+      sessionId: payload.sid,
       status: user.status,
-      phoneVerified: !!user.phoneVerifiedAt,
-      emailVerified: !!user.emailVerifiedAt,
+      phoneVerified: user.phoneVerifiedAt !== null,
+      emailVerified: user.emailVerifiedAt !== null,
     };
-
     return true;
   }
 
-  /**
-   * Extract token from Authorization header or cookie
-   */
   private extractToken(request: Request): string | null {
-    // Try Authorization header first
-    const authHeader = request.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      return authHeader.substring(7);
+    const header = request.headers.authorization;
+    if (typeof header === 'string' && header.startsWith('Bearer ')) {
+      return header.slice(7).trim() || null;
     }
-
-    // Try cookie
-    const cookie = request.cookies?.ung_at;
-    if (cookie) {
-      return cookie;
-    }
-
-    return null;
+    const cookie = request.cookies?.[ACCESS_COOKIE];
+    return typeof cookie === 'string' && cookie !== '' ? cookie : null;
   }
 }

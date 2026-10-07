@@ -1,34 +1,30 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { DatabaseModule } from '../database/database.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { AdminAuthController } from './admin-auth.controller.js';
-import { AdminUserService } from './admin-user.service.js';
 import { AdminAuthService } from './admin-auth.service.js';
+import { AdminSessionService } from './admin-session.service.js';
+import { AdminAuthEventService } from './admin-auth-event.service.js';
+import { AdminUserService } from './admin-user.service.js';
 import { AdminAuthGuard } from './guards/admin-auth.guard.js';
 import { PermissionGuard } from './guards/permission.guard.js';
-import { RoleGuard } from './guards/role.guard.js';
 
+/**
+ * Admin identity and RBAC (Backend PRD section 24). A separate trust boundary from
+ * consumer auth. Modules with admin endpoints import this module and use
+ * `@AdminAuth('PERMISSION_KEY')`.
+ */
 @Module({
-  imports: [
-    ConfigModule,
-    DatabaseModule,
-    JwtModule.register({}), // Uses global config
-  ],
+  imports: [AuthModule, JwtModule.register({})], // AuthModule: PasswordService
   controllers: [AdminAuthController],
   providers: [
+    AdminAuthEventService,
     AdminUserService,
+    AdminSessionService,
     AdminAuthService,
     AdminAuthGuard,
     PermissionGuard,
-    RoleGuard,
   ],
-  exports: [
-    AdminUserService,
-    AdminAuthService,
-    AdminAuthGuard,
-    PermissionGuard,
-    RoleGuard,
-  ],
+  exports: [AdminUserService, AdminSessionService, AdminAuthEventService, AdminAuthGuard, PermissionGuard],
 })
 export class AdminModule {}

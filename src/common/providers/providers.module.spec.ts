@@ -15,6 +15,7 @@ import {
   EMAIL_PROVIDER,
   PAYMENT_PROVIDER,
 } from './index.js';
+import { S3StorageProvider } from './s3-storage.provider.js';
 import {
   FakeOtpProvider,
   FakeKycProvider,
@@ -72,7 +73,6 @@ describe('ProvidersModule', () => {
   it.each([
     ['kyc', KYC_PROVIDER, 'KYC_PROVIDER=real'],
     ['sms', OTP_PROVIDER, 'SMS_PROVIDER=real'],
-    ['storage', STORAGE_PROVIDER, 'STORAGE_PROVIDER=real'],
     ['maps', MAPS_PROVIDER, 'MAPS_PROVIDER=real'],
     ['push', PUSH_PROVIDER, 'PUSH_PROVIDER=real'],
     ['email', EMAIL_PROVIDER, 'EMAIL_PROVIDER=real'],
@@ -85,6 +85,41 @@ describe('ProvidersModule', () => {
       void token;
     },
   );
+
+  it('fails fast when storage is "real" but the AWS settings are missing', async () => {
+    await expect(build({ ...allFake, storage: 'real' })).rejects.toThrow('STORAGE_PROVIDER=real');
+  });
+
+  it('builds the S3 provider when storage is "real" and the AWS settings are present', async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [
+            () => ({
+              providers: { ...allFake, storage: 'real' },
+              aws: { region: 'eu-west-1', bucket: 'b', accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret' },
+            }),
+          ],
+        }),
+        ProvidersModule.forRoot(),
+      ],
+    }).compile();
+
+    expect(module.get(STORAGE_PROVIDER)).toBeInstanceOf(S3StorageProvider);
+  });
+
+  it('signs the S3 upload URL with the declared type and size', async () => {
+    const s3 = new S3StorageProvider({ region: 'eu-west-1', bucket: 'b', accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret' });
+
+    const upload = await s3.createPresignedUpload({ key: 'media/u/p/1/original.jpg', contentType: 'image/jpeg', maxBytes: 1234, expiresInSeconds: 600 });
+
+    expect(upload.url).toContain('media/u/p/1/original.jpg');
+    expect(upload.url).toMatch(/X-Amz-SignedHeaders=[^&]*content-length/i);
+    expect(upload.url).toMatch(/X-Amz-SignedHeaders=[^&]*content-type/i);
+    expect(upload.url).toContain('X-Amz-Expires=600');
+  });
 
   it('records calls to fake providers', async () => {
     const module = await build(allFake);

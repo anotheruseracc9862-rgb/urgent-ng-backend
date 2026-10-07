@@ -21,6 +21,10 @@ import { AppThrottlerGuard } from './common/throttler/app-throttler.guard.js';
 import { AuditModule } from './audit/audit.module.js';
 import { ConfigStoreModule } from './config/config-store.module.js';
 import { QueueModule } from './queue/queue.module.js';
+import { AuthModule } from './auth/auth.module.js';
+import { AdminModule } from './admin/admin.module.js';
+import { MediaModule } from './media/media.module.js';
+import { ReferenceDataModule } from './reference-data/reference-data.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -70,6 +74,10 @@ const isTest = process.env.NODE_ENV === 'test';
     ConfigStoreModule,
     QueueModule,
     HealthModule,
+    AuthModule,
+    AdminModule,
+    ReferenceDataModule,
+    MediaModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

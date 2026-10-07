@@ -1,304 +1,237 @@
-import { Injectable, Logger, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConsentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import {
+  IDENTIFIER_TAKEN,
+  REGISTRATION_BLOCKED,
+  RESOURCE_NOT_FOUND,
+  VALIDATION_ERROR,
+} from '../common/constants/error-codes.js';
 import { BlocklistService } from './blocklist.service.js';
-import { OtpService, OtpPurpose } from './otp.service.js';
-import { RegisterDto, ConsentDto } from './dto/register.dto.js';
-import * as argon2 from 'argon2';
+import { OtpPurpose, OtpService } from './otp.service.js';
+import { PasswordService } from './password.service.js';
+import { PolicyService } from './policy.service.js';
+import { AuthAuditService, type RequestContext } from './auth-audit.service.js';
+import { maskIdentifier, type Identifier } from './identifier.js';
+
+export interface RegisterInput {
+  name: string;
+  phone?: string;
+  email?: string;
+  password: string;
+  consents: Array<{ type: ConsentType; version: string }>;
+}
+
+export interface RegisterResult {
+  userId: string;
+  /** Where the verification code was sent (phone when both were given). */
+  verifyVia: Identifier['kind'];
+  otpSent: boolean;
+}
 
 /**
- * Registration Service (P2-02)
- * Per PRD §9.2:
- * - Register with name, phone OR email, password
- * - Required policy consents with versions
- * - Blocklist check prevents registration
- * - Passwords hashed with Argon2id
- * - OTP verification required before user can post errands or submit offers
+ * Policies every new account must accept (Backend PRD 9.2, 9.6). Location sharing and
+ * marketing are optional consents and are never required.
  */
+export const REQUIRED_CONSENTS: ConsentType[] = [
+  ConsentType.TERMS_OF_SERVICE,
+  ConsentType.PRIVACY_POLICY,
+  ConsentType.SAFETY_POLICY,
+  ConsentType.PROHIBITED_ITEMS_POLICY,
+  ConsentType.OFFLINE_PAYMENT_TERMS,
+];
 
+/**
+ * Registration and identifier verification (Backend PRD 9.2).
+ *
+ * - Cheap checks (shape, required consents, blocklist, policy versions) run before
+ *   the expensive Argon2 hash.
+ * - Phone and email are unique among live accounts. If the holder never verified
+ *   anything and registered longer ago than an OTP lives, a new registration takes
+ *   the identifier over (the stale account is soft-deleted), so nobody can squat
+ *   someone else's number by registering it first.
+ * - A registration race is resolved by the database unique indexes (IDENTIFIER_TAKEN).
+ */
 @Injectable()
 export class RegistrationService {
   private readonly logger = new Logger(RegistrationService.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blocklistService: BlocklistService,
-    private readonly otpService: OtpService,
+    private readonly blocklist: BlocklistService,
+    private readonly otp: OtpService,
+    private readonly passwords: PasswordService,
+    private readonly policies: PolicyService,
+    private readonly businessConfig: BusinessConfigService,
+    private readonly audit: AuthAuditService,
   ) {}
 
-  /**
-   * Register a new user
-   * Returns userId and sends OTP to the provided phone/email
-   */
-  async register(dto: RegisterDto, ipAddress?: string): Promise<{ userId: string; otpSent: boolean }> {
-    // Validate that at least one identifier is provided
-    const validationError = RegisterDto.validate(dto);
-    if (validationError) {
-      throw new BadRequestException(validationError);
+  async register(input: RegisterInput, ctx: RequestContext = {}): Promise<RegisterResult> {
+    if (!input.phone && !input.email) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: 'Provide a phone number or an email address.',
+      });
     }
 
-    // Blocklist check
-    if (dto.phone) {
-      const isBlocked = await this.blocklistService.isPhoneBlocked(dto.phone);
-      if (isBlocked) {
-        this.logger.warn({
-          message: 'Registration blocked - phone on blocklist',
-          phone: this.maskIdentifier(dto.phone),
-          ipAddress,
+    const accepted = new Set(input.consents.map((consent) => consent.type));
+    const missing = REQUIRED_CONSENTS.filter((type) => !accepted.has(type));
+    if (missing.length > 0) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: 'All required policies must be accepted.',
+        details: { missingConsents: missing },
+      });
+    }
+
+    if (
+      (input.phone && (await this.blocklist.isPhoneBlocked(input.phone))) ||
+      (input.email && (await this.blocklist.isEmailBlocked(input.email)))
+    ) {
+      await this.audit.record({
+        action: 'auth.register.blocked',
+        metadata: { identifier: maskIdentifier((input.phone ?? input.email) as string) },
+        ctx,
+      });
+      throw DomainException.of(REGISTRATION_BLOCKED);
+    }
+
+    for (const consent of input.consents) {
+      const published = await this.policies.findPublished(consent.type, consent.version);
+      if (!published) {
+        throw DomainException.of(VALIDATION_ERROR, {
+          message: 'A policy version is not valid.',
+          details: { consent },
         });
-        throw new BadRequestException('REGISTRATION_BLOCKED');
       }
     }
 
-    if (dto.email) {
-      const isBlocked = await this.blocklistService.isEmailBlocked(dto.email);
-      if (isBlocked) {
-        this.logger.warn({
-          message: 'Registration blocked - email on blocklist',
-          email: this.maskIdentifier(dto.email),
-          ipAddress,
-        });
-        throw new BadRequestException('REGISTRATION_BLOCKED');
-      }
-    }
+    const passwordHash = await this.passwords.hash(input.password);
+    const userId = await this.createAccount(input, passwordHash, ctx);
 
-    // Check for existing user with same phone or email
-    const existingUser = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          dto.phone ? { phoneE164: dto.phone } : {},
-          dto.email ? { email: dto.email } : {},
-        ],
-        deletedAt: null,
-      },
-    });
-
-    if (existingUser) {
-      if (existingUser.phoneE164 === dto.phone) {
-        throw new ConflictException('PHONE_ALREADY_REGISTERED');
-      }
-      if (existingUser.email === dto.email) {
-        throw new ConflictException('EMAIL_ALREADY_REGISTERED');
-      }
-    }
-
-    // Hash password with Argon2id
-    const passwordHash = await argon2.hash(dto.password, {
-      type: argon2.argon2id,
-      memoryCost: 65536, // 64 MB
-      timeCost: 3,
-      parallelism: 4,
-    });
-
-    // Verify required policy versions exist
-    const requiredPolicyTypes = ['TERMS_OF_SERVICE', 'PRIVACY_POLICY', 'SAFETY_POLICY', 'PROHIBITED_ITEMS_POLICY'];
-    const missingPolicies = requiredPolicyTypes.filter(
-      (type) => !dto.consents.find((c: ConsentDto) => c.type === type),
-    );
-
-    if (missingPolicies.length > 0) {
-      throw new BadRequestException({
-        error: 'MISSING_REQUIRED_CONSENTS',
-        missingPolicies,
-      });
-    }
-
-    // Verify policy versions exist in database
-    const policyVersions = await this.prisma.policyVersion.findMany({
-      where: {
-        type: { in: dto.consents.map((c: ConsentDto) => c.type) as any },
-        version: { in: dto.consents.map((c: ConsentDto) => c.version) },
-      },
-    });
-
-    if (policyVersions.length !== dto.consents.length) {
-      throw new BadRequestException('INVALID_POLICY_VERSION');
-    }
-
-    // Create user, profile, and consent records in a transaction
-    const result = await this.prisma.$transaction(async (tx: any) => {
-      // Split name into first and last name (simple split on space)
-      const nameParts = dto.name.trim().split(' ');
-      const firstName = nameParts[0];
-      const lastName = nameParts.slice(1).join(' ') || firstName;
-
-      // Create user
-      const user = await tx.user.create({
-        data: {
-          name: dto.name,
-          firstName,
-          lastName,
-          phoneE164: dto.phone || null,
-          email: dto.email || null,
-          passwordHash,
-          status: 'ACTIVE',
-          phoneVerifiedAt: null,
-          emailVerifiedAt: null,
-        },
-      });
-
-      // Create profile
-      await tx.profile.create({
-        data: {
-          userId: user.id,
-          photoMediaId: null,
-          homePoint: null,
-          homeArea: null,
-        },
-      });
-
-      // Create consent records
-      await tx.consentRecord.createMany({
-        data: dto.consents.map((consent: ConsentDto) => ({
-          userId: user.id,
-          consentType: consent.type,
-          documentVersion: consent.version,
-          ipAddress: ipAddress || null,
-        })),
-      });
-
-      return user;
-    });
-
-    this.logger.log({
-      message: 'User registered',
-      userId: result.id,
-      phone: dto.phone ? this.maskIdentifier(dto.phone) : undefined,
-      email: dto.email ? this.maskIdentifier(dto.email) : undefined,
-    });
-
-    // Send OTP for verification
-    const identifier = dto.phone || dto.email!;
-    const otpResult = await this.otpService.sendOtp(
-      identifier,
-      OtpPurpose.REGISTRATION,
-      ipAddress,
-    );
-
-    if (!otpResult.success) {
-      this.logger.warn({
-        message: 'Failed to send OTP after registration',
-        userId: result.id,
-        error: otpResult.error,
-      });
-    }
-
-    return {
-      userId: result.id,
-      otpSent: otpResult.success,
+    const verifyVia: Identifier['kind'] = input.phone ? 'phone' : 'email';
+    const identifier: Identifier = {
+      kind: verifyVia,
+      value: (input.phone ?? input.email) as string,
     };
+
+    let otpSent = true;
+    try {
+      await this.otp.send(identifier, OtpPurpose.REGISTRATION, ctx);
+    } catch (error) {
+      otpSent = false;
+      this.logger.warn(`Could not send the registration code to user ${userId}: ${String(error)}`);
+    }
+
+    await this.audit.record({
+      action: 'auth.register',
+      actorId: userId,
+      metadata: { identifier: maskIdentifier(identifier.value), channel: verifyVia },
+      ctx,
+    });
+
+    return { userId, verifyVia, otpSent };
+  }
+
+  /** Re-send the registration code. Always succeeds from the caller's view (no account probing). */
+  async resend(identifier: Identifier, ctx: RequestContext = {}): Promise<void> {
+    const user = await this.prisma.client.user.findFirst({
+      where:
+        identifier.kind === 'phone'
+          ? { phoneE164: identifier.value, phoneVerifiedAt: null }
+          : { email: identifier.value, emailVerifiedAt: null },
+      select: { id: true },
+    });
+    await this.otp.send(identifier, OtpPurpose.REGISTRATION, ctx, { deliver: Boolean(user) });
+  }
+
+  /** Check the code, then mark the phone or email as verified. Returns the user id. */
+  async verify(identifier: Identifier, code: string, ctx: RequestContext = {}): Promise<string> {
+    await this.otp.verify(identifier, code, OtpPurpose.REGISTRATION, ctx);
+
+    const column = identifier.kind === 'phone' ? Prisma.sql`phone_e164` : Prisma.sql`email`;
+    const verified = identifier.kind === 'phone' ? Prisma.sql`phone_verified_at` : Prisma.sql`email_verified_at`;
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE users SET ${verified} = COALESCE(${verified}, now())
+      WHERE ${column} = ${identifier.value} AND deleted_at IS NULL
+      RETURNING id
+    `;
+    if (rows.length === 0) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
+    }
+
+    await this.audit.record({
+      action: 'auth.identifier.verified',
+      actorId: rows[0].id,
+      metadata: { channel: identifier.kind },
+      ctx,
+    });
+    return rows[0].id;
+  }
+
+  private async createAccount(
+    input: RegisterInput,
+    passwordHash: string,
+    ctx: RequestContext,
+  ): Promise<string> {
+    const otpMinutes = await this.businessConfig.get('OTP_TTL_MINUTES');
+    const [firstName, ...rest] = input.name.trim().split(/\s+/);
+    const lastName = rest.join(' ') || firstName;
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await this.releaseStaleUnverified(tx, input, otpMinutes);
+
+        const user = await tx.user.create({
+          data: {
+            name: input.name.trim(),
+            firstName,
+            lastName,
+            phoneE164: input.phone ?? null,
+            email: input.email ?? null,
+            passwordHash,
+            status: 'ACTIVE',
+          },
+          select: { id: true },
+        });
+        await tx.profile.create({ data: { userId: user.id } });
+
+        for (const consent of input.consents) {
+          await tx.$executeRaw`
+            INSERT INTO consent_records (user_id, consent_type, document_version, accepted_at, ip_address, user_agent)
+            VALUES (${user.id}::uuid, ${consent.type}::"ConsentType", ${consent.version}, now(),
+                    ${ctx.ip ?? null}::inet, ${ctx.userAgent ?? null})
+          `;
+        }
+        return user.id;
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw DomainException.of(IDENTIFIER_TAKEN);
+      }
+      throw error;
+    }
   }
 
   /**
-   * Verify registration OTP and mark identifier as verified
-   * This should be called after registration to verify the user's phone or email
+   * Free an identifier held by an account that never verified anything and is older
+   * than an OTP lifetime. A verified or recent account keeps it (the insert then
+   * fails on the unique index and the caller gets IDENTIFIER_TAKEN).
    */
-  async verifyRegistrationOtp(
-    userId: string,
-    identifier: string,
-    code: string,
-  ): Promise<{ success: boolean; error?: string }> {
-    const verifyResult = await this.otpService.verifyOtp(
-      identifier,
-      code,
-      OtpPurpose.REGISTRATION,
-    );
-
-    if (!verifyResult.success) {
-      return verifyResult;
-    }
-
-    // Update user's verification status
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      return { success: false, error: 'USER_NOT_FOUND' };
-    }
-
-    // Determine if identifier is phone or email
-    const isPhone = identifier.startsWith('+');
-    const isEmail = identifier.includes('@');
-
-    if (isPhone && user.phoneE164 === identifier) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { phoneVerifiedAt: new Date() },
-      });
-    } else if (isEmail && user.email === identifier) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { emailVerifiedAt: new Date() },
-      });
-    } else {
-      return { success: false, error: 'IDENTIFIER_MISMATCH' };
-    }
-
-    this.logger.log({
-      message: 'Identifier verified',
-      userId,
-      identifier: this.maskIdentifier(identifier),
-    });
-
-    return { success: true };
-  }
-
-  /**
-   * Verify identifier for existing user (phone/email verification after registration)
-   * Finds the user by identifier and marks it as verified
-   */
-  async verifyIdentifierByLookup(
-    identifier: string,
-    code: string,
-    purpose: OtpPurpose,
-  ): Promise<{ success: boolean; userId?: string; error?: string }> {
-    // Verify the OTP first
-    const verifyResult = await this.otpService.verifyOtp(identifier, code, purpose);
-
-    if (!verifyResult.success) {
-      return { success: false, error: verifyResult.error };
-    }
-
-    // Find user by identifier
-    const isPhone = identifier.startsWith('+');
-    const user = await this.prisma.user.findFirst({
-      where: isPhone
-        ? { phoneE164: identifier, deletedAt: null }
-        : { email: identifier, deletedAt: null },
-    });
-
-    if (!user) {
-      return { success: false, error: 'USER_NOT_FOUND' };
-    }
-
-    // Mark as verified
-    if (isPhone) {
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { phoneVerifiedAt: new Date() },
-      });
-    } else {
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { emailVerifiedAt: new Date() },
-      });
-    }
-
-    this.logger.log({
-      message: 'Identifier verified via lookup',
-      userId: user.id,
-      identifier: this.maskIdentifier(identifier),
-      purpose,
-    });
-
-    return { success: true, userId: user.id };
-  }
-
-  /**
-   * Mask identifier for logging (show first 2 and last 2 characters)
-   */
-  private maskIdentifier(identifier: string): string {
-    if (identifier.length <= 4) return '****';
-    return identifier.slice(0, 2) + '****' + identifier.slice(-2);
+  private async releaseStaleUnverified(
+    tx: Prisma.TransactionClient,
+    input: RegisterInput,
+    otpMinutes: number,
+  ): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE users SET status = 'DELETED'::"UserStatus", deleted_at = now()
+      WHERE deleted_at IS NULL
+        AND phone_verified_at IS NULL AND email_verified_at IS NULL
+        AND created_at < now() - make_interval(mins => ${otpMinutes}::int)
+        AND (
+          (${input.phone ?? null}::text IS NOT NULL AND phone_e164 = ${input.phone ?? null})
+          OR (${input.email ?? null}::text IS NOT NULL AND email = ${input.email ?? null})
+        )
+    `;
   }
 }

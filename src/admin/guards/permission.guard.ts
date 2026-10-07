@@ -1,55 +1,33 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException, SetMetadata } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Request } from 'express';
-import type { AuthenticatedAdmin } from '../decorators/current-admin.decorator.js';
+import { DomainException } from '../../common/exceptions/domain.exception.js';
+import { AUTH_REQUIRED, FORBIDDEN } from '../../common/constants/error-codes.js';
+import type { AdminPermissionKey } from '../admin.permissions.js';
+import type { AuthenticatedAdmin } from '../decorators/admin-auth.decorator.js';
 
-export const REQUIRE_PERMISSION_KEY = 'requirePermission';
+export const REQUIRED_PERMISSIONS_KEY = 'requiredAdminPermissions';
 
-/**
- * Decorator to require a specific permission
- * Use with AdminAuthGuard and PermissionGuard
- * 
- * @example
- * @RequirePermission('users.manage')
- * @UseGuards(AdminAuthGuard, PermissionGuard)
- * async manageUsers() { ... }
- */
-export const RequirePermission = (permission: string) =>
-  SetMetadata(REQUIRE_PERMISSION_KEY, permission);
-
-/**
- * Permission-based authorization guard
- * Checks if admin has the required permission
- * Must be used after AdminAuthGuard
- */
+/** Runs after AdminAuthGuard. Passes only when the admin holds every required permission. */
 @Injectable()
 export class PermissionGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const requiredPermission = this.reflector.get<string>(
-      REQUIRE_PERMISSION_KEY,
-      context.getHandler(),
-    );
+    const required =
+      this.reflector.getAllAndOverride<AdminPermissionKey[] | undefined>(REQUIRED_PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
 
-    if (!requiredPermission) {
-      // No permission required
-      return true;
-    }
-
-    const request = context.switchToHttp().getRequest<Request>();
-    const admin = (request as any).admin as AuthenticatedAdmin | undefined;
-
+    const admin: AuthenticatedAdmin | undefined = context.switchToHttp().getRequest().admin;
     if (!admin) {
-      throw new ForbiddenException('Admin not authenticated');
+      throw DomainException.of(AUTH_REQUIRED);
     }
 
-    if (!admin.permissions.includes(requiredPermission)) {
-      throw new ForbiddenException(
-        `Missing required permission: ${requiredPermission}`,
-      );
+    const missing = required.filter((permission) => !admin.permissions.includes(permission));
+    if (missing.length > 0) {
+      throw DomainException.of(FORBIDDEN, { details: { missingPermissions: missing } });
     }
-
     return true;
   }
 }

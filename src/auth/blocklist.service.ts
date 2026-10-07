@@ -1,132 +1,80 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../database/prisma.service.js';
-import { createHmac } from 'crypto';
 import { ConfigService } from '@nestjs/config';
+import { BlocklistType } from '@prisma/client';
+import { PrismaService } from '../database/prisma.service.js';
+import { hmacSign } from '../common/utils/crypto.helper.js';
+import { normaliseEmail } from './identifier.js';
 
 /**
- * Blocklist Service (P2-02)
- * Per PRD §21.7:
- * - Blocklist prevents registration, verification, and OTP flows
- * - Stores phone, email, and identity HMAC (hashed)
- * - Prevents duplicate runner accounts for same verified phone/identity
+ * Blocklist (Backend PRD 21.7). Entries hold only a keyed hash of the phone, email
+ * or identity, never the value itself. Removing an entry is a soft delete.
  */
-
-export enum BlocklistEntryType {
-  PHONE = 'PHONE',
-  EMAIL = 'EMAIL',
-  IDENTITY_HMAC = 'IDENTITY_HMAC',
-}
-
-export enum BlocklistReason {
-  PERMANENT_SUSPENSION = 'PERMANENT_SUSPENSION',
-  DUPLICATE_IDENTITY = 'DUPLICATE_IDENTITY',
-  FRAUD = 'FRAUD',
-  ABUSE = 'ABUSE',
-  OTHER = 'OTHER',
-}
-
 @Injectable()
 export class BlocklistService {
-  private readonly hmacSecret: string;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
-  ) {
-    this.hmacSecret = this.config.getOrThrow<string>('security.blocklistHmacSecret');
+  ) {}
+
+  isPhoneBlocked(phoneE164: string): Promise<boolean> {
+    return this.exists(BlocklistType.PHONE, this.hash('phone', phoneE164));
   }
 
-  /**
-   * Check if a phone number is blocklisted
-   */
-  async isPhoneBlocked(phone: string): Promise<boolean> {
-    const valueHash = this.hashValue(phone);
-    const entry = await this.prisma.blocklistEntry.findFirst({
-      where: {
-        type: BlocklistEntryType.PHONE,
-        valueHash,
-        deletedAt: null,
-      },
-    });
-    return entry !== null;
+  isEmailBlocked(email: string): Promise<boolean> {
+    return this.exists(BlocklistType.EMAIL, this.hash('email', normaliseEmail(email)));
   }
 
-  /**
-   * Check if an email is blocklisted
-   */
-  async isEmailBlocked(email: string): Promise<boolean> {
-    const valueHash = this.hashValue(email.toLowerCase());
-    const entry = await this.prisma.blocklistEntry.findFirst({
-      where: {
-        type: BlocklistEntryType.EMAIL,
-        valueHash,
-        deletedAt: null,
-      },
-    });
-    return entry !== null;
+  isIdentityBlocked(identityHash: string): Promise<boolean> {
+    return this.exists(BlocklistType.IDENTITY_HMAC, identityHash);
   }
 
-  /**
-   * Check if an identity hash is blocklisted
-   */
-  async isIdentityBlocked(identityHash: string): Promise<boolean> {
-    const entry = await this.prisma.blocklistEntry.findFirst({
-      where: {
-        type: BlocklistEntryType.IDENTITY_HMAC,
-        valueHash: identityHash,
-        deletedAt: null,
-      },
-    });
-    return entry !== null;
+  /** Add (idempotent): blocking the same value twice keeps one live entry. */
+  blockPhone(phoneE164: string, reason: string): Promise<void> {
+    return this.add(BlocklistType.PHONE, this.hash('phone', phoneE164), reason);
   }
 
-  /**
-   * Add a phone to the blocklist
-   */
-  async blockPhone(phone: string, reason: BlocklistReason, adminId?: string): Promise<void> {
-    const valueHash = this.hashValue(phone);
-    await this.prisma.blocklistEntry.create({
-      data: {
-        type: BlocklistEntryType.PHONE,
-        valueHash,
-        reason,
-      },
-    });
+  blockEmail(email: string, reason: string): Promise<void> {
+    return this.add(BlocklistType.EMAIL, this.hash('email', normaliseEmail(email)), reason);
   }
 
-  /**
-   * Add an email to the blocklist
-   */
-  async blockEmail(email: string, reason: BlocklistReason, adminId?: string): Promise<void> {
-    const valueHash = this.hashValue(email.toLowerCase());
-    await this.prisma.blocklistEntry.create({
-      data: {
-        type: BlocklistEntryType.EMAIL,
-        valueHash,
-        reason,
-      },
-    });
+  blockIdentity(identityHash: string, reason: string): Promise<void> {
+    return this.add(BlocklistType.IDENTITY_HMAC, identityHash, reason);
   }
 
-  /**
-   * Add an identity hash to the blocklist
-   */
-  async blockIdentity(identityHash: string, reason: BlocklistReason, adminId?: string): Promise<void> {
-    await this.prisma.blocklistEntry.create({
-      data: {
-        type: BlocklistEntryType.IDENTITY_HMAC,
-        valueHash: identityHash,
-        reason,
-      },
-    });
+  async unblockPhone(phoneE164: string): Promise<void> {
+    await this.remove(BlocklistType.PHONE, this.hash('phone', phoneE164));
   }
 
-  /**
-   * Hash a value using HMAC-SHA256
-   */
-  private hashValue(value: string): string {
-    return createHmac('sha256', this.hmacSecret)
-      .update(value)
-      .digest('hex');
+  async unblockEmail(email: string): Promise<void> {
+    await this.remove(BlocklistType.EMAIL, this.hash('email', normaliseEmail(email)));
+  }
+
+  private async exists(type: BlocklistType, valueHash: string): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<Array<{ one: number }>>`
+      SELECT 1 AS one FROM blocklist_entries
+      WHERE type = ${type}::"BlocklistType" AND value_hash = ${valueHash}
+        AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+      LIMIT 1
+    `;
+    return rows.length > 0;
+  }
+
+  private async add(type: BlocklistType, valueHash: string, reason: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      INSERT INTO blocklist_entries (type, value_hash, reason)
+      VALUES (${type}::"BlocklistType", ${valueHash}, ${reason})
+      ON CONFLICT (type, value_hash) WHERE deleted_at IS NULL DO NOTHING
+    `;
+  }
+
+  private async remove(type: BlocklistType, valueHash: string): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE blocklist_entries SET deleted_at = now()
+      WHERE type = ${type}::"BlocklistType" AND value_hash = ${valueHash} AND deleted_at IS NULL
+    `;
+  }
+
+  private hash(kind: 'phone' | 'email', value: string): string {
+    return hmacSign(`blocklist:${kind}:${value}`, this.config.getOrThrow<string>('security.hmacSecret'));
   }
 }
