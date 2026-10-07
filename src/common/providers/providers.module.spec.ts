@@ -16,6 +16,7 @@ import {
   PAYMENT_PROVIDER,
 } from './index.js';
 import { S3StorageProvider } from './s3-storage.provider.js';
+import { DojahKycProvider } from './dojah-kyc.provider.js';
 import {
   FakeOtpProvider,
   FakeKycProvider,
@@ -71,7 +72,6 @@ describe('ProvidersModule', () => {
   });
 
   it.each([
-    ['kyc', KYC_PROVIDER, 'KYC_PROVIDER=real'],
     ['sms', OTP_PROVIDER, 'SMS_PROVIDER=real'],
     ['maps', MAPS_PROVIDER, 'MAPS_PROVIDER=real'],
     ['push', PUSH_PROVIDER, 'PUSH_PROVIDER=real'],
@@ -119,6 +119,25 @@ describe('ProvidersModule', () => {
     expect(upload.url).toMatch(/X-Amz-SignedHeaders=[^&]*content-length/i);
     expect(upload.url).toMatch(/X-Amz-SignedHeaders=[^&]*content-type/i);
     expect(upload.url).toContain('X-Amz-Expires=600');
+  });
+
+  it('fails fast when KYC is "real" but the Dojah settings are missing', async () => {
+    await expect(build({ ...allFake, kyc: 'real' })).rejects.toThrow('KYC_PROVIDER=real');
+  });
+
+  it('builds the Dojah provider when KYC is "real" and the settings are present', async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [() => ({ providers: { ...allFake, kyc: 'real' }, dojah: { appId: 'a', secretKey: 's', baseUrl: 'https://sandbox.dojah.io' } })],
+        }),
+        ProvidersModule.forRoot(),
+      ],
+    }).compile();
+
+    expect(module.get(KYC_PROVIDER)).toBeInstanceOf(DojahKycProvider);
   });
 
   it('records calls to fake providers', async () => {

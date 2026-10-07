@@ -12,7 +12,9 @@ export type KycFailureReason =
   | 'DOCUMENT_INVALID'
   | 'INSUFFICIENT_DATA'
   | 'PROVIDER_ERROR'
-  | 'PROVIDER_TIMEOUT';
+  | 'PROVIDER_TIMEOUT'
+  /** Set by the verification service when the identity is already verified on another account. */
+  | 'DUPLICATE_IDENTITY';
 
 export interface KycVerifyRequest {
   /** The NIN. Transit-only: never persist, log or return it. */
@@ -21,6 +23,8 @@ export interface KycVerifyRequest {
   selfieImageBase64: string;
   /** Selfie match threshold, 50 to 100. Defaults to the configured value. */
   threshold?: number;
+  /** Give up after this many milliseconds and report PROVIDER_TIMEOUT. */
+  timeoutMs?: number;
 }
 
 export interface KycVerifyResult {

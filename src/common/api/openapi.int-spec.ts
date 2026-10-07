@@ -5,7 +5,7 @@ import type { OpenAPIObject } from '@nestjs/swagger';
 import { createTestApp } from '../../test/app.factory.js';
 import { cleanAll } from '../../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../../test/auth.helper.js';
-import { makeImage, requestAndUpload } from '../../test/media.helper.js';
+import { makeImage, readyMedia, requestAndUpload } from '../../test/media.helper.js';
 import { MediaProcessingService } from '../../media/media-processing.service.js';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -91,6 +91,17 @@ describe('OpenAPI document', () => {
       '/api/v1/users/{id}/block',
       '/api/v1/reference/categories',
       '/api/v1/admin/auth/mfa/verify',
+      '/api/v1/media/uploads',
+      '/api/v1/media/{id}/confirm',
+      '/api/v1/media/{id}/url',
+      '/api/v1/me/photo',
+      '/api/v1/admin/media/{id}/url',
+      '/api/v1/verification',
+      '/api/v1/verification/attempts',
+      '/api/v1/verification/attempts/{id}',
+      '/api/v1/runner/profile',
+      '/api/v1/runner/availability',
+      '/api/v1/runner/eligibility',
     ]) {
       expect(paths).toContain(expected);
     }
@@ -219,6 +230,42 @@ describe('OpenAPI document', () => {
         .send({ mediaId })
         .expect(200);
       expectMatches(photo.body.data, dataSchema('/api/v1/me/photo', 'put', '200'), 'me photo');
+    });
+
+    it('verification and runner endpoints', async () => {
+      const user = await signedInUser(app);
+      const selfie = await readyMedia(app, user.accessToken, 'VERIFICATION_INPUT');
+
+      const overview = await get('/verification', user.accessToken).expect(200);
+      expectMatches(overview.body.data, dataSchema('/api/v1/verification', 'get', '200'), 'verification overview');
+      const attempt = await request(app.getHttpServer())
+        .post(`${API}/verification/attempts`)
+        .set(...bearer(user.accessToken))
+        .set('Idempotency-Key', 'contract-test-key-2')
+        .send({ nin: '12345670000', selfieMediaId: selfie })
+        .expect(201);
+      expectMatches(attempt.body.data, dataSchema('/api/v1/verification/attempts', 'post', '201'), 'verification attempt');
+      const one = await get(`/verification/attempts/${attempt.body.data.id}`, user.accessToken).expect(200);
+      expectMatches(one.body.data, dataSchema('/api/v1/verification/attempts/{id}', 'get', '200'), 'attempt by id');
+      const after = await get('/verification', user.accessToken).expect(200);
+      expectMatches(after.body.data, dataSchema('/api/v1/verification', 'get', '200'), 'verification overview after attempt');
+
+      const profile = await request(app.getHttpServer())
+        .put(`${API}/runner/profile`)
+        .set(...bearer(user.accessToken))
+        .send({ transport: 'CAR', areaCenter: { lat: 6.5, lng: 3.4 }, areaRadiusKm: 7 })
+        .expect(200);
+      expectMatches(profile.body.data, dataSchema('/api/v1/runner/profile', 'put', '200'), 'runner profile put');
+      const read = await get('/runner/profile', user.accessToken).expect(200);
+      expectMatches(read.body.data, dataSchema('/api/v1/runner/profile', 'get', '200'), 'runner profile get');
+      const availability = await request(app.getHttpServer())
+        .put(`${API}/runner/availability`)
+        .set(...bearer(user.accessToken))
+        .send({ availability: 'AVAILABLE' })
+        .expect(200);
+      expectMatches(availability.body.data, dataSchema('/api/v1/runner/availability', 'put', '200'), 'availability');
+      const eligibility = await get('/runner/eligibility', user.accessToken).expect(200);
+      expectMatches(eligibility.body.data, dataSchema('/api/v1/runner/eligibility', 'get', '200'), 'eligibility');
     });
 
     it('login (web and mobile), register and refresh', async () => {

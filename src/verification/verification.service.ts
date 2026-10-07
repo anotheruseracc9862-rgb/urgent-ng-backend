@@ -1,0 +1,335 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AuditActorType, type Prisma, type VerificationFailureReason } from '@prisma/client';
+import { PrismaService } from '../database/prisma.service.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { OutboxService } from '../queue/outbox.service.js';
+import { MediaService } from '../media/media.service.js';
+import { KYC_PROVIDER, type IKycProvider, type KycVerifyResult } from '../common/providers/kyc.provider.js';
+import { STORAGE_PROVIDER, type IStorageProvider } from '../common/providers/storage.provider.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { hmacSign } from '../common/utils/crypto.helper.js';
+import {
+  FORBIDDEN,
+  RATE_LIMITED,
+  RESOURCE_CONFLICT,
+  RESOURCE_NOT_FOUND,
+  VERIFICATION_FEE_REQUIRED,
+  VERIFICATION_PENDING,
+} from '../common/constants/error-codes.js';
+import type { RequestContext } from '../auth/auth-audit.service.js';
+import { toAttemptView, VerificationStatusService, type AttemptView } from './verification-status.service.js';
+import { isIdentityConflict } from './unique-violation.js';
+import { displayStatus, type DisplayStatus } from './verification.state.js';
+
+export interface VerificationOverview {
+  status: string;
+  displayStatus: DisplayStatus;
+  /** True only while a valid (not expired, not revoked) verification exists. */
+  verified: boolean;
+  expiresAt: Date | null;
+  phoneVerified: boolean;
+  latestAttempt: AttemptView | null;
+  /** Attempts left before the cooldown applies. */
+  attemptsRemaining: number;
+  /** When the next attempt is allowed, if the runner is waiting. */
+  nextAttemptAt: Date | null;
+  feeRequired: boolean;
+  canStart: boolean;
+}
+
+interface Allowance {
+  limit: number;
+  used: number;
+  remaining: number;
+  nextAttemptAt: Date | null;
+}
+
+/**
+ * Runner identity verification (Backend PRD 10.2 to 10.4): NIN plus selfie plus a verified
+ * phone. The NIN is held in memory for the provider call only: it is never stored, logged or
+ * returned. What is kept: provider reference, result, failure reason, masked attributes and a
+ * keyed hash of the identity (one verified account per identity).
+ */
+@Injectable()
+export class VerificationService {
+  private readonly logger = new Logger(VerificationService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: BusinessConfigService,
+    private readonly appConfig: ConfigService,
+    private readonly audit: AuditService,
+    private readonly outbox: OutboxService,
+    private readonly media: MediaService,
+    private readonly status: VerificationStatusService,
+    @Inject(KYC_PROVIDER) private readonly kyc: IKycProvider,
+    @Inject(STORAGE_PROVIDER) private readonly storage: IStorageProvider,
+  ) {}
+
+  async overview(userId: string): Promise<VerificationOverview> {
+    const [latest, verified, user, fee] = await Promise.all([
+      this.status.latest(userId),
+      this.status.isVerified(userId),
+      this.prisma.client.user.findUnique({ where: { id: userId }, select: { phoneVerifiedAt: true } }),
+      this.config.get('VERIFICATION_FEE'),
+    ]);
+    const allowance = await this.allowance(this.prisma, userId);
+    const pending = latest?.status === 'PENDING' || latest?.status === 'REVIEW_REQUIRED';
+    const phoneVerified = Boolean(user?.phoneVerifiedAt);
+
+    // A VERIFIED attempt past its expiry date is EXPIRED, even before the expiry job runs.
+    const effective = latest?.status === 'VERIFIED' && !verified ? 'EXPIRED' : (latest?.status ?? 'NOT_STARTED');
+    const verifiedAttempt = verified ? latest : null;
+
+    return {
+      status: effective,
+      displayStatus: displayStatus(effective),
+      verified,
+      expiresAt: verifiedAttempt?.expiresAt ?? null,
+      phoneVerified,
+      latestAttempt: latest ? toAttemptView(latest) : null,
+      attemptsRemaining: fee > 0 ? 0 : allowance.remaining,
+      nextAttemptAt: allowance.nextAttemptAt,
+      feeRequired: fee > 0,
+      canStart: phoneVerified && !verified && !pending && fee === 0 && allowance.remaining > 0,
+    };
+  }
+
+  async getAttempt(userId: string, attemptId: string): Promise<AttemptView> {
+    const attempt = await this.prisma.client.verificationAttempt.findFirst({ where: { id: attemptId, userId } });
+    if (!attempt) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
+    }
+    return toAttemptView(attempt);
+  }
+
+  /**
+   * Run one verification attempt. Answers with the finished attempt: the provider call is
+   * synchronous. A provider failure is an answer too (status FAILED), not an error response.
+   */
+  async startAttempt(
+    userId: string,
+    input: { nin: string; selfieMediaId: string },
+    ctx: RequestContext = {},
+  ): Promise<AttemptView> {
+    const user = await this.prisma.client.user.findUnique({ where: { id: userId }, select: { phoneVerifiedAt: true } });
+    if (!user?.phoneVerifiedAt) {
+      throw DomainException.of(FORBIDDEN, {
+        message: 'Verify your phone number before identity verification.',
+        details: { reason: 'PHONE_NOT_VERIFIED' },
+      });
+    }
+    const selfie = await this.media.requireReadyOwned(userId, input.selfieMediaId, 'VERIFICATION_INPUT');
+    const attemptId = await this.open(userId, selfie.id);
+
+    const result = await this.callProvider(selfie.storageKey, input.nin);
+    return this.complete(attemptId, userId, result, input.nin, ctx);
+  }
+
+  /** Attempts left in the current window (Backend PRD 10.2 retries). */
+  async allowance(client: Prisma.TransactionClient | PrismaService, userId: string): Promise<Allowance> {
+    const [limit, cooldownHours] = await Promise.all([
+      this.config.get('VERIFICATION_ATTEMPTS_PER_FEE'),
+      this.config.get('VERIFICATION_RETRY_COOLDOWN_HOURS'),
+    ]);
+    const rows = await client.$queryRaw<Array<{ free_at: Date }>>`
+      SELECT completed_at + make_interval(hours => ${cooldownHours}::int) AS free_at
+      FROM verification_attempts
+      WHERE user_id = ${userId}::uuid
+        AND status = 'FAILED'::"VerificationStatus"
+        AND counts_against_allowance
+        AND deleted_at IS NULL
+        AND completed_at > now() - make_interval(hours => ${cooldownHours}::int)
+      ORDER BY completed_at DESC
+      LIMIT 50
+    `;
+    const used = rows.length;
+    return {
+      limit,
+      used,
+      remaining: Math.max(0, limit - used),
+      // The window slides: the attempt slot returns when the `limit`-th most recent failure ages out.
+      nextAttemptAt: used >= limit ? rows[limit - 1].free_at : null,
+    };
+  }
+
+  /** Create the PENDING row. One attempt in flight per user, enforced by a lock and by the database. */
+  private async open(userId: string, selfieMediaId: string): Promise<string> {
+    const fee = await this.config.get('VERIFICATION_FEE');
+    const provider = this.appConfig.get<string>('providers.kyc') === 'real' ? 'dojah' : 'fake';
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`verification:${userId}`}))`;
+
+      const state = await tx.$queryRaw<Array<{ verified: boolean; pending: boolean; attempts: number }>>`
+        SELECT
+          EXISTS (SELECT 1 FROM verification_attempts WHERE user_id = ${userId}::uuid AND status = 'VERIFIED'
+                  AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS verified,
+          EXISTS (SELECT 1 FROM verification_attempts WHERE user_id = ${userId}::uuid
+                  AND status IN ('PENDING', 'REVIEW_REQUIRED') AND deleted_at IS NULL) AS pending,
+          (SELECT count(*)::int FROM verification_attempts WHERE user_id = ${userId}::uuid) AS attempts
+      `;
+      if (state[0].verified) {
+        throw DomainException.of(RESOURCE_CONFLICT, { message: 'You are already verified.' });
+      }
+      if (state[0].pending) {
+        throw DomainException.of(VERIFICATION_PENDING);
+      }
+      if (fee > 0) {
+        // The paid path (an Order granting VERIFICATION_ATTEMPT_ALLOWANCE) arrives with billing.
+        throw DomainException.of(VERIFICATION_FEE_REQUIRED);
+      }
+      const allowance = await this.allowance(tx, userId);
+      if (allowance.remaining === 0) {
+        throw DomainException.of(RATE_LIMITED, {
+          message: 'Too many failed verification attempts. Try again later.',
+          details: { reason: 'VERIFICATION_COOLDOWN', retryAt: allowance.nextAttemptAt },
+        });
+      }
+
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        INSERT INTO verification_attempts (user_id, provider, status, attempt_number, selfie_media_id, started_at, updated_at)
+        VALUES (${userId}::uuid, ${provider}, 'PENDING'::"VerificationStatus", ${state[0].attempts + 1},
+                ${selfieMediaId}::uuid, now(), now())
+        RETURNING id
+      `;
+      return rows[0].id;
+    });
+  }
+
+  /** Call the provider within the configured timeout. Never throws: any fault becomes PROVIDER_ERROR. */
+  private async callProvider(selfieKey: string, nin: string): Promise<KycVerifyResult> {
+    const [threshold, timeoutSeconds] = await Promise.all([
+      this.config.get('KYC_SELFIE_MATCH_THRESHOLD'),
+      this.config.get('KYC_REQUEST_TIMEOUT_SECONDS'),
+    ]);
+    const timeoutMs = timeoutSeconds * 1000;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const selfie = await this.storage.getObject(selfieKey);
+      const timeout = new Promise<KycVerifyResult>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ outcome: 'FAILED', failureReason: 'PROVIDER_TIMEOUT', countsAgainstAllowance: false }),
+          timeoutMs,
+        );
+      });
+      return await Promise.race([
+        this.kyc.verifyNinWithSelfie({ nin, selfieImageBase64: selfie.toString('base64'), threshold, timeoutMs }),
+        timeout,
+      ]);
+    } catch (error) {
+      // The message is not logged: it could carry request data.
+      this.logger.error(`KYC call failed: ${error instanceof Error ? error.name : 'unknown error'}`);
+      return { outcome: 'FAILED', failureReason: 'PROVIDER_ERROR', countsAgainstAllowance: false };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Record the provider's answer. Guarded by `status = 'PENDING'`: a late answer changes nothing. */
+  private async complete(
+    attemptId: string,
+    userId: string,
+    result: KycVerifyResult,
+    nin: string,
+    ctx: RequestContext,
+  ): Promise<AttemptView> {
+    let outcome: KycVerifyResult = result;
+    let identityHmac: string | null = null;
+
+    if (result.outcome === 'VERIFIED') {
+      // The NIN is hashed here and dropped; the hash alone identifies the person.
+      identityHmac = hmacSign(`nin:${nin}`, this.appConfig.getOrThrow<string>('security.hmacSecret'));
+      const taken = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM verification_attempts
+        WHERE identity_ref_hmac = ${identityHmac} AND status = 'VERIFIED'::"VerificationStatus"
+          AND deleted_at IS NULL AND user_id <> ${userId}::uuid
+        LIMIT 1
+      `;
+      if (taken.length > 0) {
+        outcome = { outcome: 'FAILED', failureReason: 'DUPLICATE_IDENTITY', countsAgainstAllowance: true };
+        identityHmac = null;
+      }
+    }
+
+    try {
+      await this.write(attemptId, userId, outcome, identityHmac, ctx);
+    } catch (error) {
+      if (!isIdentityConflict(error)) {
+        throw error;
+      }
+      // Two accounts verified the same identity at the same moment; the database let one win.
+      await this.write(
+        attemptId,
+        userId,
+        { outcome: 'FAILED', failureReason: 'DUPLICATE_IDENTITY', countsAgainstAllowance: true },
+        null,
+        ctx,
+      );
+    }
+
+    const final = await this.prisma.client.verificationAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+    return toAttemptView(final);
+  }
+
+  private async write(
+    attemptId: string,
+    userId: string,
+    outcome: KycVerifyResult,
+    identityHmac: string | null,
+    ctx: RequestContext,
+  ): Promise<void> {
+    const validityDays = await this.config.get('VERIFICATION_VALIDITY_DAYS');
+    const verified = outcome.outcome === 'VERIFIED';
+    const reason: VerificationFailureReason | null = verified ? null : (outcome.failureReason as VerificationFailureReason);
+    const masked = outcome.maskedAttributes ? JSON.stringify(outcome.maskedAttributes) : null;
+    const status = verified ? 'VERIFIED' : 'FAILED';
+
+    await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ attempt_number: number }>>`
+        UPDATE verification_attempts
+        SET status = ${status}::"VerificationStatus",
+            failure_reason = ${reason}::"VerificationFailureReason",
+            provider_status = ${verified ? 'match' : (reason as string)},
+            provider_request_id = ${outcome.providerRequestId ?? null},
+            identity_ref_hmac = ${identityHmac},
+            masked_attributes = ${masked}::jsonb,
+            confidence = ${outcome.confidence ?? null}::numeric,
+            counts_against_allowance = ${outcome.countsAgainstAllowance},
+            completed_at = now(),
+            expires_at = CASE WHEN ${verified} AND ${validityDays}::int > 0
+                              THEN now() + make_interval(days => ${validityDays}::int) ELSE NULL END,
+            updated_at = now()
+        WHERE id = ${attemptId}::uuid AND status = 'PENDING'::"VerificationStatus"
+        RETURNING attempt_number
+      `;
+      if (rows.length === 0) {
+        return; // already decided (for example by the stale-attempt sweeper): keep that decision
+      }
+
+      await this.outbox.add(tx, {
+        eventType: verified ? 'verification.completed' : 'verification.failed',
+        aggregateType: 'verification_attempt',
+        aggregateId: attemptId,
+        payload: { userId, attemptId, status, failureReason: reason },
+      });
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.USER,
+        actorId: userId,
+        action: verified ? 'verification.verified' : 'verification.failed',
+        entityType: 'verification_attempt',
+        entityId: attemptId,
+        reasonCode: reason ?? undefined,
+        requestId: ctx.requestId,
+        ip: ctx.ip,
+        metadata: { attemptNumber: rows[0].attempt_number, countsAgainstAllowance: outcome.countsAgainstAllowance },
+      });
+    });
+
+    if (reason === 'PROVIDER_ERROR') {
+      this.logger.error(`ALERT: verification attempt ${attemptId} ended in PROVIDER_ERROR`);
+    }
+  }
+}

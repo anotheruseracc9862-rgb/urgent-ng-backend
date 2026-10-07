@@ -59,3 +59,20 @@ export async function uploadAndConfirm(
     .expect(200);
   return uploaded;
 }
+
+/** Upload, confirm and process for real: returns the id of a READY media row. */
+export async function readyMedia(
+  app: INestApplication,
+  token: string,
+  purpose: MediaPurpose = 'PROFILE_PHOTO',
+  bytes?: Buffer,
+): Promise<string> {
+  const { makeImage } = await import('./image.factory.js');
+  const { MediaProcessingService } = await import('../media/media-processing.service.js');
+  const { mediaId } = await uploadAndConfirm(app, token, bytes ?? (await makeImage('jpeg')), { purpose });
+  const outcome = await app.get(MediaProcessingService).process(mediaId);
+  if (outcome !== 'READY') {
+    throw new Error(`media processing ended ${outcome}`);
+  }
+  return mediaId;
+}

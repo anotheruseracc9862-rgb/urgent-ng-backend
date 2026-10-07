@@ -9,6 +9,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { BaseFake } from './base.fake.js';
 import {
   IKycProvider,
@@ -31,7 +32,7 @@ export class FakeKycProvider extends BaseFake implements IKycProvider {
       return this.getNextOutcome<KycVerifyResult>('verifyNinWithSelfie')!;
     }
 
-    const providerRequestId = `fake-kyc-${Date.now()}`;
+    const providerRequestId = `fake-kyc-${randomUUID()}`;
     const maskedAttributes = { ninLast4: request.nin.slice(-4) };
 
     switch (request.nin.slice(-4)) {

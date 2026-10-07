@@ -24,6 +24,8 @@ import { QueueModule } from './queue/queue.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { MediaModule } from './media/media.module.js';
+import { VerificationModule } from './verification/verification.module.js';
+import { RunnerModule } from './runner/runner.module.js';
 import { ReferenceDataModule } from './reference-data/reference-data.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -78,6 +80,8 @@ const isTest = process.env.NODE_ENV === 'test';
     AdminModule,
     ReferenceDataModule,
     MediaModule,
+    VerificationModule,
+    RunnerModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

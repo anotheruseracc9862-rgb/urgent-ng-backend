@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { BaseSweeper } from './base-sweeper.js';
 import { AccountDeletionSweeper } from './account-deletion.sweeper.js';
 import { MediaCleanupSweeper } from './media-cleanup.sweeper.js';
+import { VerificationSweeper } from './verification.sweeper.js';
 import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
 
 /**
@@ -16,8 +17,9 @@ export class SweeperRegistry implements OnModuleDestroy {
     idempotencyCleanup: IdempotencyCleanupSweeper,
     accountDeletion: AccountDeletionSweeper,
     mediaCleanup: MediaCleanupSweeper,
+    verification: VerificationSweeper,
   ) {
-    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup];
+    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification];
   }
 
   startAll(): void {

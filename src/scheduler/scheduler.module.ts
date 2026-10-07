@@ -6,6 +6,8 @@ import { AuthModule } from '../auth/auth.module.js';
 import { AccountDeletionSweeper } from './account-deletion.sweeper.js';
 import { MediaModule } from '../media/media.module.js';
 import { MediaCleanupSweeper } from './media-cleanup.sweeper.js';
+import { VerificationModule } from '../verification/verification.module.js';
+import { VerificationSweeper } from './verification.sweeper.js';
 import { SweeperRegistry } from './sweeper.registry.js';
 
 /**
@@ -13,8 +15,8 @@ import { SweeperRegistry } from './sweeper.registry.js';
  * Only the scheduler process starts them.
  */
 @Module({
-  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule],
-  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, SweeperRegistry],
+  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule],
+  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, SweeperRegistry],
   exports: [SweeperRegistry],
 })
 export class SchedulerModule {}

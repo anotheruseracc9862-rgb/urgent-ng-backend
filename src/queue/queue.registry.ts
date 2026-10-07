@@ -36,6 +36,9 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   // Verification events
   'verification.completed': QUEUE_NAMES.VERIFICATION,
   'verification.failed': QUEUE_NAMES.VERIFICATION,
+  'verification.expired': QUEUE_NAMES.VERIFICATION,
+  'verification.revoked': QUEUE_NAMES.VERIFICATION,
+  'verification.attempts_granted': QUEUE_NAMES.NOTIFICATIONS,
 
   // Errand events
   'errand.published': QUEUE_NAMES.MARKETPLACE,

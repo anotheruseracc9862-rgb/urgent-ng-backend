@@ -117,3 +117,11 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Storage.** `STORAGE_PROVIDER=fake` (default, in memory) or `real` (AWS S3; set `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Keep the bucket private.
 - **Profile photo.** `PUT /me/photo` with a `READY` `PROFILE_PHOTO`, `DELETE /me/photo`.
 - **Tests.** `src/test/media.helper.ts` builds real images (with GPS EXIF if asked) and walks the upload flow against the fake storage.
+
+## Runner profile and verification
+
+- **Routes.** `GET|PUT /runner/profile`, `PUT /runner/availability`, `GET /runner/eligibility`, `GET /verification`, `POST /verification/attempts` (with an `Idempotency-Key`), `GET /verification/attempts/:id`.
+- **Verification flow.** Upload a selfie as media with purpose `VERIFICATION_INPUT` and wait for `READY`. Then `POST /verification/attempts` with the 11-digit `nin` and the `selfieMediaId`. The answer is the finished attempt (`VERIFIED` or `FAILED` with a `failureReason`). The NIN is never stored, logged or returned.
+- **Check eligibility** with `RunnerEligibilityService` (`canOffer`, `canBrowseFeed`, `assertCanOffer`). Never re-implement these checks in another module.
+- **Providers.** `KYC_PROVIDER=fake` (default) is deterministic by the last four digits of the NIN: `0000` selfie mismatch, `1111` NIN not found, `8888` timeout, `9999` provider error, anything else verified. `KYC_PROVIDER=real` needs `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` and `DOJAH_BASE_URL`, and has not yet been run against the live sandbox.
+- **Config** (editable by an admin): `VERIFICATION_ATTEMPTS_PER_FEE`, `VERIFICATION_RETRY_COOLDOWN_HOURS`, `VERIFICATION_VALIDITY_DAYS` (0 = never expires), `KYC_SELFIE_MATCH_THRESHOLD`, `KYC_REQUEST_TIMEOUT_SECONDS`, `STAGED_SELFIE_RETENTION_DAYS`, `RUNNER_AREA_MIN_KM`, `RUNNER_AREA_MAX_KM`. The scheduler (`npm run start:scheduler`) expires verifications and deletes staged selfies.

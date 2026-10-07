@@ -16,6 +16,7 @@ import {
   EMAIL_PROVIDER,
   PAYMENT_PROVIDER,
 } from './index.js';
+import { DojahKycProvider } from './dojah-kyc.provider.js';
 import { S3StorageProvider, type S3Settings } from './s3-storage.provider.js';
 import {
   FakeOtpProvider,
@@ -35,6 +36,14 @@ function createS3Provider(config: ConfigService): S3StorageProvider {
     );
   }
   return new S3StorageProvider(settings);
+}
+
+function createDojahProvider(config: ConfigService): DojahKycProvider {
+  const settings = config.get<{ appId: string; secretKey: string; baseUrl: string }>('dojah');
+  if (!settings?.appId || !settings.secretKey || !settings.baseUrl) {
+    throw new Error('KYC_PROVIDER=real is set but DOJAH_APP_ID, DOJAH_SECRET_KEY and DOJAH_BASE_URL are not all set');
+  }
+  return new DojahKycProvider(settings);
 }
 
 type ProviderName = keyof AppConfig['providers'];
@@ -78,7 +87,7 @@ export class ProvidersModule {
       global: true,
       providers: [
         providerFactory(OTP_PROVIDER, 'sms', () => new FakeOtpProvider(), 'SMS (Termii)'),
-        providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah'),
+        providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah', createDojahProvider),
         providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3', createS3Provider),
         providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM'),
