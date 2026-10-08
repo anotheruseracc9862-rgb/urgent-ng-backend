@@ -91,7 +91,7 @@ export class ProvidersModule {
         providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3', createS3Provider),
         providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM'),
-        providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'Mailgun'),
+        providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP'),
         providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack'),
       ],
       exports: [

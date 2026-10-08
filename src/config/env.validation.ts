@@ -1,4 +1,4 @@
-import { plainToInstance, Transform, Type } from 'class-transformer';
+import { plainToInstance, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
@@ -22,10 +22,29 @@ const isProduction = (env: EnvironmentVariables): boolean =>
 const usesRealKyc = (env: EnvironmentVariables): boolean =>
   env.KYC_PROVIDER === 'real';
 
+const usesRealEmail = (env: EnvironmentVariables): boolean =>
+  env.EMAIL_PROVIDER === 'real';
+
 const usesRealStorage = (env: EnvironmentVariables): boolean =>
   env.STORAGE_PROVIDER === 'real';
 
-const defaultToFake =({ value }: { value: unknown }) => value || 'fake';
+const PROVIDER_VARS = [
+  'KYC_PROVIDER',
+  'MAPS_PROVIDER',
+  'SMS_PROVIDER',
+  'EMAIL_PROVIDER',
+  'PUSH_PROVIDER',
+  'STORAGE_PROVIDER',
+  'PAYMENTS_PROVIDER',
+] as const;
+
+/**
+ * A vendor runs "real" in production and "fake" everywhere else. A `*_PROVIDER` variable is
+ * only needed to override that in development (for example `STORAGE_PROVIDER=real` to try
+ * the live bucket). Production never accepts "fake".
+ */
+export const resolveProviderMode = (value: unknown, nodeEnv: unknown): string =>
+  value ? String(value) : nodeEnv === 'production' ? 'real' : 'fake';
 
 /**
  * Environment contract. Validated once at boot (fail fast) so a misconfigured
@@ -85,7 +104,6 @@ export class EnvironmentVariables {
 
   // Provider modes: "fake" (default) uses in-process fakes, "real" calls the vendor.
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   KYC_PROVIDER: ProviderMode = 'fake';
 
@@ -106,27 +124,50 @@ export class EnvironmentVariables {
   DOJAH_BASE_URL?: string;
 
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   MAPS_PROVIDER: ProviderMode = 'fake';
 
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   SMS_PROVIDER: ProviderMode = 'fake';
 
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   EMAIL_PROVIDER: ProviderMode = 'fake';
 
+  // SMTP settings (any SMTP service: Resend, Mailgun...) are only required when the email provider is "real".
+  @ValidateIf(usesRealEmail)
+  @IsString()
+  @IsNotEmpty()
+  MAIL_FROM?: string;
+
+  @ValidateIf(usesRealEmail)
+  @IsString()
+  @IsNotEmpty()
+  SMTP_HOST?: string;
+
+  @ValidateIf(usesRealEmail)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(65535)
+  SMTP_PORT?: number;
+
+  @ValidateIf(usesRealEmail)
+  @IsString()
+  @IsNotEmpty()
+  SMTP_USER?: string;
+
+  @ValidateIf(usesRealEmail)
+  @IsString()
+  @IsNotEmpty()
+  SMTP_PASS?: string;
+
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   PUSH_PROVIDER: ProviderMode = 'fake';
 
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   STORAGE_PROVIDER: ProviderMode = 'fake';
 
@@ -152,7 +193,6 @@ export class EnvironmentVariables {
   AWS_SECRET_ACCESS_KEY?: string;
 
   @IsOptional()
-  @Transform(defaultToFake)
   @IsIn(PROVIDER_MODES)
   PAYMENTS_PROVIDER: ProviderMode = 'fake';
 }
@@ -160,14 +200,27 @@ export class EnvironmentVariables {
 export function validateEnv(
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
-  const parsed = plainToInstance(EnvironmentVariables, raw);
+  const withModes: Record<string, unknown> = { ...raw };
+  for (const name of PROVIDER_VARS) {
+    withModes[name] = resolveProviderMode(raw[name], raw.NODE_ENV);
+  }
+  const parsed = plainToInstance(EnvironmentVariables, withModes);
   const errors = validateSync(parsed, { whitelist: false });
-  if (errors.length > 0) {
-    const lines = errors.flatMap((error) =>
-      Object.values(error.constraints ?? {}).map(
-        (message) => `  - ${error.property}: ${message}`,
+  const fakeInProduction =
+    raw.NODE_ENV === 'production'
+      ? PROVIDER_VARS.filter((name) => withModes[name] === 'fake').map(
+          (name) => `  - ${name}: must not be "fake" in production`,
+        )
+      : [];
+  if (errors.length > 0 || fakeInProduction.length > 0) {
+    const lines = [
+      ...errors.flatMap((error) =>
+        Object.values(error.constraints ?? {}).map(
+          (message) => `  - ${error.property}: ${message}`,
+        ),
       ),
-    );
+      ...fakeInProduction,
+    ];
     throw new Error(`Invalid environment configuration:\n${lines.join('\n')}`);
   }
   return raw;

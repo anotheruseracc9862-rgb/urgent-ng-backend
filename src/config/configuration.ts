@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import type { ProviderMode } from './env.validation.js';
+import { resolveProviderMode, type ProviderMode } from './env.validation.js';
 
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'production';
@@ -25,6 +25,13 @@ export interface AppConfig {
     secretKey: string;
     baseUrl: string;
   };
+  smtp: {
+    host: string;
+    port: number;
+    user: string;
+    pass: string;
+    from: string;
+  };
   aws: {
     region: string;
     accessKeyId: string;
@@ -43,7 +50,7 @@ export interface AppConfig {
 }
 
 const mode = (value: string | undefined): ProviderMode =>
-  value === 'real' ? 'real' : 'fake';
+  resolveProviderMode(value, process.env.NODE_ENV) === 'real' ? 'real' : 'fake';
 
 // Secrets default to a clearly fake value outside production so cursors and
 // encrypted columns work locally. Production requires real values (see
@@ -86,6 +93,13 @@ export default (): AppConfig => {
     appId: process.env.DOJAH_APP_ID ?? '',
     secretKey: process.env.DOJAH_SECRET_KEY ?? '',
     baseUrl: process.env.DOJAH_BASE_URL ?? '',
+  },
+  smtp: {
+    host: process.env.SMTP_HOST ?? '',
+    port: Number.parseInt(process.env.SMTP_PORT ?? '465', 10),
+    user: process.env.SMTP_USER ?? '',
+    pass: process.env.SMTP_PASS ?? '',
+    from: process.env.MAIL_FROM ?? '',
   },
   aws: {
     region: process.env.AWS_REGION ?? '',

@@ -44,6 +44,22 @@ describe('validateEnv', () => {
     );
   });
 
+  it('needs the SMTP settings only when EMAIL_PROVIDER=real', () => {
+    expect(() => validateEnv({ ...valid, EMAIL_PROVIDER: 'fake' })).not.toThrow();
+    expect(() => validateEnv({ ...valid, EMAIL_PROVIDER: 'real' })).toThrow(/SMTP_HOST/);
+    expect(() =>
+      validateEnv({
+        ...valid,
+        EMAIL_PROVIDER: 'real',
+        MAIL_FROM: 'Urgent.ng <a@b.ng>',
+        SMTP_HOST: 'smtp.mailgun.org',
+        SMTP_PORT: '465',
+        SMTP_USER: 'postmaster@mg.example.ng',
+        SMTP_PASS: 'secret',
+      }),
+    ).not.toThrow();
+  });
+
   it('treats an empty provider mode as fake', () => {
     expect(() => validateEnv({ ...valid, SMS_PROVIDER: '' })).not.toThrow();
   });
@@ -70,10 +86,47 @@ describe('validateEnv', () => {
     ).toThrow(/JWT_SECRET/);
   });
 
-  it('accepts a complete production environment', () => {
+  const productionVendors = {
+    DOJAH_APP_ID: 'app',
+    DOJAH_SECRET_KEY: 'secret',
+    DOJAH_BASE_URL: 'https://api.dojah.io',
+    MAIL_FROM: 'Urgent.ng <a@b.ng>',
+    SMTP_HOST: 'smtp.resend.com',
+    SMTP_PORT: '465',
+    SMTP_USER: 'resend',
+    SMTP_PASS: 'secret',
+    AWS_REGION: 'us-east-1',
+    AWS_S3_BUCKET: 'bucket',
+    AWS_ACCESS_KEY_ID: 'id',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+  };
+
+  it('accepts a complete production environment, with every vendor real by default', () => {
+    expect(() =>
+      validateEnv({ ...valid, ...productionSecrets, ...productionVendors, NODE_ENV: 'production' }),
+    ).not.toThrow();
+  });
+
+  it('asks production for vendor keys when no provider mode is set', () => {
     expect(() =>
       validateEnv({ ...valid, ...productionSecrets, NODE_ENV: 'production' }),
-    ).not.toThrow();
+    ).toThrow(/DOJAH_APP_ID[\s\S]*SMTP_HOST[\s\S]*AWS_REGION/);
+  });
+
+  it('refuses a fake provider in production', () => {
+    expect(() =>
+      validateEnv({
+        ...valid,
+        ...productionSecrets,
+        ...productionVendors,
+        NODE_ENV: 'production',
+        SMS_PROVIDER: 'fake',
+      }),
+    ).toThrow(/SMS_PROVIDER: must not be "fake" in production/);
+  });
+
+  it('lets development try a live vendor with an explicit mode', () => {
+    expect(() => validateEnv({ ...valid, STORAGE_PROVIDER: 'real' })).toThrow(/AWS_REGION/);
   });
 
   it('does not require Dojah credentials while KYC runs on the fake provider', () => {

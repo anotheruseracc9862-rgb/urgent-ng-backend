@@ -32,8 +32,10 @@ npm run start:dev      # http://localhost:4000/api/v1
   `JWT_REFRESH_SECRET`, `DATA_ENCRYPTION_KEY` and `HMAC_SECRET` must each be at
   least 32 characters.
 - Every external provider (KYC, maps, SMS, email, push, storage, payments) has a
-  mode variable (`KYC_PROVIDER=fake|real`, and so on). The default is `fake`, so
-  no vendor account is needed for development.
+  mode that follows `NODE_ENV`: `fake` in development and test (no vendor account
+  needed), `real` in production, where `fake` is refused at boot. To try one live
+  vendor in development, set its variable (`STORAGE_PROVIDER=real`, `KYC_PROVIDER=real`,
+  and so on); leave it unset otherwise.
 
 ## Process types
 

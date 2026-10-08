@@ -1,5 +1,5 @@
 /**
- * Email provider interface (Mailgun)
+ * Email provider interface (generic SMTP: Resend, Mailgun or any SMTP service)
  */
 
 export interface EmailResult {
