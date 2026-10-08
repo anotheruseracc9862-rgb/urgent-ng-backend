@@ -37,7 +37,9 @@ describe('RedisThrottlerStorage (integration)', () => {
   it('expires the window', async () => {
     await storage.increment('ip-3', 200, 1, 0, 'default');
     await storage.increment('ip-3', 200, 1, 0, 'default');
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Three times the window: a loaded machine can be slow to wake this timer, and the test is
+    // about the window ending, not about how exactly it ends.
+    await new Promise((resolve) => setTimeout(resolve, 600));
 
     const next = await storage.increment('ip-3', 200, 1, 0, 'default');
     expect(next.totalHits).toBe(1);

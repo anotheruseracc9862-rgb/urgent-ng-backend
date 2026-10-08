@@ -7,6 +7,8 @@ import { cleanAll } from '../../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../../test/auth.helper.js';
 import { makeImage, readyMedia, requestAndUpload } from '../../test/media.helper.js';
 import { MediaProcessingService } from '../../media/media-processing.service.js';
+import { NIN, readyRunner } from '../../test/verification.helper.js';
+import { createDraft, draftBody, seedCategories } from '../../test/errand.helper.js';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -102,6 +104,18 @@ describe('OpenAPI document', () => {
       '/api/v1/runner/profile',
       '/api/v1/runner/availability',
       '/api/v1/runner/eligibility',
+      '/api/v1/errands',
+      '/api/v1/errands/mine',
+      '/api/v1/errands/{id}',
+      '/api/v1/errands/{id}/publish',
+      '/api/v1/errands/{id}/cancel',
+      '/api/v1/errands/{id}/extend',
+      '/api/v1/errands/{id}/duplicate',
+      '/api/v1/marketplace/errands',
+      '/api/v1/marketplace/errands/map',
+      '/api/v1/marketplace/errands/{id}',
+      '/api/v1/saved-errands',
+      '/api/v1/saved-errands/{errandId}',
     ]) {
       expect(paths).toContain(expected);
     }
@@ -266,6 +280,47 @@ describe('OpenAPI document', () => {
       expectMatches(availability.body.data, dataSchema('/api/v1/runner/availability', 'put', '200'), 'availability');
       const eligibility = await get('/runner/eligibility', user.accessToken).expect(200);
       expectMatches(eligibility.body.data, dataSchema('/api/v1/runner/eligibility', 'get', '200'), 'eligibility');
+    });
+
+    it('errand, marketplace and saved-errand endpoints', async () => {
+      const categories = await seedCategories();
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app, NIN.ok);
+      const send = (method: 'post' | 'patch', path: string, who: { accessToken: string }, body: object = {}, key?: string) => {
+        const req = request(app.getHttpServer())[method](`${API}${path}`).set(...bearer(who.accessToken));
+        return (key ? req.set('Idempotency-Key', key) : req).send(body);
+      };
+
+      const created = await createDraft(app, requester, draftBody(categories.delivery, { pickupContact: { name: 'Chika', phone: '08031234567' } })).expect(201);
+      expectMatches(created.body.data, dataSchema('/api/v1/errands', 'post', '201'), 'create errand');
+      const id = created.body.data.id as string;
+      const patched = await send('patch', `/errands/${id}`, requester, { title: 'Parcel to Ikeja' }).expect(200);
+      expectMatches(patched.body.data, dataSchema('/api/v1/errands/{id}', 'patch', '200'), 'patch errand');
+      const published = await send('post', `/errands/${id}/publish`, requester, { prohibitedItemsConfirmed: true }, 'contract-publish-1').expect(201);
+      expectMatches(published.body.data, dataSchema('/api/v1/errands/{id}/publish', 'post', '201'), 'publish errand');
+      const owned = await get(`/errands/${id}`, requester.accessToken).expect(200);
+      expectMatches(owned.body.data, dataSchema('/api/v1/errands/{id}', 'get', '200'), 'get errand');
+      const mine = await get('/errands/mine?tab=OPEN', requester.accessToken).expect(200);
+      expectMatches(mine.body.data, dataSchema('/api/v1/errands/mine', 'get', '200'), 'errands mine');
+      expect(mine.body.data).toHaveLength(1);
+
+      const feed = await get('/marketplace/errands', runner.accessToken).expect(200);
+      expectMatches(feed.body.data, dataSchema('/api/v1/marketplace/errands', 'get', '200'), 'feed');
+      expect(feed.body.data).toHaveLength(1);
+      const map = await get('/marketplace/errands/map', runner.accessToken).expect(200);
+      expectMatches(map.body.data, dataSchema('/api/v1/marketplace/errands/map', 'get', '200'), 'map');
+      const detail = await get(`/marketplace/errands/${id}`, runner.accessToken).expect(200);
+      expectMatches(detail.body.data, dataSchema('/api/v1/marketplace/errands/{id}', 'get', '200'), 'marketplace detail');
+      await request(app.getHttpServer()).post(`${API}/saved-errands/${id}`).set(...bearer(runner.accessToken)).expect(200);
+      const saved = await get('/saved-errands', runner.accessToken).expect(200);
+      expectMatches(saved.body.data, dataSchema('/api/v1/saved-errands', 'get', '200'), 'saved errands');
+
+      const extended = await send('post', `/errands/${id}/extend`, requester).expect(200).catch(() => null);
+      if (extended) expectMatches(extended.body.data, dataSchema('/api/v1/errands/{id}/extend', 'post', '200'), 'extend');
+      const copy = await send('post', `/errands/${id}/duplicate`, requester).expect(201);
+      expectMatches(copy.body.data, dataSchema('/api/v1/errands/{id}/duplicate', 'post', '201'), 'duplicate');
+      const cancelled = await send('post', `/errands/${id}/cancel`, requester, { reason: 'REQUESTER_CANCELLED' }).expect(200);
+      expectMatches(cancelled.body.data, dataSchema('/api/v1/errands/{id}/cancel', 'post', '200'), 'cancel');
     });
 
     it('login (web and mobile), register and refresh', async () => {

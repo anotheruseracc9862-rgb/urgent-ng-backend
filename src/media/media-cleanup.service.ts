@@ -55,6 +55,37 @@ export class MediaCleanupService {
     return deleted;
   }
 
+  /**
+   * Errand photos that were uploaded and processed but never attached to any errand, once they are
+   * older than MEDIA_ORPHAN_HOURS. A photo that was attached and later removed from an errand is kept
+   * (it may matter in a dispute); only photos that no errand ever used are deleted.
+   */
+  async deleteUnusedErrandPhotos(limit = BATCH): Promise<number> {
+    const hours = await this.config.get('MEDIA_ORPHAN_HOURS');
+    const due = await this.prisma.$queryRaw<StoredFile[]>`
+      SELECT m.id, m.storage_key AS "storageKey", m.thumbnail_key AS "thumbnailKey"
+      FROM media m
+      WHERE m.purpose = 'ERRAND_PHOTO'::"MediaPurpose" AND m.status = 'READY'::"MediaStatus" AND m.deleted_at IS NULL
+        AND m.created_at < now() - make_interval(hours => ${hours}::int)
+        AND NOT EXISTS (SELECT 1 FROM errand_media em WHERE em.media_id = m.id)
+      ORDER BY m.created_at
+      LIMIT ${limit}
+    `;
+    let deleted = 0;
+    for (const row of due) {
+      // Claim the row first, and only if it is still unused: an attach that arrives later no longer finds it.
+      const claimed = await this.prisma.$executeRaw`
+        UPDATE media SET deleted_at = now(), updated_at = now()
+        WHERE id = ${row.id}::uuid AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM errand_media em WHERE em.media_id = media.id)
+      `;
+      if (claimed === 0) continue;
+      await this.media.deleteObjects(row);
+      deleted += 1;
+    }
+    return deleted;
+  }
+
   /** Media of anonymised accounts is personal data: remove the files, keep the row as a record. */
   async deleteMediaOfAnonymisedUsers(limit = BATCH): Promise<number> {
     const due = await this.prisma.$queryRaw<StoredFile[]>`

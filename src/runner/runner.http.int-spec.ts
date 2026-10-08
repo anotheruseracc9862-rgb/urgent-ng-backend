@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -170,6 +170,49 @@ describe('Runner profile and eligibility (Phase 4)', () => {
       await request(server()).post(`${API}/me/deactivate`).set(...bearer(user.accessToken)).send({}).expect(200);
 
       await as(user).put('/runner/profile').send(profileBody()).expect(403);
+    });
+  });
+
+  describe('moving the operating area (Backend PRD 17.2)', () => {
+    const move = (user: TestUser, lat: number, lng = 3.38) =>
+      as(user).put('/runner/profile').send({ transport: 'MOTORCYCLE', areaCenter: { lat, lng }, areaRadiusKm: 5 });
+
+    afterEach(() => {
+      process.env.RATE_LIMIT_DISABLED = 'true';
+    });
+
+    it('lets a runner move the centre only once per LOCATION_UPDATE_MIN_SECONDS', async () => {
+      process.env.RATE_LIMIT_DISABLED = 'false';
+      const user = await signedInUser(app);
+      await move(user, 6.5).expect(200); // creating the profile is not a move
+      await move(user, 6.6).expect(200); // the first move
+      const tooSoon = await move(user, 6.7).expect(429);
+      expect(tooSoon.body.error).toMatchObject({ code: 'RATE_LIMITED', details: { retryAfterSeconds: expect.any(Number) } });
+      expect((await as(user).get('/runner/profile').expect(200)).body.data.areaCenter).toEqual({ lat: 6.6, lng: 3.38 });
+    });
+
+    it('does not count a change of radius, transport or exclusions, or the same centre sent again', async () => {
+      process.env.RATE_LIMIT_DISABLED = 'false';
+      const user = await signedInUser(app);
+      await move(user, 6.5).expect(200);
+      await move(user, 6.6).expect(200);
+      for (const radius of [3, 4, 6]) {
+        await as(user).put('/runner/profile').send({ transport: 'CAR', areaCenter: { lat: 6.6, lng: 3.38 }, areaRadiusKm: radius }).expect(200);
+      }
+    });
+
+    it('counts each runner on their own, and allows a move again after the wait', async () => {
+      process.env.RATE_LIMIT_DISABLED = 'false';
+      const a = await signedInUser(app);
+      const b = await signedInUser(app);
+      await app.get(BusinessConfigService).set('LOCATION_UPDATE_MIN_SECONDS', 1);
+      await move(a, 6.5).expect(200);
+      await move(a, 6.6).expect(200);
+      await move(a, 6.7).expect(429);
+      await move(b, 6.5).expect(200);
+      await move(b, 6.6).expect(200);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await move(a, 6.7).expect(200);
     });
   });
 

@@ -213,13 +213,21 @@ describe('Login, sessions and tokens (HTTP)', () => {
     it('parallel guesses cannot get past the limit', async () => {
       const user = await registerUser(app);
 
-      const results = await Promise.all(Array.from({ length: 30 }, () => login(user, 'Wrong-passw0rd!')));
+      // 30 guesses at once. How many are already being checked when the lock lands depends on how
+      // fast hashing is, so the test does not count them: it checks that the failures are all counted
+      // atomically, the lock is set, and that from then on no guess is evaluated any more.
+      const burst = await Promise.all(Array.from({ length: 30 }, () => login(user, 'Wrong-passw0rd!')));
+      expect(burst.every((r) => r.status === 401 || r.status === 429)).toBe(true);
 
       const row = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
       expect(row.lockedUntil).not.toBeNull();
       expect(row.failedLoginCount).toBeGreaterThanOrEqual(10);
-      expect(results.filter((r) => r.status === 429).length).toBeGreaterThan(0);
-      await login(user).expect(429);
+
+      const after = await Promise.all(Array.from({ length: 30 }, () => login(user, 'Wrong-passw0rd!')));
+      expect(after.every((r) => r.status === 429)).toBe(true);
+      await login(user).expect(429); // even the right password is refused while locked
+      const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+      expect(unchanged.failedLoginCount).toBe(row.failedLoginCount); // refused attempts are not evaluated or counted
     });
 
     it('reads the limit from admin config', async () => {

@@ -88,6 +88,13 @@ export class S3StorageProvider implements IStorageProvider {
       if (status === 404 || (error as { name?: string }).name === 'NotFound') {
         return { exists: false };
       }
+      if (status === 403) {
+        // Without s3:ListBucket on the bucket, S3 answers 403 (not 404) for a key that does not exist.
+        throw new Error(
+          `S3 refused HEAD for ${key}. The IAM user needs s3:GetObject on the objects and s3:ListBucket on the bucket ` +
+            '(without ListBucket, S3 answers 403 instead of 404 for a missing object).',
+        );
+      }
       throw error;
     }
   }

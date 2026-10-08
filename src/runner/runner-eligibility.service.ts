@@ -3,7 +3,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import { RestrictionService } from '../auth/restriction.service.js';
 import { VerificationStatusService } from '../verification/verification-status.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
-import { OFFER_NOT_ELIGIBLE, VERIFICATION_PENDING, VERIFICATION_REQUIRED } from '../common/constants/error-codes.js';
+import { FORBIDDEN, OFFER_NOT_ELIGIBLE, VERIFICATION_PENDING, VERIFICATION_REQUIRED } from '../common/constants/error-codes.js';
 
 export type EligibilityReason =
   | 'ACCOUNT_NOT_ACTIVE'
@@ -53,6 +53,15 @@ export class RunnerEligibilityService {
     if (reasons.includes('NOT_VERIFIED')) throw DomainException.of(VERIFICATION_REQUIRED, { details: { reasons } });
     if (reasons.includes('VERIFICATION_PENDING')) throw DomainException.of(VERIFICATION_PENDING, { details: { reasons } });
     throw DomainException.of(OFFER_NOT_ELIGIBLE, { details: { reasons } });
+  }
+
+  /** Throw the matching error code if the user may not browse the feed. */
+  async assertCanBrowseFeed(userId: string): Promise<void> {
+    const { allowed, reasons } = await this.canBrowseFeed(userId);
+    if (allowed) return;
+    if (reasons.includes('NOT_VERIFIED')) throw DomainException.of(VERIFICATION_REQUIRED, { details: { reasons } });
+    if (reasons.includes('VERIFICATION_PENDING')) throw DomainException.of(VERIFICATION_PENDING, { details: { reasons } });
+    throw DomainException.of(FORBIDDEN, { message: 'You cannot browse errands right now.', details: { reasons } });
   }
 
   private async evaluate(userId: string): Promise<Eligibility> {

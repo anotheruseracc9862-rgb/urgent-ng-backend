@@ -69,6 +69,17 @@ database 15. Override with `DATABASE_URL_TEST` and `REDIS_URL_TEST` if needed.
 Every destructive test helper refuses to run unless the database name ends in
 `_test` and Redis is not database 0.
 
+**Which tests to run, and when.** The integration suite is the slow one (real database, real Redis, hundreds of HTTP flows), so do not run all of it after every edit:
+
+| When | Command | Takes |
+|---|---|---|
+| While writing code | `npm test` (unit tests, no database) | seconds |
+| After changing one area | `npx vitest run --config ./vitest.config.int.ts src/errands` (any folder or file) | under a minute |
+| Before moving on | `npm run test:int:changed` (only the files your uncommitted changes can affect) | one to a few minutes |
+| End of a phase, before a commit or release | `npm run check:full` (lint, types, build, unit, all integration, e2e) | the full run |
+
+Integration tests hash passwords at the cheapest Argon2 setting (only when `NODE_ENV=test`), and long suites create their users once instead of once per test. The 50,000-errand feed check is opt-in and not part of the full run (see "Errands and marketplace").
+
 ## Structure
 
 `src/` has one folder per domain module (auth, users, errands, offers,
@@ -116,7 +127,7 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Limits.** JPEG, PNG and WebP only, `MAX_UPLOAD_BYTES` (5 MB) per file, hard cap `SERVER_HARD_UPLOAD_BYTES` (8 MB). Config keys `MEDIA_UPLOAD_URL_SECONDS`, `MEDIA_DOWNLOAD_URL_SECONDS`, `MEDIA_ORPHAN_HOURS`, `MEDIA_MAX_DIMENSION` are editable by an admin.
 - **Processing** runs in the worker process (`npm run start:worker`): real type from the file bytes, EXIF and GPS removed, scaled to 1600 px, 320 px thumbnail, moderation hook. Start the scheduler (`npm run start:scheduler`) to delete abandoned uploads.
 - **Attach media from another module** with `MediaService.requireReadyOwned(userId, mediaId, purpose)`. **Let other users see a purpose** by registering a `MediaAccessPolicy` on `MediaAccessService` in `onModuleInit`; a purpose with no policy is visible to its owner only.
-- **Storage.** `STORAGE_PROVIDER=fake` (default, in memory) or `real` (AWS S3; set `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Keep the bucket private.
+- **Storage.** `STORAGE_PROVIDER=fake` (default, in memory) or `real` (AWS S3; set `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Keep the bucket private. The IAM user needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::BUCKET/*` **and `s3:ListBucket` on `arn:aws:s3:::BUCKET`**; without ListBucket, S3 answers 403 instead of 404 for an object that was never uploaded, and confirming such an upload fails with an error instead of `MEDIA_INVALID`. Add the bucket's CORS rule for the web origins (PUT, GET, HEAD).
 - **Profile photo.** `PUT /me/photo` with a `READY` `PROFILE_PHOTO`, `DELETE /me/photo`.
 - **Tests.** `src/test/media.helper.ts` builds real images (with GPS EXIF if asked) and walks the upload flow against the fake storage.
 
@@ -127,3 +138,14 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Check eligibility** with `RunnerEligibilityService` (`canOffer`, `canBrowseFeed`, `assertCanOffer`). Never re-implement these checks in another module.
 - **Providers.** `KYC_PROVIDER=fake` (default) is deterministic by the last four digits of the NIN: `0000` selfie mismatch, `1111` NIN not found, `8888` timeout, `9999` provider error, anything else verified. `KYC_PROVIDER=real` needs `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` and `DOJAH_BASE_URL`, and has not yet been run against the live sandbox.
 - **Config** (editable by an admin): `VERIFICATION_ATTEMPTS_PER_FEE`, `VERIFICATION_RETRY_COOLDOWN_HOURS`, `VERIFICATION_VALIDITY_DAYS` (0 = never expires), `KYC_SELFIE_MATCH_THRESHOLD`, `KYC_REQUEST_TIMEOUT_SECONDS`, `STAGED_SELFIE_RETENTION_DAYS`, `RUNNER_AREA_MIN_KM`, `RUNNER_AREA_MAX_KM`. The scheduler (`npm run start:scheduler`) expires verifications and deletes staged selfies.
+
+## Errands and marketplace
+
+- **Requester routes.** `POST /errands` (a draft, may be incomplete), `PATCH /errands/:id`, `POST /errands/:id/publish` (needs an `Idempotency-Key`), `/cancel`, `/extend`, `/duplicate`, `GET /errands/mine?tab=DRAFT|OPEN|ACTIVE|PAST`, `GET /errands/:id` (the requester's full view, with exact locations and contacts).
+- **Runner routes.** `GET /marketplace/errands` (feed: `sort=nearest|newest`, `category`, `budgetMin`, `budgetMax`, `timeMode`, `radiusKm`, `q`, cursor paging), `GET /marketplace/errands/map`, `GET /marketplace/errands/:id` (approximate view), `POST|DELETE /saved-errands/:errandId`, `GET /saved-errands`. Only an eligible runner gets in (`RunnerEligibilityService.assertCanBrowseFeed`).
+- **Changing an errand's status.** Only `ErrandStateService.transition(tx, ...)` does it. It follows the table in `errand.state.ts`, locks the row, checks who and from which status, and writes the history, audit and outbox rows in the caller's transaction. Offers, assignments, execution and disputes call it inside their own transaction; they never update `errands.status` themselves.
+- **Location privacy.** Exact points are stored in `errand_locations.exact_point` and leave the API only to the requester (and, later, the assigned runner). Every errand has a stable approximate point (500 m grid cell plus a private offset of up to 250 m, derived from `HMAC(secret, errand id + type)`); all feed distances come from it and are put in buckets. The response types of the marketplace have no field for an exact point, an address, a landmark or a contact. `errands.feed_point` is the approximate point of the pickup (else the destination) and carries the feed's spatial index.
+- **Contacts** are AES-256-GCM ciphertext bound to the errand and the field; the database refuses plain text (`errand_contacts_encrypted_only`).
+- **Deadlines.** `expires_at` is set at publishing (`ERRAND_EXPIRY_HOURS`, or 30 minutes before a scheduled start, never more than `SCHEDULED_ERRAND_MAX_OPEN_DAYS`). The scheduler's `ErrandExpirySweeper` and a check on reads move overdue OPEN errands to EXPIRED (database clock).
+- **Hooks for later phases.** `OFFER_RECONFIRMATION_HOOK` (Phase 6 flags offers on a material edit) and `FEED_BOOST_SOURCE` (Phase 10 supplies active boosts to pin). Both have no-op defaults today. `errands.offer_count` is kept by the offer module.
+- **Tests.** `src/test/errand.helper.ts` seeds categories and prohibited items, inserts an errand in any status, and has HTTP helpers. The 50,000-errand feed check is opt-in: `RUN_PERF=1 npx vitest run --config ./vitest.config.int.ts src/marketplace/feed.performance.int-spec.ts`.

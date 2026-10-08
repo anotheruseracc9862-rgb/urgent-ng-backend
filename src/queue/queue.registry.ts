@@ -47,6 +47,8 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'errand.expired': QUEUE_NAMES.ERRAND_EXPIRY,
   'errand.completed': QUEUE_NAMES.MARKETPLACE,
   'errand.disputed': QUEUE_NAMES.NOTIFICATIONS,
+  'errand.status_changed': QUEUE_NAMES.MARKETPLACE,
+  'errand.updated': QUEUE_NAMES.NOTIFICATIONS,
 
   // Offer events
   'offer.created': QUEUE_NAMES.NOTIFICATIONS,

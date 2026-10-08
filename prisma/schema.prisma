@@ -750,6 +750,8 @@ model User {
   media                Media[]
   runnerProfile        RunnerProfile?
   verificationAttempts VerificationAttempt[]
+  errands              Errand[]                 @relation("ErrandRequester")
+  savedErrands         SavedErrand[]            @relation("SavedErrands")
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1019,6 +1021,8 @@ model Category {
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
 
+  errands Errand[]
+
   @@map("categories")
 }
 
@@ -1064,6 +1068,7 @@ model Media {
 
   profilePhotoOf       Profile[]             @relation("ProfilePhoto")
   verificationSelfieOf VerificationAttempt[]
+  errandMedia          ErrandMedia[]
 
   @@index([ownerId, purpose], map: "media_owner_purpose_idx")
   @@index([status], map: "media_status_idx")
@@ -1118,4 +1123,159 @@ model VerificationAttempt {
 
   @@index([userId, createdAt], map: "verification_attempts_user_created_idx")
   @@map("verification_attempts")
+}
+
+// P5-01: Errands (Backend PRD 11 and A.5). Status-dependent rules are CHECK constraints in the
+// migration. `searchVector` is a generated column the database fills; never write it.
+model Errand {
+  id                         String                                @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  requesterId                String                                @map("requester_id") @db.Uuid
+  requester                  User                                  @relation("ErrandRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  categoryId                 String                                @map("category_id") @db.Uuid
+  category                   Category                              @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  title                      String
+  description                String
+  instructions               String?
+  status                     ErrandStatus                          @default(DRAFT)
+  statusBeforeDispute        ErrandStatus?                         @map("status_before_dispute")
+  priority                   ErrandPriority                        @default(STANDARD)
+  timeMode                   TimeMode?                             @map("time_mode")
+  scheduledAt                DateTime?                             @map("scheduled_at") @db.Timestamptz(3)
+  suggestedBudgetMinor       BigInt?                               @map("suggested_budget_minor")
+  itemSize                   ItemSize?                             @map("item_size")
+  itemValueMinor             BigInt?                               @map("item_value_minor")
+  prohibitedItemsConfirmedAt DateTime?                             @map("prohibited_items_confirmed_at") @db.Timestamptz(3)
+  prohibitedPolicyVersion    String?                               @map("prohibited_policy_version")
+  publishedAt                DateTime?                             @map("published_at") @db.Timestamptz(3)
+  expiresAt                  DateTime?                             @map("expires_at") @db.Timestamptz(3)
+  extendedAt                 DateTime?                             @map("extended_at") @db.Timestamptz(3)
+  autoCompleteAt             DateTime?                             @map("auto_complete_at") @db.Timestamptz(3)
+  deliveredAt                DateTime?                             @map("delivered_at") @db.Timestamptz(3)
+  completedAt                DateTime?                             @map("completed_at") @db.Timestamptz(3)
+  cancelledAt                DateTime?                             @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason         ErrandCancellationReason?             @map("cancellation_reason")
+  cancellationNote           String?                               @map("cancellation_note")
+  cancelledBy                String?                               @map("cancelled_by") @db.Uuid
+  cancelledByType            AuditActorType?                       @map("cancelled_by_type")
+  /// Approximate point of the primary location (pickup, else destination). The feed index.
+  feedPoint                  Unsupported("geography(Point,4326)")? @map("feed_point")
+  /// Live offers on this errand. Kept by the offer module (Phase 6).
+  offerCount                 Int                                   @default(0) @map("offer_count")
+  /// Changes only on a material edit (Backend PRD 11.5); offers compare against it.
+  materialVersion            Int                                   @default(0) @map("material_version")
+  searchVector               Unsupported("tsvector")?              @map("search_vector")
+  version                    Int                                   @default(0)
+  createdAt                  DateTime                              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime                              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt                  DateTime?                             @map("deleted_at") @db.Timestamptz(3)
+
+  locations     ErrandLocation[]
+  contact       ErrandContact?
+  versions      ErrandVersion[]
+  media         ErrandMedia[]
+  saves         SavedErrand[]
+  statusHistory ErrandStatusHistory[]
+
+  @@index([status, categoryId], map: "errands_status_category_idx")
+  @@index([requesterId, status], map: "errands_requester_status_idx")
+  @@index([createdAt], map: "errands_created_at_idx")
+  @@index([feedPoint], type: Gist, map: "errands_feed_point_idx")
+  @@index([searchVector], type: Gin, map: "errands_search_vector_idx")
+  @@map("errands")
+}
+
+model ErrandLocation {
+  id          String                               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId    String                               @map("errand_id") @db.Uuid
+  errand      Errand                               @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  type        LocationType
+  exactPoint  Unsupported("geography(Point,4326)") @map("exact_point")
+  approxPoint Unsupported("geography(Point,4326)") @map("approx_point")
+  addressText String?                              @map("address_text")
+  landmark    String?
+  area        String
+  lga         String?
+  state       String?
+  source      LocationSource
+  createdAt   DateTime                             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime                             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime?                            @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([approxPoint], type: Gist, map: "errand_locations_approx_idx")
+  @@index([exactPoint], type: Gist, map: "errand_locations_exact_idx")
+  @@map("errand_locations")
+}
+
+/// Pickup and drop-off contacts. Every value is AES-256-GCM ciphertext (`v1.<keyId>...`).
+model ErrandContact {
+  errandId        String    @id @map("errand_id") @db.Uuid
+  errand          Errand    @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  pickupName      String?   @map("pickup_name")
+  pickupPhone     String?   @map("pickup_phone")
+  dropoffName     String?   @map("dropoff_name")
+  dropoffPhone    String?   @map("dropoff_phone")
+  encryptionKeyId String    @map("encryption_key_id")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("errand_contacts")
+}
+
+/// Snapshot of the values an errand had before a material edit (kept for disputes).
+model ErrandVersion {
+  id            String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId      String   @map("errand_id") @db.Uuid
+  errand        Errand   @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  version       Int
+  snapshot      Json
+  changedFields String[] @map("changed_fields")
+  changedBy     String   @map("changed_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([errandId, version], map: "errand_versions_errand_version_unique")
+  @@map("errand_versions")
+}
+
+model ErrandMedia {
+  id        String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId  String    @map("errand_id") @db.Uuid
+  errand    Errand    @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  mediaId   String    @map("media_id") @db.Uuid
+  media     Media     @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  position  Int       @default(0)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([errandId], map: "errand_media_errand_idx")
+  @@map("errand_media")
+}
+
+model SavedErrand {
+  id        String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation("SavedErrands", fields: [userId], references: [id], onDelete: Restrict)
+  errandId  String    @map("errand_id") @db.Uuid
+  errand    Errand    @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt], map: "saved_errands_user_created_idx")
+  @@map("saved_errands")
+}
+
+/// One row per status change (Backend PRD 11.6): who, from what, to what, why.
+model ErrandStatusHistory {
+  id         String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId   String         @map("errand_id") @db.Uuid
+  errand     Errand         @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  fromStatus ErrandStatus?  @map("from_status")
+  toStatus   ErrandStatus   @map("to_status")
+  actorType  AuditActorType @map("actor_type")
+  actorId    String?        @map("actor_id") @db.Uuid
+  reason     String?
+  version    Int
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([errandId, createdAt], map: "errand_status_history_errand_idx")
+  @@map("errand_status_history")
 }

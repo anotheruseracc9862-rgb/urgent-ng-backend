@@ -32,7 +32,9 @@
     "check": "npm run lint && npm run build && npm test",
     "test:int": "vitest run --config ./vitest.config.int.ts",
     "test:all": "npm test && npm run test:int && npm run test:e2e",
-    "check:full": "npm run check && npm run test:int && npm run test:e2e"
+    "check:full": "npm run check && npm run test:int && npm run test:e2e",
+    "test:int:changed": "vitest run --config ./vitest.config.int.ts --changed",
+    "test:int:errands": "vitest run --config ./vitest.config.int.ts src/errands src/marketplace"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

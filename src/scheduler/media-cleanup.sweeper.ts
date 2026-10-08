@@ -3,7 +3,7 @@ import { BaseSweeper } from './base-sweeper.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { MediaCleanupService } from '../media/media-cleanup.service.js';
 
-/** Deletes abandoned uploads and media of anonymised accounts, and requeues stuck processing. */
+/** Deletes abandoned uploads, unused errand photos and media of anonymised accounts, and requeues stuck processing. */
 @Injectable()
 export class MediaCleanupSweeper extends BaseSweeper {
   constructor(
@@ -15,8 +15,9 @@ export class MediaCleanupSweeper extends BaseSweeper {
 
   protected async processBatch(): Promise<number> {
     const orphans = await this.cleanup.deleteOrphanUploads();
+    const unused = await this.cleanup.deleteUnusedErrandPhotos();
     const anonymised = await this.cleanup.deleteMediaOfAnonymisedUsers();
     const requeued = await this.cleanup.requeueStuckProcessing();
-    return orphans + anonymised + requeued;
+    return orphans + unused + anonymised + requeued;
   }
 }

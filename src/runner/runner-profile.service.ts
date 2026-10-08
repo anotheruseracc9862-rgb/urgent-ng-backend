@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { Redis } from 'ioredis';
 import type { RunnerAvailability, TransportMethod } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
-import { RESOURCE_CONFLICT, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
+import { RATE_LIMITED, RESOURCE_CONFLICT, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
+import { REDIS_CLIENT } from '../common/redis/redis.module.js';
 
 const ABSOLUTE_MIN_KM = 1;
 const ABSOLUTE_MAX_KM = 20;
@@ -33,6 +35,7 @@ export class RunnerProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: BusinessConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async get(userId: string): Promise<RunnerProfileView> {
@@ -90,6 +93,8 @@ export class RunnerProfileService {
       }
     }
 
+    await this.limitAreaMoves(userId, input.areaCenter);
+
     await this.prisma.$executeRaw`
       INSERT INTO runner_profiles (user_id, transport, area_center, area_radius_km, excluded_category_ids, updated_at)
       VALUES (${userId}::uuid, ${input.transport}::"TransportMethod",
@@ -104,6 +109,37 @@ export class RunnerProfileService {
             updated_at = now()
     `;
     return this.get(userId);
+  }
+
+  /**
+   * Moving the operating-area centre is the only way to measure distances from a new place, so
+   * it is limited like a position update (Backend PRD 17.2, `LOCATION_UPDATE_MIN_SECONDS`, default
+   * 30 s): a runner who moves the centre again too soon gets RATE_LIMITED. Changing the radius,
+   * the transport or the exclusions is not a move. Redis down: allowed.
+   */
+  private async limitAreaMoves(userId: string, center: { lat: number; lng: number }): Promise<void> {
+    if (process.env.NODE_ENV === 'test' && process.env.RATE_LIMIT_DISABLED === 'true') {
+      return;
+    }
+    const rows = await this.prisma.$queryRaw<Array<{ moved: boolean }>>`
+      SELECT ST_Distance(area_center, ST_SetSRID(ST_MakePoint(${center.lng}::float8, ${center.lat}::float8), 4326)::geography) > 1 AS moved
+      FROM runner_profiles WHERE user_id = ${userId}::uuid AND deleted_at IS NULL
+    `;
+    if (!rows[0]?.moved) {
+      return;
+    }
+    const seconds = await this.config.get('LOCATION_UPDATE_MIN_SECONDS');
+    try {
+      const key = `runner-area-move:${userId}`;
+      if ((await this.redis.set(key, '1', 'EX', seconds, 'NX')) === null) {
+        throw DomainException.of(RATE_LIMITED, {
+          message: 'You moved your operating area a moment ago. Try again shortly.',
+          details: { retryAfterSeconds: Math.max(1, await this.redis.ttl(key)) },
+        });
+      }
+    } catch (error) {
+      if (error instanceof DomainException) throw error;
+    }
   }
 
   /** Unavailable runners do not see the feed and cannot submit new offers; existing offers are unaffected. */
