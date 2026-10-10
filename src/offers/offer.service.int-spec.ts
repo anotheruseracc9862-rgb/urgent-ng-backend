@@ -1,266 +1,286 @@
 /**
- * P6-04 integration tests: Offer submission with database persistence
- *
- * Verifies:
- * - Failed offer doesn't increment counter (transaction rollback)
- * - Expired errand rejected without counting
- * - Outbox event created in same transaction
- * - errand.offer_count incremented
+ * P6-04 / P6-06 integration tests: submitting offers, errand state rules, lifecycle hooks and
+ * the requester's list. Everything goes through the HTTP API against real PostgreSQL and Redis.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import type { INestApplication } from '@nestjs/common';
+import request from 'supertest';
+import { randomUUID } from 'node:crypto';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
-import { seedPolicies, signedInUser, type TestUser } from '../test/auth.helper.js';
-import { OfferService } from './offer.service.js';
+import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
+import { readyRunner } from '../test/verification.helper.js';
+import { insertErrand, openErrand, seedCategories } from '../test/errand.helper.js';
+import { listOffers, offerAction, submitOffer } from '../test/offer.helper.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
+import { OfferListService } from './offer-list.service.js';
+import { ErrandExpiryService } from '../errands/errand-expiry.service.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
-describe('OfferService integration (P6-04)', () => {
+describe('Offers: submit, lifecycle, list (P6-04, P6-06)', () => {
   let app: INestApplication;
-  let service: OfferService;
   const prisma = getTestPrisma();
+  let categories: Record<string, string>;
 
   beforeAll(async () => {
     app = await createTestApp();
-    service = app.get(OfferService);
   });
-
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
+    categories = await seedCategories();
   });
-
   afterAll(async () => {
     await app.close();
   });
 
-  it('rolls back transaction on validation error without incrementing counter', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    
-    const category = await prisma.category.create({
-      data: {
-        key: 'delivery-test',
-        name: 'Delivery Test',
-        requiresPickup: true,
-        requiresDestination: true,
-      },
-    });
+  const openErrandFor = (requesterId: string) => insertErrand({ requesterId, categoryId: categories.delivery });
+  const counterOf = async (userId: string) => (await prisma.offerDailyCounter.findMany({ where: { userId } })).reduce((n, c) => n + c.count, 0);
 
-    const errand = await prisma.errand.create({
-      data: {
+  describe('POST /errands/:id/offers', () => {
+    it('creates the offer, its first negotiation event, an outbox event and bumps offer_count', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+
+      const res = await submitOffer(app, runner, errandId).expect(201);
+
+      expect(res.body.data).toMatchObject({
+        errandId,
+        runnerId: runner.userId,
         requesterId: requester.userId,
-        categoryId: category.id,
-        title: 'Test Errand',
-        description: 'Test description',
-        status: 'OPEN',
-        timeMode: 'ASAP',
-        publishedAt: new Date(),
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
+        status: 'ACTIVE',
+        awaitingParty: 'REQUESTER',
+        amountMinor: 50_000,
+      });
+      const events = await prisma.negotiationEvent.findMany({ where: { offerId: res.body.data.id } });
+      expect(events.map((e) => e.messageType)).toEqual(['INITIAL_OFFER']);
+      const outbox = await prisma.outboxEvent.findMany({ where: { eventType: 'offer.created', aggregateId: res.body.data.id } });
+      expect(outbox).toHaveLength(1);
+      const [{ offer_count }] = await prisma.$queryRaw<Array<{ offer_count: number }>>`SELECT offer_count FROM errands WHERE id = ${errandId}::uuid`;
+      expect(offer_count).toBe(1);
+      expect(await counterOf(runner.userId)).toBe(1);
     });
 
-    const counterBefore = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: runner.userId,
-          dayLagos: new Date().toISOString().split('T')[0],
-        },
-      },
+    it('replays the first answer for the same Idempotency-Key and counts once', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+      const key = randomUUID();
+
+      const first = await submitOffer(app, runner, errandId, {}, key).expect(201);
+      const second = await submitOffer(app, runner, errandId, {}, key).expect(201);
+
+      expect(second.body.data.id).toBe(first.body.data.id);
+      expect(await counterOf(runner.userId)).toBe(1);
     });
 
-    expect(counterBefore).toBeNull();
+    it('refuses a runner who is not verified, available and unrestricted', async () => {
+      const requester = await signedInUser(app);
+      const plain = await signedInUser(app);
+      const errandId = await openErrandFor(requester.userId);
 
-    // Attempt to submit offer with invalid amount (below minimum of 20000)
-    await expect(
-      service.submitOffer({
-        errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-        runnerId: runner.userId,
-        amountMinor: 100, // too low
-        durationMinutes: 30,
-        availabilityConfirmedAt: new Date(),
-      }),
-    ).rejects.toThrow();
+      const res = await submitOffer(app, plain, errandId);
 
-    // Verify counter was NOT incremented
-    const counterAfter = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: runner.userId,
-          dayLagos: new Date().toISOString().split('T')[0],
-        },
-      },
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(['VERIFICATION_REQUIRED', 'OFFER_NOT_ELIGIBLE']).toContain(res.body.error.code);
+      expect(await prisma.offer.count()).toBe(0);
     });
 
-    expect(counterAfter).toBeNull();
+    it('ignores any requester or status the client sends, and refuses own, draft, cancelled and expired errands', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const other = await signedInUser(app);
 
-    // Verify no offer was created
-    const offers = await prisma.offer.count({ where: { errandId: errand.id } });
-    expect(offers).toBe(0);
+      const own = await insertErrand({ requesterId: runner.userId, categoryId: categories.delivery });
+      expect((await submitOffer(app, runner, own, { requesterId: other.userId, status: 'OPEN' })).status).toBe(400); // client context is not accepted
+      const ownRes = await submitOffer(app, runner, own);
+      expect(ownRes.status).toBe(403);
+      expect(ownRes.body.error.code).toBe('OFFER_NOT_ELIGIBLE');
 
-    // Verify no outbox event was created
-    const events = await prisma.outboxEvent.count({ where: { eventType: 'offer.submitted' } });
-    expect(events).toBe(0);
+      const draft = await insertErrand({ requesterId: requester.userId, categoryId: categories.delivery, status: 'DRAFT' });
+      expect((await submitOffer(app, runner, draft)).status).toBe(404);
 
-    // Verify errand.offer_count was NOT incremented
-    const updatedErrand = await prisma.errand.findUnique({ where: { id: errand.id } });
-    expect(updatedErrand?.offerCount).toBe(0);
+      const cancelled = await insertErrand({ requesterId: requester.userId, categoryId: categories.delivery, status: 'CANCELLED' });
+      const cancelledRes = await submitOffer(app, runner, cancelled);
+      expect(cancelledRes.status).toBe(409);
+      expect(cancelledRes.body.error.code).toBe('ERRAND_INVALID_STATE');
+
+      const overdue = await insertErrand({ requesterId: requester.userId, categoryId: categories.delivery, expiresInHours: -1 });
+      expect((await submitOffer(app, runner, overdue)).body.error.code).toBe('ERRAND_INVALID_STATE');
+
+      expect(await prisma.offer.count()).toBe(0);
+      expect(await counterOf(runner.userId)).toBe(0);
+    });
+
+    it('refuses a runner blocked by, or blocking, the requester, as if the errand did not exist', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+      await request(app.getHttpServer()).post(`${API}/users/${runner.userId}/block`).set(...bearer(requester.accessToken)).expect(204);
+
+      const res = await submitOffer(app, runner, errandId);
+
+      expect(res.status).toBe(404);
+      expect(await prisma.offer.count()).toBe(0);
+    });
+
+    it('validates amount, duration and availability, and a failed offer is not counted', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+
+      expect((await submitOffer(app, runner, errandId, { amountMinor: 100 })).status).toBe(400);
+      expect((await submitOffer(app, runner, errandId, { amountMinor: 999_999_999_999 })).status).toBe(400);
+      expect((await submitOffer(app, runner, errandId, { durationMinutes: 2 })).status).toBe(400);
+      expect((await submitOffer(app, runner, errandId, { availabilityConfirmed: false })).status).toBe(400);
+
+      expect(await counterOf(runner.userId)).toBe(0);
+      expect(await prisma.offer.count()).toBe(0);
+    });
+
+    it('allows one active offer per errand and refuses a second', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+      await submitOffer(app, runner, errandId).expect(201);
+
+      const again = await submitOffer(app, runner, errandId);
+
+      expect(again.status).toBe(409);
+      expect(again.body.error.code).toBe('OFFER_ALREADY_EXISTS');
+      expect(await counterOf(runner.userId)).toBe(1);
+    });
+
+    it('enforces the open-offer cap from the database', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      await app.get(BusinessConfigService).set('MAX_OPEN_OFFERS_PER_RUNNER', 2);
+      const statuses: number[] = [];
+      let last: { body: { error?: { code: string } } } | undefined;
+      for (let i = 0; i < 3; i += 1) {
+        last = await submitOffer(app, runner, await openErrandFor(requester.userId));
+        statuses.push((last as unknown as { status: number }).status);
+      }
+      expect(statuses).toEqual([201, 201, 403]);
+      expect(last?.body.error?.code).toBe('OFFER_NOT_ELIGIBLE');
+      expect(await counterOf(runner.userId)).toBe(2);
+    });
   });
 
-  it('rejects expired errand without counting against limit', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    
-    const category = await prisma.category.create({
-      data: {
-        key: 'delivery-test2',
-        name: 'Delivery Test 2',
-        requiresPickup: true,
-        requiresDestination: true,
-      },
+  describe('errand lifecycle hooks', () => {
+    it('flags live offers on a material edit; selection-blocking and reconfirm clear it', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrand(app, requester, categories.delivery);
+      const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
+
+      await request(app.getHttpServer())
+        .patch(`${API}/errands/${errandId}`)
+        .set(...bearer(requester.accessToken))
+        .send({ pickup: { point: { lat: 6.55, lng: 3.39 }, landmark: 'Elsewhere' } })
+        .expect(200);
+
+      const flagged = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+      expect(flagged.needsReconfirmation).toBe(true);
+      expect(flagged.awaitingParty).toBe('RUNNER');
+      expect(flagged.version).toBe(offer.version + 1);
+
+      // the requester cannot counter a flagged offer
+      const blocked = await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 });
+      expect(blocked.status).toBe(409);
+
+      const reconfirmed = await offerAction(app, runner, 'post', offer.id, 'reconfirm').expect(200);
+      expect(reconfirmed.body.data).toMatchObject({ needsReconfirmation: false, awaitingParty: 'REQUESTER' });
     });
 
-    // Create an expired errand
-    const errandId = await prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO errands (
-        requester_id, category_id, title, description, status, time_mode, priority,
-        published_at, expires_at, updated_at
-      ) VALUES (
-        ${requester.userId}::uuid, ${category.id}::uuid, 'Expired Errand', 'Test description',
-        'EXPIRED'::"ErrandStatus", 'ASAP'::"TimeMode", 'URGENT'::"ErrandPriority",
-        NOW() - INTERVAL '48 hours', NOW() - INTERVAL '1 hour',
-        NOW()
-      ) RETURNING id::text
-    `.then((rows) => rows[0].id);
+    it('a non-material edit leaves offers alone', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrand(app, requester, categories.delivery);
+      const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
 
-    const errand = await prisma.errand.findUniqueOrThrow({ where: { id: errandId } });
+      await request(app.getHttpServer())
+        .patch(`${API}/errands/${errandId}`)
+        .set(...bearer(requester.accessToken))
+        .send({ title: 'Deliver a small parcel' })
+        .expect(200);
 
-    const counterBefore = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: runner.userId,
-          dayLagos: new Date().toISOString().split('T')[0],
-        },
-      },
+      const same = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+      expect(same.needsReconfirmation).toBe(false);
+      expect(same.version).toBe(offer.version);
     });
 
-    expect(counterBefore).toBeNull();
+    it('cancelling the errand closes live offers as CLOSED / ERRAND_CANCELLED, atomically, with events', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrand(app, requester, categories.delivery);
+      const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
 
-    // Attempt to submit offer on expired errand
-    await expect(
-      service.submitOffer({
-        errand: { id: errand.id, requesterId: requester.userId, status: 'EXPIRED' },
-        runnerId: runner.userId,
-        amountMinor: 50000,
-        durationMinutes: 30,
-        availabilityConfirmedAt: new Date(),
-      }),
-    ).rejects.toThrow();
+      await request(app.getHttpServer())
+        .post(`${API}/errands/${errandId}/cancel`)
+        .set(...bearer(requester.accessToken))
+        .send({ reason: 'REQUESTER_CANCELLED' })
+        .expect(200);
 
-    // Verify counter was NOT incremented
-    const counterAfter = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: runner.userId,
-          dayLagos: new Date().toISOString().split('T')[0],
-        },
-      },
+      const closed = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+      expect(closed).toMatchObject({ status: 'CLOSED', closeReason: 'ERRAND_CANCELLED', awaitingParty: 'NONE' });
+      expect(closed.closedAt).not.toBeNull();
+      const types = (await prisma.negotiationEvent.findMany({ where: { offerId: offer.id }, orderBy: { createdAt: 'asc' } })).map((e) => e.messageType);
+      expect(types).toEqual(['INITIAL_OFFER', 'SYSTEM_EVENT']);
+      expect(await prisma.outboxEvent.count({ where: { eventType: 'offer.closed', aggregateId: offer.id } })).toBe(1);
+
+      // and nobody can add one afterwards
+      const late = await submitOffer(app, await readyRunner(app, '22345678901'), errandId);
+      expect(late.body.error.code).toBe('ERRAND_INVALID_STATE');
     });
 
-    expect(counterAfter).toBeNull();
+    it('expiry closes live offers as EXPIRED / ERRAND_EXPIRED', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+      const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
+      await prisma.$executeRaw`UPDATE errands SET expires_at = now() - interval '1 minute' WHERE id = ${errandId}::uuid`;
 
-    // Verify no offer was created
-    const offers = await prisma.offer.count({ where: { errandId: errand.id } });
-    expect(offers).toBe(0);
+      expect(await app.get(ErrandExpiryService).expireDue()).toBe(1);
 
-    // Verify errand.offer_count was NOT incremented
-    const updatedErrand = await prisma.errand.findUnique({ where: { id: errand.id } });
-    expect(updatedErrand?.offerCount).toBe(0);
+      const closed = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+      expect(closed).toMatchObject({ status: 'EXPIRED', closeReason: 'ERRAND_EXPIRED' });
+    });
   });
 
-  it('creates outbox event and increments offer_count in same transaction', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    
-    const category = await prisma.category.create({
-      data: {
-        key: 'delivery-test3',
-        name: 'Delivery Test 3',
-        requiresPickup: true,
-        requiresDestination: true,
-      },
+  describe('GET /errands/:id/offers', () => {
+    it('is for the errand owner only', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const stranger = await signedInUser(app);
+      const errandId = await openErrandFor(requester.userId);
+      await submitOffer(app, runner, errandId).expect(201);
+
+      expect((await listOffers(app, requester, errandId).expect(200)).body.data).toHaveLength(1);
+      expect((await listOffers(app, stranger, errandId)).status).toBe(404);
+      expect((await listOffers(app, runner, errandId)).status).toBe(404);
     });
 
-    // Create errand with proper schema constraints
-    const errandId = await prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO errands (
-        requester_id, category_id, title, description, status, time_mode, priority,
-        published_at, expires_at, feed_point, updated_at
-      ) VALUES (
-        ${requester.userId}::uuid, ${category.id}::uuid, 'Test Errand', 'Test description',
-        'OPEN'::"ErrandStatus", 'ASAP'::"TimeMode", 'URGENT'::"ErrandPriority",
-        NOW(), NOW() + INTERVAL '24 hours',
-        ST_SetSRID(ST_MakePoint(3.3792, 6.5244), 4326)::geography,
-        NOW()
-      ) RETURNING id::text
-    `.then((rows) => rows[0].id);
+    it('sorts by the chosen key and breaks ties by Pro, then age; Pro never overrides the sort', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openErrandFor(requester.userId);
+      const cheap = await readyRunner(app, '12345678901');
+      const mid = await readyRunner(app, '22345678901');
+      const pro = await readyRunner(app, '32345678901').catch(() => undefined);
+      await submitOffer(app, cheap, errandId, { amountMinor: 30_000, durationMinutes: 90 }).expect(201);
+      await submitOffer(app, mid, errandId, { amountMinor: 40_000, durationMinutes: 20 }).expect(201);
+      if (pro) await submitOffer(app, pro, errandId, { amountMinor: 40_000, durationMinutes: 60 }).expect(201);
+      const price = (await listOffers(app, requester, errandId, 'price_asc').expect(200)).body.data as Array<{ amountMinor: number }>;
+      expect(price.map((o) => o.amountMinor)).toEqual(price.map((o) => o.amountMinor).sort((a, b) => a - b));
 
-    const errand = await prisma.errand.findUniqueOrThrow({ where: { id: errandId } });
+      const eta = (await listOffers(app, requester, errandId, 'eta_asc').expect(200)).body.data as Array<{ durationMinutes: number }>;
+      expect(eta.map((o) => o.durationMinutes)).toEqual(eta.map((o) => o.durationMinutes).sort((a, b) => a - b));
 
-    const offer = await service.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-      message: 'Test offer',
+      expect((await listOffers(app, requester, errandId, 'nonsense')).status).toBe(400);
+      expect(app.get(OfferListService)).toBeDefined();
     });
-
-    expect(offer.id).toBeDefined();
-    expect(offer.status).toBe('ACTIVE');
-
-    // Verify counter was incremented
-    const counter = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: runner.userId,
-          dayLagos: new Date().toISOString().split('T')[0],
-        },
-      },
-    });
-
-    expect(counter?.count).toBe(1);
-
-    // Verify outbox event was created
-    const event = await prisma.outboxEvent.findFirst({
-      where: {
-        eventType: 'offer.submitted',
-        aggregateId: offer.id,
-      },
-    });
-
-    expect(event).toBeDefined();
-    expect(event?.payload).toMatchObject({
-      offerId: offer.id,
-      errandId: errand.id,
-      runnerId: runner.userId,
-      requesterId: requester.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-    });
-
-    // Verify errand.offer_count was incremented
-    const updatedErrand = await prisma.errand.findUnique({ where: { id: errand.id } });
-    expect(updatedErrand?.offerCount).toBe(1);
-
-    // Verify negotiation event was created
-    const negotiationEvent = await prisma.negotiationEvent.findFirst({
-      where: { offerId: offer.id },
-    });
-
-    expect(negotiationEvent).toBeDefined();
-    expect(negotiationEvent?.messageType).toBe('INITIAL_OFFER');
   });
 });

@@ -1,7 +1,11 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { AuditActorType, Prisma } from '@prisma/client';
+import type { NegotiationMessageType, Offer, OfferCloseReason, OfferStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
+import { lockRow } from '../database/lock-row.helper.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import {
+  ERRAND_INVALID_STATE,
   FORBIDDEN,
   OFFER_ALREADY_EXISTS,
   OFFER_INVALID_STATE,
@@ -13,28 +17,13 @@ import {
 } from '../common/constants/error-codes.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { EntitlementService } from '../entitlements/entitlement.service.js';
-import { OfferLimitService } from '../entitlements/offer-limit.service.js';
+import { RunnerEligibilityService } from '../runner/runner-eligibility.service.js';
+import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
-import { generateUuidV7 } from '../common/utils/uuid.helper.js';
 
-export type OfferStatus = 'ACTIVE' | 'WITHDRAWN' | 'REJECTED' | 'SELECTED' | 'EXPIRED' | 'CLOSED';
+export type { OfferStatus, OfferCloseReason };
 export type AwaitingParty = 'RUNNER' | 'REQUESTER' | 'NONE';
-export type OfferCloseReason =
-  | 'REQUESTER_REJECTED'
-  | 'RUNNER_WITHDREW'
-  | 'ERRAND_CANCELLED'
-  | 'ERRAND_EXPIRED'
-  | 'RUNNER_SELECTED'
-  | 'ASSIGNMENT_ACCEPTED'
-  | 'ASSIGNMENT_DECLINED'
-  | 'ASSIGNMENT_ACCEPTANCE_TIMEOUT'
-  | 'ADMIN_CLOSED';
-
-export interface ErrandOfferContext {
-  id: string;
-  requesterId: string;
-  status: 'OPEN' | 'RUNNER_SELECTED' | 'ACCEPTED' | 'IN_PROGRESS' | 'PICKED_UP' | 'DELIVERED' | 'COMPLETED' | 'DISPUTED' | 'CANCELLED' | 'EXPIRED';
-}
+type Party = 'RUNNER' | 'REQUESTER';
 
 export interface OfferRecord {
   id: string;
@@ -56,711 +45,520 @@ export interface OfferRecord {
 }
 
 export interface SubmitOfferInput {
-  errand: ErrandOfferContext;
+  errandId: string;
   runnerId: string;
   amountMinor: number;
   durationMinutes: number;
-  conversationId?: string;
-  availabilityConfirmedAt?: Date;
+  availabilityConfirmed: boolean;
   message?: string;
 }
 
+export interface OfferTermsInput {
+  amountMinor: number;
+  durationMinutes: number;
+  message?: string;
+  expectedVersion?: number;
+}
+
+interface LockedErrand {
+  id: string;
+  requester_id: string;
+  status: string;
+  past_expiry: boolean;
+}
+
+/**
+ * Offers and negotiation (Backend PRD 13). The database is the only source of truth: every
+ * operation runs in one transaction, locks the offer row (`FOR UPDATE`), re-checks state, and
+ * writes the offer change, its negotiation event, an audit row and an outbox event together.
+ *
+ * Errand lock order (shared with the errand state machine): errand first, then offers. An offer
+ * operation locks only the offer, because closing offers happens under the errand lock and
+ * touches the offer row, so a committed close is always seen by the next offer operation.
+ */
 @Injectable()
 export class OfferService {
-  private readonly offers = new Map<string, OfferRecord>();
-  private readonly offersByErrandRunner = new Map<string, string>();
-
   constructor(
     private readonly config: BusinessConfigService,
     private readonly entitlement: EntitlementService,
-    private readonly offerLimit: OfferLimitService,
-    @Optional() private readonly outbox?: OutboxService,
-    @Optional() private readonly prisma?: PrismaService,
+    private readonly eligibility: RunnerEligibilityService,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly outbox: OutboxService,
   ) {}
 
-  async canSubmitOffer(errand: ErrandOfferContext, runnerId: string): Promise<{ allowed: boolean; reasons: string[] }> {
-    const reasons: string[] = [];
+  // ---- Submit ----
 
-    if (errand.status !== 'OPEN') {
-      reasons.push('ERRAND_NOT_OPEN');
+  async submitOffer(input: SubmitOfferInput): Promise<OfferRecord> {
+    const { errandId, runnerId, amountMinor, durationMinutes } = input;
+    if (!input.availabilityConfirmed) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: 'Availability must be confirmed before submitting an offer.',
+        details: { field: 'availabilityConfirmed' },
+      });
     }
-    if (errand.requesterId === runnerId) {
-      reasons.push('OWN_ERRAND');
-    }
-
-    if (reasons.length > 0) {
-      return { allowed: false, reasons };
-    }
+    await this.assertTermsInBounds(amountMinor, durationMinutes);
+    await this.eligibility.assertCanOffer(runnerId);
+    // Everything that needs the pool is read before the transaction: parallel submits hold every
+    // connection while they wait on the counter lock, and must not need another one.
+    const maxOpenOffers = await this.config.get('MAX_OPEN_OFFERS_PER_RUNNER');
+    const allowance = await this.entitlement.offerAllowance(runnerId);
 
     try {
-      await this.entitlement.assertCanSubmitOffer(runnerId);
-      return { allowed: true, reasons: [] };
+      const created = await this.prisma.$transaction(async (tx) => {
+        // A shared lock: offers on one errand do not queue behind each other, but a cancel or
+        // expiry (which takes FOR UPDATE) waits for in-flight offers and then closes them.
+        const errand = await this.readErrand(tx, errandId, 'FOR SHARE');
+        if (!errand || errand.status === 'DRAFT') {
+          throw DomainException.of(RESOURCE_NOT_FOUND);
+        }
+        if (errand.requester_id === runnerId) {
+          throw DomainException.of(OFFER_NOT_ELIGIBLE, {
+            message: 'You cannot make an offer on your own errand.',
+            details: { reasons: ['OWN_ERRAND'] },
+          });
+        }
+        if (errand.status !== 'OPEN' || errand.past_expiry) {
+          throw DomainException.of(ERRAND_INVALID_STATE, {
+            message: 'This errand is no longer accepting offers.',
+            details: { status: errand.past_expiry ? 'EXPIRED' : errand.status },
+          });
+        }
+        const blocked = await tx.$queryRaw<Array<{ ok: number }>>`
+          SELECT 1 AS ok FROM blocks b
+          WHERE b.deleted_at IS NULL
+            AND ((b.blocker_id = ${runnerId}::uuid AND b.blocked_id = ${errand.requester_id}::uuid)
+              OR (b.blocker_id = ${errand.requester_id}::uuid AND b.blocked_id = ${runnerId}::uuid))
+          LIMIT 1
+        `;
+        if (blocked.length > 0) {
+          throw DomainException.of(RESOURCE_NOT_FOUND);
+        }
+
+        // Locks the runner's daily counter row: from here on this runner's submits are serial.
+        await this.entitlement.reserveOffer(tx, runnerId, allowance);
+
+        const open = await tx.offer.count({ where: { runnerId, status: 'ACTIVE' } });
+        if (open >= maxOpenOffers) {
+          throw DomainException.of(OFFER_NOT_ELIGIBLE, {
+            message: 'You have reached the open-offer limit.',
+            details: { reasons: ['OPEN_OFFER_CAP'], maxOpenOffers },
+          });
+        }
+        const existing = await tx.offer.findFirst({ where: { errandId, runnerId, status: 'ACTIVE' }, select: { id: true } });
+        if (existing) {
+          throw DomainException.of(OFFER_ALREADY_EXISTS, { details: { errandId, runnerId } });
+        }
+
+        const now = await this.dbNow(tx);
+        const offer = await tx.offer.create({
+          data: {
+            errandId,
+            runnerId,
+            requesterId: errand.requester_id,
+            amountMinor: BigInt(amountMinor),
+            durationMinutes,
+            availabilityConfirmedAt: now,
+            message: input.message,
+            status: 'ACTIVE',
+            awaitingParty: 'REQUESTER',
+            version: 0,
+          },
+        });
+        await this.recordEvent(tx, offer, runnerId, 'INITIAL_OFFER', offer.version, {
+          amountMinor,
+          durationMinutes,
+          message: input.message,
+        });
+        await tx.$executeRaw`UPDATE errands SET offer_count = offer_count + 1 WHERE id = ${errandId}::uuid`;
+        await this.publish(tx, 'offer.created', offer, runnerId, 'offer.submitted');
+        return offer;
+      });
+      return this.toRecord(created);
     } catch (error) {
-      if (error instanceof DomainException && error.getCode() === 'OFFER_DAILY_LIMIT_REACHED') {
-        return { allowed: false, reasons: ['OFFER_DAILY_LIMIT_REACHED'] };
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw DomainException.of(OFFER_ALREADY_EXISTS, { details: { errandId, runnerId } });
       }
       throw error;
     }
   }
 
-  async submitOffer(input: SubmitOfferInput): Promise<OfferRecord> {
-    const { errand, runnerId, amountMinor, durationMinutes } = input;
-    const eligibility = await this.canSubmitOffer(errand, runnerId);
+  // ---- Negotiation ----
 
-    if (!eligibility.allowed) {
-      throw DomainException.of(OFFER_NOT_ELIGIBLE, {
-        message: 'This runner is not eligible to submit an offer on this errand.',
-        details: { reasons: eligibility.reasons },
+  /** The runner revises their own offer while it waits on the requester. Not counted against the limit. */
+  edit(offerId: string, userId: string, input: OfferTermsInput): Promise<OfferRecord> {
+    return this.mutate(offerId, userId, 'edit', async (tx, offer, party) => {
+      this.assertParty(party, 'RUNNER');
+      this.assertActive(offer, input.expectedVersion);
+      this.assertNoReconfirmation(offer);
+      if (offer.awaitingParty === 'RUNNER') {
+        throw DomainException.of(OFFER_INVALID_STATE, {
+          message: 'Respond to the counter-offer instead of editing.',
+          details: { offerId, awaitingParty: offer.awaitingParty },
+        });
+      }
+      await this.assertErrandOpen(tx, offer.errandId);
+      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes);
+      return this.applyTerms(tx, offer, userId, input, 'REQUESTER');
+    });
+  }
+
+  /** A counter on the actor's own turn: the requester when waiting on them, the runner when waiting on the runner. */
+  counterOffer(offerId: string, userId: string, input: OfferTermsInput): Promise<OfferRecord> {
+    return this.mutate(offerId, userId, 'counter', async (tx, offer, party) => {
+      this.assertActive(offer, input.expectedVersion);
+      this.assertNoReconfirmation(offer);
+      if (offer.awaitingParty !== party) {
+        throw DomainException.of(OFFER_INVALID_STATE, {
+          message: `It is not the ${party.toLowerCase()}'s turn to negotiate this offer.`,
+          details: { offerId, awaitingParty: offer.awaitingParty, actor: party },
+        });
+      }
+      await this.assertErrandOpen(tx, offer.errandId);
+      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes);
+      return this.applyTerms(tx, offer, userId, input, party === 'RUNNER' ? 'REQUESTER' : 'RUNNER');
+    });
+  }
+
+  /** The runner accepts the requester's counter: the amount is agreed and the requester may select. */
+  acceptCounter(offerId: string, userId: string, expectedVersion?: number): Promise<OfferRecord> {
+    return this.mutate(offerId, userId, 'accept_counter', async (tx, offer, party) => {
+      this.assertParty(party, 'RUNNER');
+      this.assertActive(offer, expectedVersion);
+      this.assertNoReconfirmation(offer);
+      if (offer.awaitingParty !== 'RUNNER') {
+        throw DomainException.of(OFFER_INVALID_STATE, {
+          message: 'There is no counter-offer waiting for you.',
+          details: { offerId, awaitingParty: offer.awaitingParty },
+        });
+      }
+      await this.assertErrandOpen(tx, offer.errandId);
+      const updated = await tx.offer.update({
+        where: { id: offer.id },
+        data: { awaitingParty: 'NONE', version: { increment: 1 } },
+      });
+      await this.recordEvent(tx, updated, userId, 'ACCEPT', updated.version, {
+        amountMinor: Number(updated.amountMinor),
+        durationMinutes: updated.durationMinutes,
+      });
+      return updated;
+    });
+  }
+
+  /** The requester declines an offer. Allowed at any point before selection, whoever holds the turn. */
+  rejectOffer(offerId: string, userId: string, expectedVersion?: number): Promise<OfferRecord> {
+    return this.mutate(offerId, userId, 'reject', async (tx, offer, party) => {
+      this.assertParty(party, 'REQUESTER');
+      this.assertActive(offer, expectedVersion);
+      const now = await this.dbNow(tx);
+      const updated = await tx.offer.update({
+        where: { id: offer.id },
+        data: {
+          status: 'REJECTED',
+          closeReason: 'REQUESTER_REJECTED',
+          awaitingParty: 'NONE',
+          closedAt: now,
+          version: { increment: 1 },
+        },
+      });
+      await this.recordEvent(tx, updated, userId, 'REJECT', updated.version);
+      return updated;
+    });
+  }
+
+  /** The runner pulls the offer. It still counts for the day, so resubmitting cannot dodge the limit. */
+  withdraw(offerId: string, userId: string): Promise<OfferRecord> {
+    return this.mutate(offerId, userId, 'withdraw', async (tx, offer, party) => {
+      this.assertParty(party, 'RUNNER');
+      this.assertActive(offer);
+      const now = await this.dbNow(tx);
+      const updated = await tx.offer.update({
+        where: { id: offer.id },
+        data: {
+          status: 'WITHDRAWN',
+          closeReason: 'RUNNER_WITHDREW',
+          awaitingParty: 'NONE',
+          withdrawnAt: now,
+          closedAt: now,
+          version: { increment: 1 },
+        },
+      });
+      await this.recordEvent(tx, updated, userId, 'WITHDRAW', updated.version);
+      return updated;
+    });
+  }
+
+  /** After a material errand edit the runner confirms the offer still stands (Backend PRD 11.5). */
+  async reconfirmOffer(offerId: string, userId: string, expectedVersion?: number): Promise<OfferRecord> {
+    // Only the offer's own runner is checked here; anyone else gets the same answer as for a missing offer.
+    const own = await this.prisma.offer.findFirst({ where: { id: offerId, runnerId: userId }, select: { id: true } });
+    if (own) {
+      await this.eligibility.assertCanOffer(userId);
+    }
+    return this.mutate(offerId, userId, 'reconfirm', async (tx, offer, party) => {
+      this.assertParty(party, 'RUNNER');
+      this.assertActive(offer, expectedVersion);
+      if (!offer.needsReconfirmation) {
+        throw DomainException.of(OFFER_INVALID_STATE, {
+          message: 'This offer does not need reconfirmation.',
+          details: { offerId },
+        });
+      }
+      await this.assertErrandOpen(tx, offer.errandId);
+      const updated = await tx.offer.update({
+        where: { id: offer.id },
+        data: { needsReconfirmation: false, awaitingParty: 'REQUESTER', version: { increment: 1 } },
+      });
+      await this.recordEvent(tx, updated, userId, 'SYSTEM_EVENT', updated.version, {
+        amountMinor: Number(updated.amountMinor),
+        durationMinutes: updated.durationMinutes,
+        message: 'RECONFIRMED',
+      });
+      return updated;
+    });
+  }
+
+  // ---- Lifecycle hooks (called inside another module's transaction) ----
+
+  /**
+   * Flag every live offer on the errand after a material edit. Called in the editing transaction,
+   * so an edit and its flags commit or roll back together. Returns how many offers were flagged.
+   */
+  async flagForReconfirmation(tx: Prisma.TransactionClient, errandId: string): Promise<number> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE offers
+      SET needs_reconfirmation = true, awaiting_party = 'RUNNER'::"OfferAwaitingParty",
+          version = version + 1, updated_at = clock_timestamp()
+      WHERE errand_id = ${errandId}::uuid AND status = 'ACTIVE'::"OfferStatus" AND deleted_at IS NULL
+        AND needs_reconfirmation = false
+      RETURNING id::text
+    `;
+    for (const { id } of rows) {
+      const offer = await tx.offer.findUniqueOrThrow({ where: { id } });
+      await this.recordEvent(tx, offer, offer.requesterId, 'SYSTEM_EVENT', offer.version, {
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        message: 'ERRAND_EDITED',
+      });
+      await this.publish(tx, 'offer.updated', offer, offer.requesterId, 'offer.flagged_for_reconfirmation');
+    }
+    return rows.length;
+  }
+
+  /**
+   * Close every live offer when the errand ends (cancelled or expired). Runs in the errand state
+   * machine's transaction, so offers and errand change together.
+   */
+  async closeForErrand(
+    tx: Prisma.TransactionClient,
+    errandId: string,
+    reason: Extract<OfferCloseReason, 'ERRAND_CANCELLED' | 'ERRAND_EXPIRED' | 'ADMIN_CLOSED'>,
+  ): Promise<number> {
+    const status: OfferStatus = reason === 'ERRAND_EXPIRED' ? 'EXPIRED' : 'CLOSED';
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE offers
+      SET status = ${status}::"OfferStatus", close_reason = ${reason}::"OfferCloseReason",
+          awaiting_party = 'NONE'::"OfferAwaitingParty", closed_at = clock_timestamp(),
+          version = version + 1, updated_at = clock_timestamp()
+      WHERE errand_id = ${errandId}::uuid AND status = 'ACTIVE'::"OfferStatus" AND deleted_at IS NULL
+      RETURNING id::text
+    `;
+    for (const { id } of rows) {
+      const offer = await tx.offer.findUniqueOrThrow({ where: { id } });
+      await this.recordEvent(tx, offer, offer.requesterId, 'SYSTEM_EVENT', offer.version, {
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        message: reason,
+      });
+      await this.publish(tx, 'offer.closed', offer, offer.requesterId, 'offer.closed');
+    }
+    return rows.length;
+  }
+
+  // ---- Internals ----
+
+  /** Lock the offer, resolve the caller's party, run the change, audit and publish, return the record. */
+  private async mutate(
+    offerId: string,
+    userId: string,
+    action: string,
+    work: (tx: Prisma.TransactionClient, offer: Offer, party: Party) => Promise<Offer>,
+  ): Promise<OfferRecord> {
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const locked = await lockRow<{ id: string }>(tx, 'offers', offerId, 'id');
+      const offer = locked ? await tx.offer.findFirst({ where: { id: offerId } }) : null;
+      // Not a party: the same answer as a missing offer, so ids cannot be probed.
+      const party: Party | null = !offer ? null : offer.runnerId === userId ? 'RUNNER' : offer.requesterId === userId ? 'REQUESTER' : null;
+      if (!offer || !party) {
+        throw DomainException.of(RESOURCE_NOT_FOUND);
+      }
+      const result = await work(tx, offer, party);
+      await this.publish(tx, eventTypeFor(action), result, userId, `offer.${action}`, { before: offer.status });
+      return result;
+    });
+    return this.toRecord(updated);
+  }
+
+  private async applyTerms(
+    tx: Prisma.TransactionClient,
+    offer: Offer,
+    actorId: string,
+    input: OfferTermsInput,
+    next: Party,
+  ): Promise<Offer> {
+    const updated = await tx.offer.update({
+      where: { id: offer.id },
+      data: {
+        amountMinor: BigInt(input.amountMinor),
+        durationMinutes: input.durationMinutes,
+        message: input.message ?? offer.message,
+        awaitingParty: next,
+        version: { increment: 1 },
+      },
+    });
+    await this.recordEvent(tx, updated, actorId, 'COUNTER_OFFER', updated.version, {
+      amountMinor: input.amountMinor,
+      durationMinutes: input.durationMinutes,
+      message: input.message,
+    });
+    return updated;
+  }
+
+  private assertParty(actual: Party, required: Party): void {
+    if (actual !== required) {
+      throw DomainException.of(FORBIDDEN, {
+        message: required === 'RUNNER' ? 'Only the runner can do this.' : 'Only the requester can do this.',
       });
     }
+  }
 
-    const [minAmount, maxAmount, minDuration, maxDuration, maxOpenOffers] = await Promise.all([
+  private assertActive(offer: Offer, expectedVersion?: number): void {
+    if (offer.status !== 'ACTIVE') {
+      throw DomainException.of(OFFER_INVALID_STATE, {
+        message: 'This offer is no longer active.',
+        details: { offerId: offer.id, status: offer.status },
+      });
+    }
+    if (expectedVersion !== undefined && offer.version !== expectedVersion) {
+      throw DomainException.of(OFFER_VERSION_MISMATCH, {
+        details: { offerId: offer.id, actualVersion: offer.version, expectedVersion },
+      });
+    }
+  }
+
+  private assertNoReconfirmation(offer: Offer): void {
+    if (offer.needsReconfirmation) {
+      throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, { details: { offerId: offer.id } });
+    }
+  }
+
+  private async assertTermsInBounds(amountMinor: number, durationMinutes: number): Promise<void> {
+    const [minAmount, maxAmount, minDuration, maxDuration] = await Promise.all([
       this.config.get('OFFER_MIN_AMOUNT'),
       this.config.get('OFFER_MAX_AMOUNT'),
       this.config.get('OFFER_DURATION_MIN_MINUTES'),
       this.config.get('OFFER_DURATION_MAX_MINUTES'),
-      this.config.get('MAX_OPEN_OFFERS_PER_RUNNER'),
     ]);
-
-    if (amountMinor < minAmount || amountMinor > maxAmount) {
+    if (!Number.isInteger(amountMinor) || amountMinor < minAmount || amountMinor > maxAmount) {
       throw DomainException.of(VALIDATION_ERROR, {
-        message: 'Offer amount is outside the configured allowance.',
-        details: { amountMinor, minAmount, maxAmount },
+        message: 'Offer amount is outside the allowed range.',
+        details: { field: 'amountMinor', minAmount, maxAmount },
       });
     }
-
-    if (durationMinutes < minDuration || durationMinutes > maxDuration) {
+    if (!Number.isInteger(durationMinutes) || durationMinutes < minDuration || durationMinutes > maxDuration) {
       throw DomainException.of(VALIDATION_ERROR, {
-        message: 'Offer duration is outside the configured bounds.',
-        details: { durationMinutes, minDuration, maxDuration },
+        message: 'Offer duration is outside the allowed range.',
+        details: { field: 'durationMinutes', minDuration, maxDuration },
       });
     }
-
-    if (!input.availabilityConfirmedAt) {
-      throw DomainException.of(VALIDATION_ERROR, {
-        message: 'Availability must be confirmed before submitting an offer.',
-        details: { field: 'availabilityConfirmedAt' },
-      });
-    }
-
-    const activeForRunner = Array.from(this.offers.values()).filter(
-      (offer) => offer.runnerId === runnerId && offer.status === 'ACTIVE',
-    ).length;
-    if (activeForRunner >= maxOpenOffers) {
-      throw DomainException.of(OFFER_NOT_ELIGIBLE, {
-        message: 'The runner has reached the open-offer cap.',
-        details: { runnerId, maxOpenOffers, activeForRunner },
-      });
-    }
-
-    const existingKey = this.keyForErrandRunner(errand.id, runnerId);
-    const activeOfferId = this.offersByErrandRunner.get(existingKey);
-    if (activeOfferId && this.offers.get(activeOfferId)?.status === 'ACTIVE') {
-      throw DomainException.of(OFFER_ALREADY_EXISTS, {
-        message: 'You already have an active offer on this errand.',
-        details: { errandId: errand.id, runnerId },
-      });
-    }
-
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.offer.findFirst({
-          where: {
-            errandId: errand.id,
-            runnerId,
-            status: 'ACTIVE',
-          },
-        });
-
-        if (existing) {
-          throw DomainException.of(OFFER_ALREADY_EXISTS, {
-            message: 'You already have an active offer on this errand.',
-            details: { errandId: errand.id, runnerId },
-          });
-        }
-
-        const created = await tx.offer.create({
-          data: {
-            errandId: errand.id,
-            runnerId,
-            requesterId: errand.requesterId,
-            amountMinor: BigInt(amountMinor),
-            durationMinutes,
-            status: 'ACTIVE',
-            awaitingParty: 'REQUESTER',
-            needsReconfirmation: false,
-            availabilityConfirmedAt: input.availabilityConfirmedAt,
-            message: input.message,
-            conversationId: input.conversationId,
-            version: 1,
-          },
-        });
-
-        await tx.negotiationEvent.create({
-          data: {
-            errandId: errand.id,
-            offerId: created.id,
-            actorUserId: runnerId,
-            messageType: 'INITIAL_OFFER',
-            proposedAmountMinor: BigInt(amountMinor),
-            proposedDurationMinutes: durationMinutes,
-            currency: 'NGN',
-            message: input.message,
-            resultingOfferVersion: 1,
-          },
-        });
-
-        await this.offerLimit.consume(runnerId, 1, tx);
-
-        // Increment errand.offer_count
-        await tx.$executeRaw`UPDATE errands SET offer_count = offer_count + 1 WHERE id = ${errand.id}::uuid`;
-
-        // Publish offer.submitted event to outbox
-        if (this.outbox) {
-          await this.outbox.add(tx, {
-            eventType: 'offer.submitted',
-            aggregateType: 'offer',
-            aggregateId: created.id,
-            payload: {
-              offerId: created.id,
-              errandId: errand.id,
-              runnerId,
-              requesterId: errand.requesterId,
-              amountMinor,
-              durationMinutes,
-            },
-          });
-        }
-
-        return this.mapPersistedOffer(created);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      this.offersByErrandRunner.set(existingKey, persisted.id);
-      return persisted;
-    }
-
-    const offer: OfferRecord = {
-      id: generateUuidV7(),
-      errandId: errand.id,
-      runnerId,
-      requesterId: errand.requesterId,
-      amountMinor,
-      durationMinutes,
-      status: 'ACTIVE',
-      awaitingParty: 'REQUESTER',
-      version: 1,
-      needsReconfirmation: false,
-      closeReason: undefined,
-      conversationId: input.conversationId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      availabilityConfirmedAt: input.availabilityConfirmedAt,
-      message: input.message,
-    };
-
-    this.offers.set(offer.id, offer);
-    this.offersByErrandRunner.set(existingKey, offer.id);
-    await this.offerLimit.consume(runnerId, 1);
-    return offer;
   }
 
-  getOffer(offerId: string): OfferRecord | undefined {
-    return this.offers.get(offerId);
+  private async assertErrandOpen(tx: Prisma.TransactionClient, errandId: string): Promise<void> {
+    const errand = await this.readErrand(tx, errandId, '');
+    if (!errand || errand.status !== 'OPEN' || errand.past_expiry) {
+      throw DomainException.of(ERRAND_INVALID_STATE, {
+        message: 'This errand is no longer accepting offers.',
+        details: { status: errand?.past_expiry ? 'EXPIRED' : errand?.status },
+      });
+    }
   }
 
-  getLiveOffersForErrand(errandId: string): OfferRecord[] {
-    return Array.from(this.offers.values()).filter((offer) => offer.errandId === errandId && offer.status === 'ACTIVE');
+  private async readErrand(tx: Prisma.TransactionClient, errandId: string, lock: '' | 'FOR SHARE'): Promise<LockedErrand | null> {
+    const sql = `
+      SELECT id::text, requester_id::text, status::text,
+             (expires_at IS NOT NULL AND expires_at <= clock_timestamp()) AS past_expiry
+      FROM errands WHERE id = $1::uuid AND deleted_at IS NULL ${lock}`;
+    const rows = await tx.$queryRawUnsafe<LockedErrand[]>(sql, errandId);
+    return rows[0] ?? null;
   }
 
-  flagForReconfirmation(errandId: string): number {
-    let flagged = 0;
-    for (const offer of this.offers.values()) {
-      if (offer.errandId === errandId && offer.status === 'ACTIVE') {
-        offer.needsReconfirmation = true;
-        offer.awaitingParty = 'RUNNER';
-        offer.updatedAt = new Date();
-        flagged += 1;
-      }
-    }
-    return flagged;
+  private async dbNow(tx: Prisma.TransactionClient): Promise<Date> {
+    const rows = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    return rows[0].now;
   }
 
-  async reconfirmOffer(offerId: string, expectedVersion?: number, runnerId?: string): Promise<OfferRecord> {
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer) {
-          throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-        }
-        if (runnerId && offer.runnerId !== runnerId) {
-          throw DomainException.of(FORBIDDEN, {
-            message: 'Only the runner that submitted this offer can reconfirm it.',
-            details: { offerId, runnerId, ownerId: offer.runnerId },
-          });
-        }
-        if (offer.status !== 'ACTIVE') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: 'Only an active offer can be reconfirmed.',
-            details: { offerId, status: offer.status },
-          });
-        }
-        if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-          throw DomainException.of(OFFER_VERSION_MISMATCH, {
-            message: 'This offer has changed since it was last reviewed.',
-            details: { offerId, actualVersion: offer.version, expectedVersion },
-          });
-        }
-        if (!offer.needsReconfirmation) {
-          throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-            message: 'This offer does not need reconfirmation.',
-            details: { offerId },
-          });
-        }
-
-        const updated = await tx.offer.update({
-          where: { id: offerId },
-          data: {
-            needsReconfirmation: false,
-            awaitingParty: 'REQUESTER',
-            version: { increment: 1 },
-          },
-        });
-
-        return this.mapPersistedOffer(updated);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      return persisted;
-    }
-
-    const offer = this.offers.get(offerId);
-    if (!offer) {
-      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-    }
-    if (runnerId && offer.runnerId !== runnerId) {
-      throw DomainException.of(FORBIDDEN, {
-        message: 'Only the runner that submitted this offer can reconfirm it.',
-        details: { offerId, runnerId, ownerId: offer.runnerId },
-      });
-    }
-    if (offer.status !== 'ACTIVE') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: 'Only an active offer can be reconfirmed.',
-        details: { offerId, status: offer.status },
-      });
-    }
-    if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-      throw DomainException.of(OFFER_VERSION_MISMATCH, {
-        message: 'This offer has changed since it was last reviewed.',
-        details: { offerId, actualVersion: offer.version, expectedVersion },
-      });
-    }
-    if (!offer.needsReconfirmation) {
-      throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-        message: 'This offer does not need reconfirmation.',
-        details: { offerId },
-      });
-    }
-
-    offer.needsReconfirmation = false;
-    offer.awaitingParty = 'REQUESTER';
-    offer.version += 1;
-    offer.updatedAt = new Date();
-    return offer;
+  private async recordEvent(
+    tx: Prisma.TransactionClient,
+    offer: Offer,
+    actorUserId: string,
+    messageType: NegotiationMessageType,
+    resultingOfferVersion: number,
+    terms: { amountMinor?: number; durationMinutes?: number; message?: string } = {},
+  ): Promise<void> {
+    await tx.negotiationEvent.create({
+      data: {
+        errandId: offer.errandId,
+        offerId: offer.id,
+        actorUserId,
+        messageType,
+        proposedAmountMinor: terms.amountMinor === undefined ? undefined : BigInt(terms.amountMinor),
+        proposedDurationMinutes: terms.durationMinutes,
+        currency: 'NGN',
+        message: terms.message,
+        resultingOfferVersion,
+      },
+    });
   }
 
-  async counterOffer(
-    offerId: string,
-    actor: 'RUNNER' | 'REQUESTER',
-    amountMinor: number,
-    durationMinutes: number,
-    message?: string,
-    expectedVersion?: number,
-  ): Promise<OfferRecord> {
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer) {
-          throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-        }
-        if (offer.status !== 'ACTIVE') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: 'Only an active offer can be changed.',
-            details: { offerId, status: offer.status },
-          });
-        }
-        if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-          throw DomainException.of(OFFER_VERSION_MISMATCH, {
-            message: 'This offer has changed since it was last reviewed.',
-            details: { offerId, actualVersion: offer.version, expectedVersion },
-          });
-        }
-        if (offer.needsReconfirmation) {
-          throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-            message: 'This offer requires reconfirmation before negotiating again.',
-            details: { offerId },
-          });
-        }
-        if (offer.awaitingParty !== actor) {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: `It is not ${actor.toLowerCase()}\'s turn to negotiate this offer.`,
-            details: { offerId, awaitingParty: offer.awaitingParty, actor },
-          });
-        }
-
-        const updated = await tx.offer.update({
-          where: { id: offerId },
-          data: {
-            amountMinor: BigInt(amountMinor),
-            durationMinutes,
-            message: message ?? offer.message,
-            awaitingParty: actor === 'REQUESTER' ? 'RUNNER' : 'REQUESTER',
-            version: { increment: 1 },
-          },
-        });
-
-        await tx.negotiationEvent.create({
-          data: {
-            errandId: offer.errandId,
-            offerId: offer.id,
-            actorUserId: actor === 'REQUESTER' ? offer.requesterId : offer.runnerId,
-            messageType: 'COUNTER_OFFER',
-            proposedAmountMinor: BigInt(amountMinor),
-            proposedDurationMinutes: durationMinutes,
-            currency: 'NGN',
-            message: message ?? offer.message ?? undefined,
-            resultingOfferVersion: updated.version,
-          },
-        });
-
-        return this.mapPersistedOffer(updated);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      return persisted;
-    }
-
-    const offer = this.offers.get(offerId);
-    if (!offer) {
-      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-    }
-    if (offer.status !== 'ACTIVE') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: 'Only an active offer can be changed.',
-        details: { offerId, status: offer.status },
-      });
-    }
-    if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-      throw DomainException.of(OFFER_VERSION_MISMATCH, {
-        message: 'This offer has changed since it was last reviewed.',
-        details: { offerId, actualVersion: offer.version, expectedVersion },
-      });
-    }
-    if (offer.needsReconfirmation) {
-      throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-        message: 'This offer requires reconfirmation before negotiating again.',
-        details: { offerId },
-      });
-    }
-    if (offer.awaitingParty !== actor) {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: `It is not ${actor.toLowerCase()}\'s turn to negotiate this offer.`,
-        details: { offerId, awaitingParty: offer.awaitingParty, actor },
-      });
-    }
-
-    offer.amountMinor = amountMinor;
-    offer.durationMinutes = durationMinutes;
-    offer.message = message ?? offer.message;
-    offer.awaitingParty = actor === 'REQUESTER' ? 'RUNNER' : 'REQUESTER';
-    offer.version += 1;
-    offer.updatedAt = new Date();
-    return offer;
+  private async publish(
+    tx: Prisma.TransactionClient,
+    eventType: string,
+    offer: Offer,
+    actorId: string,
+    auditAction: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    await this.outbox.add(tx, {
+      eventType,
+      aggregateType: 'offer',
+      aggregateId: offer.id,
+      payload: {
+        offerId: offer.id,
+        errandId: offer.errandId,
+        runnerId: offer.runnerId,
+        requesterId: offer.requesterId,
+        status: offer.status,
+        awaitingParty: offer.awaitingParty,
+        needsReconfirmation: offer.needsReconfirmation,
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        version: offer.version,
+        actorId,
+      },
+    });
+    await this.audit.recordInTransaction(tx, {
+      actorType: AuditActorType.USER,
+      actorId,
+      action: auditAction,
+      entityType: 'offer',
+      entityId: offer.id,
+      after: { status: offer.status, awaitingParty: offer.awaitingParty, amountMinor: Number(offer.amountMinor), version: offer.version },
+      reasonCode: offer.closeReason ?? undefined,
+      metadata: { errandId: offer.errandId, ...extra },
+    });
   }
 
-  async rejectOffer(offerId: string, actor: 'RUNNER' | 'REQUESTER', expectedVersion?: number): Promise<OfferRecord> {
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer) {
-          throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-        }
-        if (offer.status !== 'ACTIVE') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: 'Only an active offer can be rejected.',
-            details: { offerId, status: offer.status },
-          });
-        }
-        if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-          throw DomainException.of(OFFER_VERSION_MISMATCH, {
-            message: 'This offer has changed since it was last reviewed.',
-            details: { offerId, actualVersion: offer.version, expectedVersion },
-          });
-        }
-        if (offer.awaitingParty !== actor && offer.awaitingParty !== 'NONE') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: `It is not ${actor.toLowerCase()}\'s turn to reject this offer.`,
-            details: { offerId, awaitingParty: offer.awaitingParty, actor },
-          });
-        }
-
-        const updated = await tx.offer.update({
-          where: { id: offerId },
-          data: {
-            status: 'REJECTED',
-            awaitingParty: 'NONE',
-            closeReason: actor === 'REQUESTER' ? 'REQUESTER_REJECTED' : 'ADMIN_CLOSED',
-            version: { increment: 1 },
-          },
-        });
-
-        return this.mapPersistedOffer(updated);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      return persisted;
-    }
-
-    const offer = this.offers.get(offerId);
-    if (!offer) {
-      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-    }
-    if (offer.status !== 'ACTIVE') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: 'Only an active offer can be rejected.',
-        details: { offerId, status: offer.status },
-      });
-    }
-    if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-      throw DomainException.of(OFFER_VERSION_MISMATCH, {
-        message: 'This offer has changed since it was last reviewed.',
-        details: { offerId, actualVersion: offer.version, expectedVersion },
-      });
-    }
-    if (offer.awaitingParty !== actor && offer.awaitingParty !== 'NONE') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: `It is not ${actor.toLowerCase()}\'s turn to reject this offer.`,
-        details: { offerId, awaitingParty: offer.awaitingParty, actor },
-      });
-    }
-
-    offer.status = 'REJECTED';
-    offer.awaitingParty = 'NONE';
-    offer.closeReason = actor === 'REQUESTER' ? 'REQUESTER_REJECTED' : 'ADMIN_CLOSED';
-    offer.updatedAt = new Date();
-    return offer;
-  }
-
-  async acceptOffer(offerId: string, expectedVersion?: number): Promise<OfferRecord> {
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer) {
-          throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-        }
-        if (offer.status !== 'ACTIVE') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: 'Only an active offer can be accepted.',
-            details: { offerId, status: offer.status },
-          });
-        }
-        if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-          throw DomainException.of(OFFER_VERSION_MISMATCH, {
-            message: 'This offer has changed since it was last reviewed.',
-            details: { offerId, actualVersion: offer.version, expectedVersion },
-          });
-        }
-        if (offer.needsReconfirmation) {
-          throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-            message: 'This offer needs reconfirmation before it can be selected.',
-            details: { offerId },
-          });
-        }
-        if (offer.awaitingParty !== 'REQUESTER') {
-          throw DomainException.of(OFFER_INVALID_STATE, {
-            message: 'The requester must act before this offer can be selected.',
-            details: { offerId, awaitingParty: offer.awaitingParty },
-          });
-        }
-
-        const updated = await tx.offer.update({
-          where: { id: offerId },
-          data: {
-            status: 'SELECTED',
-            awaitingParty: 'NONE',
-            closeReason: 'RUNNER_SELECTED',
-            selectedAt: new Date(),
-            version: { increment: 1 },
-          },
-        });
-
-        return this.mapPersistedOffer(updated);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      return persisted;
-    }
-
-    const offer = this.offers.get(offerId);
-    if (!offer) {
-      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-    }
-    if (offer.status !== 'ACTIVE') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: 'Only an active offer can be accepted.',
-        details: { offerId, status: offer.status },
-      });
-    }
-    if (expectedVersion !== undefined && offer.version !== expectedVersion) {
-      throw DomainException.of(OFFER_VERSION_MISMATCH, {
-        message: 'This offer has changed since it was last reviewed.',
-        details: { offerId, actualVersion: offer.version, expectedVersion },
-      });
-    }
-    if (offer.needsReconfirmation) {
-      throw DomainException.of(OFFER_NEEDS_RECONFIRMATION, {
-        message: 'This offer needs reconfirmation before it can be selected.',
-        details: { offerId },
-      });
-    }
-    if (offer.awaitingParty !== 'REQUESTER') {
-      throw DomainException.of(OFFER_INVALID_STATE, {
-        message: 'The requester must act before this offer can be selected.',
-        details: { offerId, awaitingParty: offer.awaitingParty },
-      });
-    }
-
-    offer.status = 'SELECTED';
-    offer.awaitingParty = 'NONE';
-    offer.closeReason = 'RUNNER_SELECTED';
-    offer.updatedAt = new Date();
-    return offer;
-  }
-
-  async closeForErrand(errandId: string, reason: OfferCloseReason): Promise<number> {
-    if (this.prisma) {
-      const result = await this.prisma.$transaction(async (tx) => {
-        const offers = await tx.offer.findMany({
-          where: { errandId, status: 'ACTIVE' },
-        });
-
-        for (const offer of offers) {
-          await tx.offer.update({
-            where: { id: offer.id },
-            data: {
-              status: reason === 'ERRAND_EXPIRED' ? 'EXPIRED' : 'CLOSED',
-              closeReason: reason,
-              awaitingParty: 'NONE',
-              closedAt: new Date(),
-              version: { increment: 1 },
-            },
-          });
-        }
-
-        return offers.length;
-      });
-
-      for (const offer of this.offers.values()) {
-        if (offer.errandId === errandId && offer.status === 'ACTIVE') {
-          offer.status = reason === 'ERRAND_EXPIRED' ? 'EXPIRED' : 'CLOSED';
-          offer.closeReason = reason;
-          offer.awaitingParty = 'NONE';
-          offer.updatedAt = new Date();
-        }
-      }
-
-      return result;
-    }
-
-    let closed = 0;
-    for (const offer of this.offers.values()) {
-      if (offer.errandId !== errandId || offer.status !== 'ACTIVE') {
-        continue;
-      }
-      offer.status = reason === 'ERRAND_EXPIRED' ? 'EXPIRED' : 'CLOSED';
-      offer.closeReason = reason;
-      offer.awaitingParty = 'NONE';
-      offer.updatedAt = new Date();
-      closed += 1;
-    }
-    return closed;
-  }
-
-  async withdraw(offerId: string, runnerId?: string): Promise<OfferRecord> {
-    if (this.prisma) {
-      const persisted = await this.prisma.$transaction(async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer) {
-          throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-        }
-        if (runnerId && offer.runnerId !== runnerId) {
-          throw DomainException.of(FORBIDDEN, {
-            message: 'Only the runner that submitted this offer can withdraw it.',
-            details: { offerId, runnerId, ownerId: offer.runnerId },
-          });
-        }
-        if (offer.status !== 'ACTIVE') {
-          throw DomainException.of(OFFER_INVALID_STATE, { message: 'Only an active offer can be withdrawn.', details: { offerId, status: offer.status } });
-        }
-
-        const updated = await tx.offer.update({
-          where: { id: offerId },
-          data: {
-            status: 'WITHDRAWN',
-            awaitingParty: 'NONE',
-            closeReason: 'RUNNER_WITHDREW',
-            withdrawnAt: new Date(),
-            version: { increment: 1 },
-          },
-        });
-
-        return this.mapPersistedOffer(updated);
-      });
-
-      this.offers.set(persisted.id, persisted);
-      return persisted;
-    }
-
-    const offer = this.offers.get(offerId);
-    if (!offer) {
-      throw DomainException.of(RESOURCE_NOT_FOUND, { message: 'Offer not found.' });
-    }
-    if (runnerId && offer.runnerId !== runnerId) {
-      throw DomainException.of(FORBIDDEN, {
-        message: 'Only the runner that submitted this offer can withdraw it.',
-        details: { offerId, runnerId, ownerId: offer.runnerId },
-      });
-    }
-    if (offer.status !== 'ACTIVE') {
-      throw DomainException.of(OFFER_INVALID_STATE, { message: 'Only an active offer can be withdrawn.', details: { offerId, status: offer.status } });
-    }
-
-    offer.status = 'WITHDRAWN';
-    offer.awaitingParty = 'NONE';
-    offer.closeReason = 'RUNNER_WITHDREW';
-    offer.updatedAt = new Date();
-    return offer;
-  }
-
-  private mapPersistedOffer(raw: {
-    id: string;
-    errandId: string;
-    runnerId: string;
-    requesterId: string;
-    amountMinor: bigint;
-    durationMinutes: number;
-    status: string;
-    awaitingParty: string | null;
-    version: number;
-    needsReconfirmation: boolean;
-    closeReason?: string | null;
-    conversationId?: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    availabilityConfirmedAt?: Date | null;
-    message?: string | null;
-  }): OfferRecord {
+  private toRecord(raw: Offer): OfferRecord {
     return {
       id: raw.id,
       errandId: raw.errandId,
@@ -768,11 +566,11 @@ export class OfferService {
       requesterId: raw.requesterId,
       amountMinor: Number(raw.amountMinor),
       durationMinutes: raw.durationMinutes,
-      status: raw.status as OfferStatus,
-      awaitingParty: (raw.awaitingParty ?? 'REQUESTER') as AwaitingParty,
+      status: raw.status,
+      awaitingParty: raw.awaitingParty,
       version: raw.version,
       needsReconfirmation: raw.needsReconfirmation,
-      closeReason: raw.closeReason as OfferCloseReason | undefined,
+      closeReason: raw.closeReason ?? undefined,
       conversationId: raw.conversationId ?? undefined,
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt,
@@ -780,8 +578,16 @@ export class OfferService {
       message: raw.message ?? undefined,
     };
   }
+}
 
-  private keyForErrandRunner(errandId: string, runnerId: string): string {
-    return `${errandId}:${runnerId}`;
+/** Queue-registered event type for each negotiation action. */
+function eventTypeFor(action: string): string {
+  switch (action) {
+    case 'withdraw':
+      return 'offer.withdrawn';
+    case 'reject':
+      return 'offer.rejected';
+    default:
+      return 'offer.updated';
   }
 }

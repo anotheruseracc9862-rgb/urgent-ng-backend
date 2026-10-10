@@ -54,6 +54,8 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'offer.created': QUEUE_NAMES.NOTIFICATIONS,
   'offer.updated': QUEUE_NAMES.NOTIFICATIONS,
   'offer.withdrawn': QUEUE_NAMES.NOTIFICATIONS,
+  'offer.rejected': QUEUE_NAMES.NOTIFICATIONS,
+  'offer.closed': QUEUE_NAMES.NOTIFICATIONS,
 
   // Assignment events
   'assignment.selected': QUEUE_NAMES.NOTIFICATIONS,

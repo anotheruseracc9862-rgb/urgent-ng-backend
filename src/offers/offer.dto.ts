@@ -1,45 +1,35 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsDate, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import type { AwaitingParty, OfferStatus } from './offer.service.js';
 
 export class SubmitOfferDto {
-  @ApiProperty({ description: 'Errand requester ID for the offer context. The current authenticated user is the runner.' })
-  @IsString()
-  requesterId!: string;
-
-  @ApiProperty()
+  @ApiProperty({ description: 'Offered amount in kobo. Bounds come from OFFER_MIN_AMOUNT / OFFER_MAX_AMOUNT.' })
   @IsInt()
-  @Min(0)
+  @Min(1)
   amountMinor!: number;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Estimated duration in minutes (5-1440 by default).' })
   @IsInt()
   @Min(1)
   @Max(1440)
   durationMinutes!: number;
 
-  @ApiPropertyOptional({ type: Date, description: 'When the runner confirmed availability for this errand.' })
-  @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  availabilityConfirmedAt?: Date;
+  @ApiProperty({ description: 'The runner confirms they are available. Must be true; the server records the time.' })
+  @IsBoolean()
+  availabilityConfirmed!: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(500)
   message?: string;
-
-  @ApiPropertyOptional({ enum: ['OPEN'], default: 'OPEN' })
-  @IsOptional()
-  status?: 'OPEN';
 }
 
 export class CounterOfferDto {
   @ApiProperty()
   @IsInt()
-  @Min(0)
+  @Min(1)
   amountMinor!: number;
 
   @ApiProperty()
@@ -52,16 +42,18 @@ export class CounterOfferDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(500)
   message?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Reject with OFFER_VERSION_MISMATCH if the offer changed since it was read.' })
   @IsOptional()
   @IsInt()
   @Min(0)
   expectedVersion?: number;
 }
 
-export class ReconfirmOfferDto {
+/** Body of actions that carry only the version the caller last saw. */
+export class OfferVersionDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
@@ -112,7 +104,7 @@ export class OfferDto {
   @ApiProperty({ type: Date })
   updatedAt!: Date;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: Date })
   availabilityConfirmedAt?: Date;
 
   @ApiPropertyOptional()

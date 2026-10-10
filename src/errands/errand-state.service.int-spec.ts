@@ -8,6 +8,7 @@ import { insertErrand, seedCategories } from '../test/errand.helper.js';
 import { ErrandStateService, type TransitionInput } from './errand-state.service.js';
 import { ERRAND_TRANSITIONS, type ErrandActor } from './errand.state.js';
 import { OfferService } from '../offers/offer.service.js';
+import { readyRunner } from '../test/verification.helper.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
@@ -131,31 +132,28 @@ describe('ErrandStateService (P5-03)', () => {
 
   it('closes all live offers when an errand is cancelled or expires', async () => {
     const offerService = app.get(OfferService);
-    const runnerId = (await signedInUser(app)).userId;
+    const runner = await readyRunner(app);
     const errandId = await make('OPEN');
     const offer = await offerService.submitOffer({
-      errand: { id: errandId, requesterId, status: 'OPEN' },
-      runnerId,
+      errandId,
+      runnerId: runner.userId,
       amountMinor: 20000,
       durationMinutes: 30,
-      availabilityConfirmedAt: new Date('2024-01-15T09:00:00.000Z'),
+      availabilityConfirmed: true,
     });
     await run({ errandId, to: 'CANCELLED', actor: { type: 'REQUESTER', id: requesterId }, cancellation: { reason: 'REQUESTER_CANCELLED' } });
-    expect(offerService.getOffer(offer.id)?.status).toBe('CLOSED');
-    expect(offerService.getOffer(offer.id)?.closeReason).toBe('ERRAND_CANCELLED');
+    expect(await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } })).toMatchObject({ status: 'CLOSED', closeReason: 'ERRAND_CANCELLED' });
 
-    const secondRunnerId = (await signedInUser(app)).userId;
     const secondErrandId = await make('OPEN');
     const secondOffer = await offerService.submitOffer({
-      errand: { id: secondErrandId, requesterId, status: 'OPEN' },
-      runnerId: secondRunnerId,
+      errandId: secondErrandId,
+      runnerId: runner.userId,
       amountMinor: 25000,
       durationMinutes: 30,
-      availabilityConfirmedAt: new Date('2024-01-15T09:00:00.000Z'),
+      availabilityConfirmed: true,
     });
     await run({ errandId: secondErrandId, to: 'EXPIRED', actor: { type: 'SYSTEM' }, reason: 'deadline passed' });
-    expect(offerService.getOffer(secondOffer.id)?.status).toBe('EXPIRED');
-    expect(offerService.getOffer(secondOffer.id)?.closeReason).toBe('ERRAND_EXPIRED');
+    expect(await prisma.offer.findUniqueOrThrow({ where: { id: secondOffer.id } })).toMatchObject({ status: 'EXPIRED', closeReason: 'ERRAND_EXPIRED' });
   });
 
   describe('history, audit and outbox', () => {

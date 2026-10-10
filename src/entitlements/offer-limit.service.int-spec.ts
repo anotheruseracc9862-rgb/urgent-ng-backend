@@ -1,140 +1,124 @@
 /**
- * P6-01 integration tests: OfferLimitService concurrency and day rollover
- *
- * Verifies:
- * - Row lock prevents counter exceeding limit under concurrent load
- * - Lagos day boundary resets the counter
+ * P6-01 / P6-02 integration tests: the daily offer counter under concurrency, Lagos day roll-over,
+ * the limit endpoint and live config changes. Real PostgreSQL and Redis.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import type { INestApplication } from '@nestjs/common';
+import request from 'supertest';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
-import { seedPolicies, signedInUser } from '../test/auth.helper.js';
-import { OfferLimitService } from './offer-limit.service.js';
-import { ClockService } from '../common/utils/time.service.js';
+import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
+import { readyRunner } from '../test/verification.helper.js';
+import { insertErrand, seedCategories } from '../test/errand.helper.js';
+import { submitOffer } from '../test/offer.helper.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
+import { ClockService } from '../common/utils/time.service.js';
+import { OfferLimitService } from './offer-limit.service.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { PrismaService } from '../database/prisma.service.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
-describe('OfferLimitService integration (P6-01)', () => {
+describe('Offer daily limit (P6-01, P6-02)', () => {
   let app: INestApplication;
-  let service: OfferLimitService;
   const prisma = getTestPrisma();
+  let categoryId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
-    service = app.get(OfferLimitService);
   });
-
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
+    categoryId = (await seedCategories()).delivery;
   });
-
   afterAll(async () => {
     await app.close();
   });
 
-  it('row lock prevents counter exceeding limit under concurrent load', async () => {
-    const user = await signedInUser(app);
-    const limit = 10;
+  const used = async (userId: string) => (await prisma.offerDailyCounter.findMany({ where: { userId } })).reduce((n, c) => n + c.count, 0);
 
-    // Spawn 50 parallel consume() calls
-    // Each call tries to consume 1, but the service enforces limit = 10
-    const results = await Promise.allSettled(
-      Array.from({ length: 50 }, () => service.consume(user.userId, 1)),
-    );
+  it('parallel submits never create more offers than the limit, and the counter equals the offers', async () => {
+    const requester = await signedInUser(app);
+    const runner = await readyRunner(app);
+    await app.get(BusinessConfigService).set('MAX_OPEN_OFFERS_PER_RUNNER', 100);
+    const errands = await Promise.all(Array.from({ length: 25 }, () => insertErrand({ requesterId: requester.userId, categoryId })));
 
-    // All calls should succeed (no exceptions from row lock)
-    const succeeded = results.filter((r) => r.status === 'fulfilled');
-    expect(succeeded.length).toBe(50);
+    const results = await Promise.all(errands.map((id) => submitOffer(app, runner, id)));
 
-    // Verify final count does not exceed the limit
-    // Due to transaction isolation and the upsert logic, some parallel calls
-    // may complete before reaching exactly limit, but none should exceed it
-    const status = await service.getLimitStatus(user.userId);
-    expect(status.used).toBeGreaterThan(0);
-    expect(status.used).toBeLessThanOrEqual(limit);
-
-    // Key property: no individual call reported exceeding the limit
-    for (const result of succeeded) {
-      const value = (result as PromiseFulfilledResult<any>).value;
-      expect(value.used).toBeLessThanOrEqual(limit);
-    }
-
-    // Verify database row never exceeds limit
-    const dayLagos = app.get(ClockService).lagosDay(new Date());
-    const counter = await prisma.offerDailyCounter.findUnique({
-      where: {
-        userId_dayLagos: {
-          userId: user.userId,
-          dayLagos,
-        },
-      },
-    });
-    expect(counter?.count).toBeGreaterThan(0);
-    expect(counter?.count).toBeLessThanOrEqual(limit);
+    const created = results.filter((r) => r.status === 201);
+    const refused = results.filter((r) => r.status !== 201);
+    expect(created).toHaveLength(10);
+    expect(refused.every((r) => r.status === 429 && r.body.error.code === 'OFFER_DAILY_LIMIT_REACHED')).toBe(true);
+    expect(refused[0].body.error.details.resetsAt).toBeTruthy();
+    expect(await prisma.offer.count({ where: { runnerId: runner.userId } })).toBe(10);
+    expect(await used(runner.userId)).toBe(10);
   });
 
-  it('day boundary at Lagos midnight resets the counter', async () => {
-    const user = await signedInUser(app);
-    const configService = app.get(BusinessConfigService);
+  it('a failed submit does not spend the allowance', async () => {
+    const requester = await signedInUser(app);
+    const runner = await readyRunner(app);
+    const errandId = await insertErrand({ requesterId: requester.userId, categoryId, expiresInHours: -1 });
 
-    // Create a fake ClockService that controls time
-    const fakeClock = {
-      currentTime: new Date('2025-01-15T23:59:59.000+01:00'), // Lagos time 23:59:59
-      now() {
-        return this.currentTime;
-      },
-      lagosDay(date: Date) {
-        const realClock = new ClockService();
-        return realClock.lagosDay(date);
-      },
-      startOfDayLagos(date: Date) {
-        const realClock = new ClockService();
-        return realClock.startOfDayLagos(date);
-      },
-    };
+    expect((await submitOffer(app, runner, errandId)).status).toBe(409);
 
-    // Create a service instance with fake clock
-    const fakeService = new OfferLimitService(
-      configService,
-      fakeClock as any,
-      undefined,
-      prisma,
+    expect(await used(runner.userId)).toBe(0);
+  });
+
+  it('GET /runner/offer-limit reports used, remaining and resetsAt, and follows a config change at once', async () => {
+    const requester = await signedInUser(app);
+    const runner = await readyRunner(app);
+    for (let i = 0; i < 3; i += 1) {
+      await submitOffer(app, runner, await insertErrand({ requesterId: requester.userId, categoryId })).expect(201);
+    }
+    const read = () => request(app.getHttpServer()).get(`${API}/runner/offer-limit`).set(...bearer(runner.accessToken)).expect(200);
+
+    const before = (await read()).body.data;
+    expect(before).toMatchObject({ used: 3, limit: 10, remaining: 7, isPro: false });
+    expect(new Date(before.resetsAt).getTime()).toBeGreaterThan(Date.now());
+
+    await app.get(BusinessConfigService).set('FREE_RUNNER_DAILY_OFFER_LIMIT', 5);
+    expect((await read()).body.data).toMatchObject({ used: 3, limit: 5, remaining: 2 });
+  });
+
+  it('rolls over at midnight Africa/Lagos', async () => {
+    const runner = await signedInUser(app);
+    const clock = { current: new Date('2026-03-10T22:59:59.000Z'), now() { return this.current; } };
+    const real = new ClockService();
+    const service = new OfferLimitService(
+      app.get(BusinessConfigService),
+      Object.assign(Object.create(real), { now: () => clock.current }) as ClockService,
+      app.get(PrismaService),
     );
 
-    // Consume at 23:59:59 Lagos time
-    await fakeService.consume(user.userId, 3);
+    const spend = () => prisma.$transaction((tx) => service.reserve(tx, runner.userId));
+    await spend();
+    await spend();
+    expect((await service.getLimitStatus(runner.userId)).used).toBe(2);
 
-    const statusBeforeMidnight = await fakeService.getLimitStatus(user.userId);
-    expect(statusBeforeMidnight.used).toBe(3);
-    expect(statusBeforeMidnight.remaining).toBe(7);
+    clock.current = new Date('2026-03-10T23:00:01.000Z'); // 00:00:01 in Lagos (UTC+1)
+    expect((await service.getLimitStatus(runner.userId)).used).toBe(0);
+    await spend();
+    const rows = await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId }, orderBy: { dayLagos: 'asc' } });
+    expect(rows.map((r) => [r.dayLagos, r.count])).toEqual([
+      ['2026-03-10', 2],
+      ['2026-03-11', 1],
+    ]);
+  });
 
-    // Advance to 00:00:01 next day
-    fakeClock.currentTime = new Date('2025-01-16T00:00:01.000+01:00');
+  it('reserve throws OFFER_DAILY_LIMIT_REACHED with resetsAt and leaves the count at the limit', async () => {
+    const runner = await signedInUser(app);
+    const service = app.get(OfferLimitService);
+    await app.get(BusinessConfigService).set('FREE_RUNNER_DAILY_OFFER_LIMIT', 2);
+    await prisma.$transaction((tx) => service.reserve(tx, runner.userId));
+    await prisma.$transaction((tx) => service.reserve(tx, runner.userId));
 
-    // Verify new day gets fresh counter
-    const statusAfterMidnight = await fakeService.getLimitStatus(user.userId);
-    expect(statusAfterMidnight.used).toBe(0);
-    expect(statusAfterMidnight.remaining).toBe(10);
+    const error = await prisma.$transaction((tx) => service.reserve(tx, runner.userId)).catch((e: unknown) => e);
 
-    // Verify we can consume again in the new day
-    await fakeService.consume(user.userId, 2);
-    const statusAfterConsume = await fakeService.getLimitStatus(user.userId);
-    expect(statusAfterConsume.used).toBe(2);
-    expect(statusAfterConsume.remaining).toBe(8);
-
-    // Verify two different day counters exist in database
-    const counters = await prisma.offerDailyCounter.findMany({
-      where: { userId: user.userId },
-      orderBy: { dayLagos: 'asc' },
-    });
-    expect(counters.length).toBe(2);
-    expect(counters[0].dayLagos).toBe('2025-01-15');
-    expect(counters[0].count).toBe(3);
-    expect(counters[1].dayLagos).toBe('2025-01-16');
-    expect(counters[1].count).toBe(2);
+    expect(error).toBeInstanceOf(DomainException);
+    expect((error as DomainException).getCode()).toBe('OFFER_DAILY_LIMIT_REACHED');
+    expect((error as DomainException).getDetails()).toMatchObject({ used: 2, limit: 2, remaining: 0 });
+    expect(await used(runner.userId)).toBe(2);
   });
 });

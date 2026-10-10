@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { OFFER_DAILY_LIMIT_REACHED } from '../common/constants/error-codes.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
-import { OfferLimitStatus, OfferLimitService } from './offer-limit.service.js';
+import { OfferAllowance, OfferLimitStatus, OfferLimitService } from './offer-limit.service.js';
 
 export interface EntitlementOutcome extends OfferLimitStatus {
   allowed: boolean;
@@ -9,12 +10,13 @@ export interface EntitlementOutcome extends OfferLimitStatus {
 }
 
 /**
- * Centralises the free-limit / Runner Pro decision for offer submission.
+ * Centralises the free-limit / Runner Pro decision for offer submission (Backend PRD 13.6, 22.3).
  */
 @Injectable()
 export class EntitlementService {
   constructor(private readonly offerLimit: OfferLimitService) {}
 
+  /** A read-only answer for display. Submitting must go through `reserveOffer`. */
   async canSubmitOffer(userId: string): Promise<EntitlementOutcome> {
     const status = await this.offerLimit.getLimitStatus(userId);
     const allowed = !status.isAtLimit;
@@ -38,5 +40,15 @@ export class EntitlementService {
         },
       });
     }
+  }
+
+  /** Check and spend one offer, atomically, inside the offer-creating transaction. */
+  reserveOffer(tx: Prisma.TransactionClient, userId: string, allowance?: OfferAllowance): Promise<OfferLimitStatus> {
+    return this.offerLimit.reserve(tx, userId, allowance);
+  }
+
+  /** Read before opening the transaction and pass to `reserveOffer`. */
+  offerAllowance(userId: string): Promise<OfferAllowance> {
+    return this.offerLimit.allowanceFor(userId);
   }
 }

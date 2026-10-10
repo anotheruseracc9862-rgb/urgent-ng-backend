@@ -2,91 +2,53 @@ import { describe, expect, it } from 'vitest';
 import { ClockService } from '../common/utils/time.service.js';
 import { OfferLimitService } from './offer-limit.service.js';
 
-function makeConfig(overrides: Partial<Record<'FREE_RUNNER_DAILY_OFFER_LIMIT' | 'PRO_DAILY_OFFER_CAP', number>> = {}) {
-  return {
-    get: async (key: 'FREE_RUNNER_DAILY_OFFER_LIMIT' | 'PRO_DAILY_OFFER_CAP') => {
-      const values = {
-        FREE_RUNNER_DAILY_OFFER_LIMIT: 10,
-        PRO_DAILY_OFFER_CAP: 100,
-        ...overrides,
-      };
-      return values[key];
-    },
-  } as any;
+function makeConfig() {
+  const values: Record<string, number> = { FREE_RUNNER_DAILY_OFFER_LIMIT: 10, PRO_DAILY_OFFER_CAP: 100 };
+  return { get: async (key: string) => values[key] } as never;
 }
 
 function makeClock(nowIso: string): ClockService {
-  return {
-    now: () => new Date(nowIso),
-    lagosDay: (date: Date) => new ClockService().lagosDay(date),
-    startOfDayLagos: (date: Date) => new ClockService().startOfDayLagos(date),
-  } as unknown as ClockService;
+  const real = new ClockService();
+  return Object.assign(Object.create(real), { now: () => new Date(nowIso) }) as ClockService;
 }
 
-describe('OfferLimitService', () => {
-  it('returns the default daily free-runner limit and reset time in Lagos time', async () => {
-    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T14:30:00.000Z'), {
-      isPro: async () => false,
-    });
+/** `used` is what the counter row holds today; the SQL path of `reserve` is covered by the integration suite. */
+function makePrisma(used: number | null) {
+  return { offerDailyCounter: { findUnique: async () => (used === null ? null : { count: used }) } } as never;
+}
+
+describe('OfferLimitService.getLimitStatus', () => {
+  it('reports the free limit, remaining allowance and the next Lagos midnight', async () => {
+    const clock = makeClock('2024-01-15T14:30:00.000Z');
+    const service = new OfferLimitService(makeConfig(), clock, makePrisma(3));
 
     const status = await service.getLimitStatus('runner-1');
-    const expectedReset = new Date(
-      new ClockService().startOfDayLagos(new Date('2024-01-15T14:30:00.000Z')).getTime() + 24 * 60 * 60 * 1000,
-    );
 
-    expect(status.used).toBe(0);
-    expect(status.limit).toBe(10);
-    expect(status.remaining).toBe(10);
-    expect(status.isPro).toBe(false);
-    expect(status.isAtLimit).toBe(false);
-    expect(status.resetsAt.getTime()).toBe(expectedReset.getTime());
+    expect(status).toMatchObject({ used: 3, limit: 10, remaining: 7, isPro: false, isAtLimit: false });
+    expect(status.resetsAt.getTime()).toBe(clock.startOfDayLagos(clock.now()).getTime() + 24 * 60 * 60 * 1000);
   });
 
-  it('uses the pro cap when the runner is pro and caps consumption at the limit', async () => {
-    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T18:00:00.000Z'), {
+  it('is at the limit when used reaches it, and never reports negative remaining', async () => {
+    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T10:00:00.000Z'), makePrisma(12));
+
+    const status = await service.getLimitStatus('runner-1');
+
+    expect(status).toMatchObject({ used: 12, remaining: 0, isAtLimit: true });
+  });
+
+  it('uses the fair-use cap for an active Runner Pro', async () => {
+    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T18:00:00.000Z'), makePrisma(50), {
       isPro: async () => true,
     });
 
-    const status = await service.consume('runner-pro', 5);
-    expect(status.used).toBe(5);
-    expect(status.limit).toBe(100);
-    expect(status.remaining).toBe(95);
+    const status = await service.getLimitStatus('runner-pro');
 
-    const capped = await service.consume('runner-pro', 200);
-    expect(capped.used).toBe(100);
-    expect(capped.remaining).toBe(0);
-    expect(capped.isAtLimit).toBe(true);
+    expect(status).toMatchObject({ limit: 100, remaining: 50, isPro: true, isAtLimit: false });
   });
 
-  it('resets the counter on the next Lagos day boundary', async () => {
-    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T23:30:00.000Z'), {
-      isPro: async () => false,
-    });
+  it('starts at zero when there is no counter row for the day', async () => {
+    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-16T00:30:00.000Z'), makePrisma(null));
 
-    await service.consume('runner-1', 4);
-    expect((await service.getLimitStatus('runner-1')).used).toBe(4);
-
-    const nextDayService = new OfferLimitService(makeConfig(), makeClock('2024-01-16T00:30:00.000Z'), {
-      isPro: async () => false,
-    });
-
-    const status = await nextDayService.getLimitStatus('runner-1');
-    expect(status.used).toBe(0);
-    expect(status.remaining).toBe(10);
-  });
-
-  it('never exceeds the limit under concurrent increments', async () => {
-    const service = new OfferLimitService(makeConfig(), makeClock('2024-01-15T10:00:00.000Z'), {
-      isPro: async () => false,
-    });
-
-    await Promise.all(
-      Array.from({ length: 30 }, () => service.consume('runner-1', 1)),
-    );
-
-    const status = await service.getLimitStatus('runner-1');
-    expect(status.used).toBe(10);
-    expect(status.remaining).toBe(0);
-    expect(status.isAtLimit).toBe(true);
+    expect(await service.getLimitStatus('runner-1')).toMatchObject({ used: 0, remaining: 10 });
   });
 });

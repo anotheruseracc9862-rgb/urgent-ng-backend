@@ -1,278 +1,186 @@
 /**
- * P6-05 integration tests: Negotiation turn rules and immutability
- *
- * Verifies:
- * - Turn-based negotiation (REQUESTER → RUNNER → REQUESTER)
- * - Price history reconstruction from negotiation_events
- * - Negotiation events are immutable (UPDATE/DELETE blocked)
+ * P6-05 integration tests: turn rules, the immutable negotiation history, version checks.
+ * Everything goes through the HTTP API against real PostgreSQL.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { seedPolicies, signedInUser } from '../test/auth.helper.js';
-import { OfferService } from '../offers/offer.service.js';
+import { readyRunner } from '../test/verification.helper.js';
+import { insertErrand, seedCategories } from '../test/errand.helper.js';
+import { offerAction, submitOffer } from '../test/offer.helper.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
-describe('Negotiation integration (P6-05)', () => {
+describe('Negotiation (P6-05)', () => {
   let app: INestApplication;
-  let offerService: OfferService;
   const prisma = getTestPrisma();
+  let categoryId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
-    offerService = app.get(OfferService);
   });
-
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
+    categoryId = (await seedCategories()).delivery;
   });
-
   afterAll(async () => {
     await app.close();
   });
 
-  async function createErrand(requesterId: string, categoryId: string) {
-    // Use raw SQL to create errand with feed_point
-    const id = await prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO errands (
-        requester_id, category_id, title, description, status, time_mode, priority,
-        published_at, expires_at, feed_point, updated_at
-      ) VALUES (
-        ${requesterId}::uuid, ${categoryId}::uuid, 'Test Errand', 'Test description',
-        'OPEN'::"ErrandStatus", 'ASAP'::"TimeMode", 'URGENT'::"ErrandPriority",
-        NOW(), NOW() + INTERVAL '24 hours',
-        ST_SetSRID(ST_MakePoint(3.3792, 6.5244), 4326)::geography,
-        NOW()
-      ) RETURNING id::text
-    `.then((rows) => rows[0].id);
-
-    return await prisma.errand.findUniqueOrThrow({ where: { id } });
+  async function setup() {
+    const requester = await signedInUser(app);
+    const runner = await readyRunner(app);
+    const stranger = await signedInUser(app);
+    const errandId = await insertErrand({ requesterId: requester.userId, categoryId });
+    const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
+    return { requester, runner, stranger, errandId, offer };
   }
+  const events = async (offerId: string) =>
+    (await prisma.negotiationEvent.findMany({ where: { offerId }, orderBy: { createdAt: 'asc' } })).map((e) => ({
+      type: e.messageType,
+      actor: e.actorUserId,
+      amount: e.proposedAmountMinor === null ? null : Number(e.proposedAmountMinor),
+      version: e.resultingOfferVersion,
+    }));
 
-  async function createCategory(key: string) {
-    return await prisma.category.create({
-      data: {
-        key,
-        name: `Test Category ${key}`,
-        requiresPickup: true,
-        requiresDestination: true,
-      },
-    });
-  }
+  it('follows the turns: counter, runner counters back, runner accepts, requester can select', async () => {
+    const { requester, runner, offer } = await setup();
 
-  it('runner submits offer → awaitingParty === REQUESTER', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test1');
-    const errand = await createErrand(requester.userId, category.id);
+    const c1 = await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 45_000, durationMinutes: 25 }).expect(200);
+    expect(c1.body.data).toMatchObject({ awaitingParty: 'RUNNER', amountMinor: 45_000 });
 
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
+    // requester cannot counter twice in a row
+    expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 25 })).body.error.code).toBe('OFFER_INVALID_STATE');
 
-    expect(offer.awaitingParty).toBe('REQUESTER');
-    expect(offer.status).toBe('ACTIVE');
+    const c2 = await offerAction(app, runner, 'post', offer.id, 'counter', { amountMinor: 47_500, durationMinutes: 30 }).expect(200);
+    expect(c2.body.data.awaitingParty).toBe('REQUESTER');
 
-    const negotiationEvents = await prisma.negotiationEvent.findMany({
-      where: { offerId: offer.id },
-      orderBy: { createdAt: 'asc' },
-    });
-    expect(negotiationEvents.length).toBe(1);
-    expect(negotiationEvents[0].messageType).toBe('INITIAL_OFFER');
-    expect(negotiationEvents[0].actorUserId).toBe(runner.userId);
+    const c3 = await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 46_000, durationMinutes: 30 }).expect(200);
+    const agreed = await offerAction(app, runner, 'post', offer.id, 'accept-counter', { expectedVersion: c3.body.data.version }).expect(200);
+
+    expect(agreed.body.data).toMatchObject({ status: 'ACTIVE', awaitingParty: 'NONE', amountMinor: 46_000 });
+    const history = await events(offer.id);
+    expect(history.map((e) => e.type)).toEqual(['INITIAL_OFFER', 'COUNTER_OFFER', 'COUNTER_OFFER', 'COUNTER_OFFER', 'ACCEPT']);
+    expect(history.map((e) => e.amount)).toEqual([50_000, 45_000, 47_500, 46_000, 46_000]);
+    expect(history.map((e) => e.version)).toEqual([0, 1, 2, 3, 4]);
+    expect(history[1].actor).toBe(requester.userId);
+    expect(history[4].actor).toBe(runner.userId);
   });
 
-  it('requester counters → awaitingParty === RUNNER', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test2');
-    const errand = await createErrand(requester.userId, category.id);
+  it('lets the runner edit their own offer while it waits on the requester, and not while it waits on them', async () => {
+    const { requester, runner, offer } = await setup();
 
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
+    const edited = await offerAction(app, runner, 'patch', offer.id, '', { amountMinor: 48_000, durationMinutes: 20 }).expect(200);
+    expect(edited.body.data).toMatchObject({ amountMinor: 48_000, awaitingParty: 'REQUESTER' });
 
-    const countered = await offerService.counterOffer(
-      offer.id,
-      'REQUESTER',
-      45000,
-      25,
-      'Can you do it for less?',
-      offer.version,
-    );
-
-    expect(countered.awaitingParty).toBe('RUNNER');
-    expect(countered.amountMinor).toBe(45000);
-    expect(countered.durationMinutes).toBe(25);
-    expect(countered.version).toBe(2);
-
-    const negotiationEvents = await prisma.negotiationEvent.findMany({
-      where: { offerId: offer.id },
-      orderBy: { createdAt: 'asc' },
-    });
-    expect(negotiationEvents.length).toBe(2);
-    expect(negotiationEvents[1].messageType).toBe('COUNTER_OFFER');
-    expect(negotiationEvents[1].actorUserId).toBe(requester.userId);
-    expect(Number(negotiationEvents[1].proposedAmountMinor)).toBe(45000);
+    await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 20 }).expect(200);
+    const blocked = await offerAction(app, runner, 'patch', offer.id, '', { amountMinor: 41_000, durationMinutes: 20 });
+    expect(blocked.status).toBe(409);
+    // an edit is not a daily-limit event
+    const count = (await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0);
+    expect(count).toBe(1);
   });
 
-  it('runner tries to counter again immediately → throws OFFER_INVALID_STATE', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test3');
-    const errand = await createErrand(requester.userId, category.id);
-
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
-
-    // It's REQUESTER's turn, so runner cannot counter immediately
-    await expect(
-      offerService.counterOffer(offer.id, 'RUNNER', 48000, 28, undefined, offer.version),
-    ).rejects.toThrow();
+  it('keeps counters inside the amount and duration bounds', async () => {
+    const { requester, offer } = await setup();
+    expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 1, durationMinutes: 30 })).status).toBe(400);
+    expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 9_999 })).status).toBe(400);
+    expect(await events(offer.id)).toHaveLength(1);
   });
 
-  it('accept final counter → offer status SELECTED, awaitingParty NONE', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test4');
-    const errand = await createErrand(requester.userId, category.id);
-
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
-
-    const countered = await offerService.counterOffer(
-      offer.id,
-      'REQUESTER',
-      45000,
-      25,
-      undefined,
-      offer.version,
-    );
-
-    const accepted = await offerService.acceptOffer(offer.id, countered.version);
-
-    expect(accepted.status).toBe('SELECTED');
-    expect(accepted.awaitingParty).toBe('NONE');
-    expect(accepted.closeReason).toBe('RUNNER_SELECTED');
+  it('accept-counter is the runner\'s, and only when a counter is waiting', async () => {
+    const { requester, runner, offer } = await setup();
+    expect((await offerAction(app, runner, 'post', offer.id, 'accept-counter')).status).toBe(409);
+    await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 45_000, durationMinutes: 30 }).expect(200);
+    expect((await offerAction(app, requester, 'post', offer.id, 'accept-counter')).status).toBe(403);
+    await offerAction(app, runner, 'post', offer.id, 'accept-counter').expect(200);
   });
 
-  it('reconstruct price path from negotiation_events: [5000, 4500, 4750, accept]', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test5');
-    const errand = await createErrand(requester.userId, category.id);
+  it('the requester can reject at any point before selection; the runner cannot', async () => {
+    const { requester, runner, offer } = await setup();
+    await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 45_000, durationMinutes: 30 }).expect(200);
 
-    // Initial offer: 5000
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
+    expect((await offerAction(app, runner, 'post', offer.id, 'reject')).status).toBe(403);
+    const rejected = await offerAction(app, requester, 'post', offer.id, 'reject').expect(200);
 
-    // Requester counters: 4500
-    const counter1 = await offerService.counterOffer(
-      offer.id,
-      'REQUESTER',
-      45000,
-      25,
-      'Lower',
-      offer.version,
-    );
-
-    // Runner counters: 4750
-    const counter2 = await offerService.counterOffer(
-      counter1.id,
-      'RUNNER',
-      47500,
-      28,
-      'Meet in middle',
-      counter1.version,
-    );
-
-    // Requester accepts
-    await offerService.acceptOffer(offer.id, counter2.version);
-
-    const negotiationEvents = await prisma.negotiationEvent.findMany({
-      where: { offerId: offer.id },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    const pricePath = negotiationEvents.map((e) =>
-      e.proposedAmountMinor ? Number(e.proposedAmountMinor) : null,
-    );
-
-    expect(pricePath).toEqual([50000, 45000, 47500]);
-    expect(negotiationEvents.length).toBe(3);
-    expect(negotiationEvents[0].messageType).toBe('INITIAL_OFFER');
-    expect(negotiationEvents[1].messageType).toBe('COUNTER_OFFER');
-    expect(negotiationEvents[2].messageType).toBe('COUNTER_OFFER');
+    expect(rejected.body.data).toMatchObject({ status: 'REJECTED', closeReason: 'REQUESTER_REJECTED', awaitingParty: 'NONE' });
+    const row = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+    expect(row.closedAt).not.toBeNull();
+    expect((await events(offer.id)).at(-1)?.type).toBe('REJECT');
+    expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 })).status).toBe(409);
   });
 
-  it('attempt UPDATE on negotiation_events directly → database rejects', async () => {
-    const requester = await signedInUser(app);
-    const runner = await signedInUser(app);
-    const category = await createCategory('delivery-test6');
-    const errand = await createErrand(requester.userId, category.id);
+  it('a withdrawn offer is recorded, still counts for the day, and cannot be revived', async () => {
+    const { runner, requester, errandId, offer } = await setup();
 
-    const offer = await offerService.submitOffer({
-      errand: { id: errand.id, requesterId: requester.userId, status: 'OPEN' },
-      runnerId: runner.userId,
-      amountMinor: 50000,
-      durationMinutes: 30,
-      availabilityConfirmedAt: new Date(),
-    });
+    const res = await offerAction(app, runner, 'post', offer.id, 'withdraw').expect(200);
 
-    const negotiationEvent = await prisma.negotiationEvent.findFirst({
-      where: { offerId: offer.id },
-    });
+    expect(res.body.data).toMatchObject({ status: 'WITHDRAWN', closeReason: 'RUNNER_WITHDREW' });
+    const row = await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } });
+    expect(row.withdrawnAt).not.toBeNull();
+    expect(row.closedAt).not.toBeNull();
+    expect((await events(offer.id)).at(-1)?.type).toBe('WITHDRAW');
+    expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 })).status).toBe(409);
+    expect((await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0)).toBe(1);
+    // resubmitting works but is a second counted offer
+    await submitOffer(app, runner, errandId).expect(201);
+    expect((await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0)).toBe(2);
+  });
 
-    expect(negotiationEvent).toBeDefined();
+  it('answers a stranger exactly like a missing offer', async () => {
+    const { stranger, offer } = await setup();
+    const missing = '01a12638-0000-7000-8000-000000000000';
+    for (const action of ['counter', 'accept-counter', 'withdraw', 'reject', 'reconfirm']) {
+      const body = action === 'counter' ? { amountMinor: 40_000, durationMinutes: 30 } : {};
+      const real = await offerAction(app, stranger, 'post', offer.id, action, body);
+      const none = await offerAction(app, stranger, 'post', missing, action, body);
+      expect(real.status).toBe(404);
+      expect(none.status).toBe(404);
+    }
+  });
 
-    // Attempt to UPDATE negotiation_events should fail
+  it('rejects a stale version with OFFER_VERSION_MISMATCH', async () => {
+    const { requester, runner, offer } = await setup();
+    await offerAction(app, runner, 'patch', offer.id, '', { amountMinor: 49_000, durationMinutes: 30 }).expect(200);
+
+    const stale = await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30, expectedVersion: offer.version });
+
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.code).toBe('OFFER_VERSION_MISMATCH');
+  });
+
+  it('two simultaneous counters from the same turn produce exactly one', async () => {
+    const { requester, offer } = await setup();
+    const results = await Promise.all(
+      [40_000, 41_000, 42_000, 43_000].map((amountMinor) =>
+        offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor, durationMinutes: 30 }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(await events(offer.id)).toHaveLength(2);
+  });
+
+  it('negotiation events cannot be updated or deleted, even with raw SQL', async () => {
+    const { offer } = await setup();
+    await expect(prisma.$executeRaw`UPDATE negotiation_events SET message = 'x' WHERE offer_id = ${offer.id}::uuid`).rejects.toThrow();
+    await expect(prisma.$executeRaw`DELETE FROM negotiation_events WHERE offer_id = ${offer.id}::uuid`).rejects.toThrow();
+  });
+
+  it('the database refuses an offer whose parties do not match the errand', async () => {
+    const { requester, runner, stranger, errandId } = await setup();
     await expect(
       prisma.$executeRaw`
-        UPDATE negotiation_events 
-        SET proposed_amount_minor = 99999 
-        WHERE id = ${negotiationEvent!.id}::uuid
-      `,
+        INSERT INTO offers (errand_id, runner_id, requester_id, amount_minor, duration_minutes, status, awaiting_party, updated_at)
+        VALUES (${errandId}::uuid, ${stranger.userId}::uuid, ${runner.userId}::uuid, 50000, 30, 'WITHDRAWN', 'NONE', now())`,
     ).rejects.toThrow();
-
-    // Attempt to DELETE negotiation_events should also fail
     await expect(
       prisma.$executeRaw`
-        DELETE FROM negotiation_events 
-        WHERE id = ${negotiationEvent!.id}::uuid
-      `,
+        INSERT INTO offers (errand_id, runner_id, requester_id, amount_minor, duration_minutes, status, awaiting_party, updated_at)
+        VALUES (${errandId}::uuid, ${requester.userId}::uuid, ${requester.userId}::uuid, 50000, 30, 'WITHDRAWN', 'NONE', now())`,
     ).rejects.toThrow();
-
-    // Verify the event is unchanged
-    const unchanged = await prisma.negotiationEvent.findUnique({
-      where: { id: negotiationEvent!.id },
-    });
-    expect(Number(unchanged?.proposedAmountMinor)).toBe(50000);
   });
 });

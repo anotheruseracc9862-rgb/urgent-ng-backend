@@ -1,52 +1,64 @@
-import { IsEnum, IsOptional } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsIn, IsOptional } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export const OFFER_SORTS = ['price_asc', 'eta_asc', 'rating_desc', 'distance_asc'] as const;
+export type OfferSort = (typeof OFFER_SORTS)[number];
 
 export class OfferListQueryDto {
-  @ApiProperty({
-    enum: ['price_asc', 'eta_asc', 'rating_desc', 'distance_asc'],
-    required: false,
+  @ApiPropertyOptional({
+    enum: OFFER_SORTS,
     default: 'price_asc',
-    description: 'Sort order for offers. Pro runners always appear first within any sort.',
+    description:
+      'Sort order. Ties break by Runner Pro first (never overrides the chosen sort), then oldest offer, then id.',
   })
   @IsOptional()
-  @IsEnum(['price_asc', 'eta_asc', 'rating_desc', 'distance_asc'])
-  sort?: 'price_asc' | 'eta_asc' | 'rating_desc' | 'distance_asc' = 'price_asc';
+  @IsIn(OFFER_SORTS as unknown as string[])
+  sort?: OfferSort;
 }
 
 export class OfferListItemDto {
   @ApiProperty({ description: 'Offer ID' })
-  id: string;
+  id!: string;
 
   @ApiProperty({ description: 'Runner user ID' })
-  runnerId: string;
+  runnerId!: string;
 
   @ApiProperty({ description: 'Runner display name' })
-  runnerName: string;
+  runnerName!: string;
 
-  @ApiProperty({ description: 'Runner rating (0-5)', nullable: true })
-  runnerRating: number | null;
+  @ApiProperty({ description: 'Current profile photo media id, if any', nullable: true })
+  runnerPhotoMediaId!: string | null;
 
-  @ApiProperty({ description: 'Whether the runner has Pro status' })
-  runnerIsPro: boolean;
+  @ApiProperty({ description: 'Runner has a valid identity verification' })
+  runnerVerified!: boolean;
 
-  @ApiProperty({ description: 'Offer amount in kobo (minor currency units)' })
-  amountMinor: number;
+  @ApiProperty({ description: 'Runner rating (1-5). Null until ratings exist (Phase 9).', nullable: true })
+  runnerRating!: number | null;
+
+  @ApiProperty({ description: 'Runner has an active Runner Pro entitlement' })
+  runnerIsPro!: boolean;
+
+  @ApiProperty({ description: 'Offer amount in kobo' })
+  amountMinor!: number;
 
   @ApiProperty({ description: 'Estimated duration in minutes' })
-  durationMinutes: number;
+  durationMinutes!: number;
 
-  @ApiProperty({ description: 'Optional message from runner', required: false })
+  @ApiPropertyOptional({ description: 'Message from the runner' })
   message?: string;
 
-  @ApiProperty({ description: 'Which party should act next', enum: ['RUNNER', 'REQUESTER', 'NONE'] })
-  awaitingParty: string;
+  @ApiProperty({ description: 'Bucketed distance from the runner area centre to the errand, e.g. "< 2 km"', nullable: true })
+  distanceBucket!: string | null;
 
-  @ApiProperty({ description: 'Whether the offer needs reconfirmation after material edit' })
-  needsReconfirmation: boolean;
+  @ApiProperty({ description: 'Which party must act next', enum: ['RUNNER', 'REQUESTER', 'NONE'] })
+  awaitingParty!: string;
 
-  @ApiProperty({ description: 'Offer version for optimistic locking' })
-  version: number;
+  @ApiProperty({ description: 'The runner must reconfirm after a material errand edit; cannot be selected until then' })
+  needsReconfirmation!: boolean;
 
-  @ApiProperty({ description: 'When the offer was created' })
-  createdAt: Date;
+  @ApiProperty({ description: 'Offer version, send back as expectedVersion' })
+  version!: number;
+
+  @ApiProperty({ type: Date })
+  createdAt!: Date;
 }

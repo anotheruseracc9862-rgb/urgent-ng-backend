@@ -1,83 +1,63 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OffersController } from './offers.controller.js';
 
+function makeController() {
+  const offers = {
+    submitOffer: vi.fn().mockResolvedValue({ id: 'offer-1' }),
+    edit: vi.fn().mockResolvedValue({}),
+    counterOffer: vi.fn().mockResolvedValue({}),
+    acceptCounter: vi.fn().mockResolvedValue({}),
+    withdraw: vi.fn().mockResolvedValue({}),
+    rejectOffer: vi.fn().mockResolvedValue({}),
+    reconfirmOffer: vi.fn().mockResolvedValue({}),
+  };
+  const offerList = { getOffersForErrand: vi.fn().mockResolvedValue([]) };
+  return { controller: new OffersController(offers as never, offerList as never), offers, offerList };
+}
+
+const user = { userId: 'user-1' } as never;
+
 describe('OffersController', () => {
-  it('submits a new offer for an errand', async () => {
-    const service = {
-      submitOffer: vi.fn().mockResolvedValue({ id: 'offer-1', status: 'ACTIVE' }),
-      getLiveOffersForErrand: vi.fn().mockReturnValue([]),
-      getOffer: vi.fn().mockReturnValue({ runnerId: 'runner-1', requesterId: 'requester-1' }),
-      counterOffer: vi.fn(),
-      rejectOffer: vi.fn(),
-      withdraw: vi.fn(),
-      reconfirmOffer: vi.fn(),
-    } as any;
+  it('submits for the signed-in user and passes no errand context from the client', async () => {
+    const { controller, offers } = makeController();
 
-    const controller = new OffersController(service);
-    const result = await controller.submit({ userId: 'runner-1' } as any, 'errand-1', {
-      requesterId: 'requester-1',
-      amountMinor: 25000,
+    // A client may still send these fields; the DTO no longer declares them and the call ignores them.
+    const body = { amountMinor: 25_000, durationMinutes: 30, availabilityConfirmed: true, message: 'Hi', requesterId: 'x', status: 'OPEN' };
+    await controller.submit(user, 'errand-1', body as never);
+
+    expect(offers.submitOffer).toHaveBeenCalledWith({
+      errandId: 'errand-1',
+      runnerId: 'user-1',
+      amountMinor: 25_000,
       durationMinutes: 30,
-      availabilityConfirmedAt: new Date('2024-01-15T09:00:00.000Z'),
-      message: 'Happy to help',
-      status: 'OPEN',
+      availabilityConfirmed: true,
+      message: 'Hi',
     });
-
-    expect(result.id).toBe('offer-1');
-    expect(service.submitOffer).toHaveBeenCalledWith(expect.objectContaining({ runnerId: 'runner-1', errand: expect.objectContaining({ id: 'errand-1' }) }));
   });
 
-  it('passes the current user through withdraw and reconfirm actions', () => {
-    const service = {
-      withdraw: vi.fn().mockReturnValue({ id: 'offer-1', status: 'WITHDRAWN' }),
-      reconfirmOffer: vi.fn().mockReturnValue({ id: 'offer-1', status: 'ACTIVE' }),
-      getLiveOffersForErrand: vi.fn(),
-      getOffer: vi.fn(),
-      submitOffer: vi.fn(),
-      counterOffer: vi.fn(),
-      rejectOffer: vi.fn(),
-    } as any;
+  it('passes the caller through every negotiation action', async () => {
+    const { controller, offers } = makeController();
 
-    const controller = new OffersController(service);
+    await controller.edit(user, 'o', { amountMinor: 30_000, durationMinutes: 20 });
+    await controller.counter(user, 'o', { amountMinor: 30_000, durationMinutes: 20, expectedVersion: 2 });
+    await controller.acceptCounter(user, 'o', { expectedVersion: 3 });
+    await controller.withdraw(user, 'o');
+    await controller.reject(user, 'o', {});
+    await controller.reconfirm(user, 'o', { expectedVersion: 4 });
 
-    controller.withdraw({ userId: 'runner-1' } as any, 'offer-1');
-    controller.reconfirm({ userId: 'runner-1' } as any, 'offer-1', { expectedVersion: 2 });
-
-    expect(service.withdraw).toHaveBeenCalledWith('offer-1', 'runner-1');
-    expect(service.reconfirmOffer).toHaveBeenCalledWith('offer-1', 2, 'runner-1');
+    expect(offers.edit).toHaveBeenCalledWith('o', 'user-1', expect.objectContaining({ amountMinor: 30_000 }));
+    expect(offers.counterOffer).toHaveBeenCalledWith('o', 'user-1', expect.objectContaining({ expectedVersion: 2 }));
+    expect(offers.acceptCounter).toHaveBeenCalledWith('o', 'user-1', 3);
+    expect(offers.withdraw).toHaveBeenCalledWith('o', 'user-1');
+    expect(offers.rejectOffer).toHaveBeenCalledWith('o', 'user-1', undefined);
+    expect(offers.reconfirmOffer).toHaveBeenCalledWith('o', 'user-1', 4);
   });
 
-  it('rejects a non-party user from negotiating the offer', () => {
-    const service = {
-      getOffer: vi.fn().mockReturnValue({ runnerId: 'runner-1', requesterId: 'requester-1' }),
-      getLiveOffersForErrand: vi.fn(),
-      submitOffer: vi.fn(),
-      counterOffer: vi.fn(),
-      rejectOffer: vi.fn(),
-      withdraw: vi.fn(),
-      reconfirmOffer: vi.fn(),
-    } as any;
+  it('lists offers for the signed-in requester with the chosen sort', async () => {
+    const { controller, offerList } = makeController();
 
-    const controller = new OffersController(service);
+    await controller.list(user, 'errand-1', { sort: 'eta_asc' });
 
-    expect(() => controller.counter({ userId: 'ghost-user' } as any, 'offer-1', { amountMinor: 25000, durationMinutes: 30 })).toThrow(/not a party/i);
-  });
-
-  it('lists live offers for an errand', () => {
-    const service = {
-      getLiveOffersForErrand: vi.fn().mockReturnValue([{ id: 'offer-1' }]),
-      getOffer: vi.fn(),
-      submitOffer: vi.fn(),
-      counterOffer: vi.fn(),
-      rejectOffer: vi.fn(),
-      withdraw: vi.fn(),
-      reconfirmOffer: vi.fn(),
-    } as any;
-
-    const controller = new OffersController(service);
-    const result = controller.list('errand-1');
-
-    expect(result).toHaveLength(1);
-    expect(service.getLiveOffersForErrand).toHaveBeenCalledWith('errand-1');
+    expect(offerList.getOffersForErrand).toHaveBeenCalledWith('user-1', 'errand-1', 'eta_asc');
   });
 });

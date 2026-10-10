@@ -31,7 +31,6 @@ import { ErrandsModule } from './errands/errands.module.js';
 import { EntitlementsModule } from './entitlements/entitlements.module.js';
 import { MarketplaceModule } from './marketplace/marketplace.module.js';
 import { OffersModule } from './offers/offers.module.js';
-import { NegotiationsModule } from './negotiations/negotiations.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -90,7 +89,6 @@ const isTest = process.env.NODE_ENV === 'test';
     ErrandsModule,
     EntitlementsModule,
     OffersModule,
-    NegotiationsModule,
     MarketplaceModule,
   ],
   providers: [

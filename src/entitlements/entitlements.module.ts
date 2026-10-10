@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CommonModule } from '../common/common.module.js';
 import { ConfigStoreModule } from '../config/config-store.module.js';
+import { DatabaseModule } from '../database/database.module.js';
 import { EntitlementService } from './entitlement.service.js';
 import { OfferLimitService } from './offer-limit.service.js';
 
@@ -10,7 +11,7 @@ import { OfferLimitService } from './offer-limit.service.js';
  * runner eligibility and offer submission flows without a circular dependency.
  */
 @Module({
-  imports: [CommonModule, ConfigStoreModule],
+  imports: [CommonModule, ConfigStoreModule, DatabaseModule],
   providers: [OfferLimitService, EntitlementService],
   exports: [OfferLimitService, EntitlementService],
 })

@@ -75,7 +75,7 @@ export class ErrandStateService {
     private readonly config: BusinessConfigService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
-    private readonly offerService?: OfferService,
+    private readonly offerService: OfferService,
   ) {}
 
   async transition(tx: Prisma.TransactionClient, input: TransitionInput): Promise<TransitionResult> {
@@ -162,7 +162,7 @@ export class ErrandStateService {
     });
 
     if (to === 'CANCELLED' || to === 'EXPIRED') {
-      await this.offerService?.closeForErrand(errand.id, to === 'EXPIRED' ? 'ERRAND_EXPIRED' : 'ERRAND_CANCELLED');
+      await this.offerService.closeForErrand(tx, errand.id, to === 'EXPIRED' ? 'ERRAND_EXPIRED' : 'ERRAND_CANCELLED');
     }
 
     return { errandId: errand.id, from, to, version };

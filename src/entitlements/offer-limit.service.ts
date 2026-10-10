@@ -3,7 +3,8 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { ClockService } from '../common/utils/time.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
-import { OfferDailyCounter } from './offer-daily-counter.js';
+import { DomainException } from '../common/exceptions/domain.exception.js';
+import { OFFER_DAILY_LIMIT_REACHED } from '../common/constants/error-codes.js';
 
 export interface OfferLimitStatus {
   used: number;
@@ -18,154 +19,95 @@ export interface OfferLimitPolicy {
   isPro(userId: string): Promise<boolean> | boolean;
 }
 
+export interface OfferAllowance {
+  value: number;
+  isPro: boolean;
+}
+
 export const OFFER_LIMIT_POLICY = Symbol('OFFER_LIMIT_POLICY');
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Tracks a runner's per-day offer allowance. When Prisma is available the counter is durable and
- * updated in the same transaction as the offer creation; without the database this keeps the
- * original in-memory behavior for unit tests.
+ * A runner's per-day offer allowance (Backend PRD 13.6). The counter is `offer_daily_counters`,
+ * one row per user and Lagos day. `reserve` is the only way to spend the allowance: it locks the
+ * row, checks the limit and increments, inside the caller's transaction, so a rolled-back offer
+ * never counts and parallel submits can never pass the limit.
  */
 @Injectable()
 export class OfferLimitService {
-  private readonly counters = new Map<string, OfferDailyCounter>();
-  private readonly locks = new Map<string, Promise<void>>();
+  private readonly policy: OfferLimitPolicy;
 
   constructor(
     private readonly config: BusinessConfigService,
     private readonly clock: ClockService,
-    @Optional() @Inject(OFFER_LIMIT_POLICY)
-    private readonly policy: OfferLimitPolicy = { isPro: async () => false },
-    @Optional() private readonly prisma?: PrismaService,
-  ) {}
+    private readonly prisma: PrismaService,
+    @Optional() @Inject(OFFER_LIMIT_POLICY) policy?: OfferLimitPolicy,
+  ) {
+    this.policy = policy ?? { isPro: async () => false };
+  }
+
+  async isPro(userId: string): Promise<boolean> {
+    return this.policy.isPro(userId);
+  }
 
   async getLimitStatus(userId: string): Promise<OfferLimitStatus> {
-    const [freeLimit, proCap, isPro] = await Promise.all([
-      this.config.get('FREE_RUNNER_DAILY_OFFER_LIMIT'),
-      this.config.get('PRO_DAILY_OFFER_CAP'),
+    const dayLagos = this.clock.lagosDay(this.clock.now());
+    const [limit, isPro, row] = await Promise.all([
+      this.allowanceFor(userId),
       this.policy.isPro(userId),
+      this.prisma.offerDailyCounter.findUnique({ where: { userId_dayLagos: { userId, dayLagos } } }),
     ]);
-
-    const limit = isPro ? proCap : freeLimit;
-    const used = await this.getUsedCount(userId);
-    const remaining = Math.max(limit - used, 0);
-    const resetsAt = this.nextResetAt();
-
-    return {
-      used,
-      limit,
-      remaining,
-      resetsAt,
-      isPro,
-      isAtLimit: used >= limit,
-    };
+    return this.status(row?.count ?? 0, limit.value, limit.isPro || isPro);
   }
 
-  async consume(userId: string, count: number = 1, tx?: Prisma.TransactionClient): Promise<OfferLimitStatus> {
-    if (this.prisma) {
-      if (tx) {
-        return this.consumeInDatabase(userId, count, tx);
-      }
-      return this.consumeInDatabase(userId, count);
-    }
-
-    const key = this.counterKey(userId);
-    const result = await this.withLock(key, async () => {
-      const status = await this.getLimitStatus(userId);
-      const safeDelta = Math.max(0, Math.min(count, Math.max(0, status.limit - status.used)));
-      const current = this.getOrCreateCounter(userId);
-      const nextUsed = Math.min(status.limit, current.increment(safeDelta));
-
-      this.counters.set(key, new OfferDailyCounter(userId, current.dayLagos, nextUsed));
-
-      const remaining = Math.max(status.limit - nextUsed, 0);
-      return {
-        ...status,
-        used: nextUsed,
-        remaining,
-        isAtLimit: nextUsed >= status.limit,
-      };
-    });
-
-    return result;
-  }
-
-  private async consumeInDatabase(userId: string, count: number, tx?: Prisma.TransactionClient): Promise<OfferLimitStatus> {
-    const [freeLimit, proCap, isPro] = await Promise.all([
-      this.config.get('FREE_RUNNER_DAILY_OFFER_LIMIT'),
-      this.config.get('PRO_DAILY_OFFER_CAP'),
-      this.policy.isPro(userId),
-    ]);
-
-    const limit = isPro ? proCap : freeLimit;
+  /**
+   * Spend one offer from today's allowance. Throws `OFFER_DAILY_LIMIT_REACHED` (with `resetsAt`)
+   * when none is left. The caller must create the offer in the same transaction.
+   */
+  async reserve(tx: Prisma.TransactionClient, userId: string, allowance?: OfferAllowance): Promise<OfferLimitStatus> {
+    // Pass `allowance` (from `allowanceFor`, read before the transaction): a lookup here could need
+    // a second pool connection while parallel transactions hold all of them and wait on this lock.
+    const { value: limit, isPro } = allowance ?? (await this.allowanceFor(userId));
     const dayLagos = this.clock.lagosDay(this.clock.now());
 
-    if (tx) {
-      const existing = await tx.offerDailyCounter.findUnique({
-        where: { userId_dayLagos: { userId, dayLagos } },
+    await tx.$executeRaw`
+      INSERT INTO offer_daily_counters (user_id, day_lagos, count, updated_at)
+      VALUES (${userId}::uuid, ${dayLagos}, 0, now())
+      ON CONFLICT (user_id, day_lagos) DO NOTHING
+    `;
+    const rows = await tx.$queryRaw<Array<{ count: number }>>`
+      SELECT count FROM offer_daily_counters
+      WHERE user_id = ${userId}::uuid AND day_lagos = ${dayLagos}
+      FOR UPDATE
+    `;
+    const used = rows[0]?.count ?? 0;
+    if (used >= limit) {
+      const status = this.status(used, limit, isPro);
+      throw DomainException.of(OFFER_DAILY_LIMIT_REACHED, {
+        message: "You have reached today's offer limit.",
+        details: { used: status.used, limit: status.limit, remaining: 0, resetsAt: status.resetsAt },
       });
-
-      const used = existing?.count ?? 0;
-      const safeDelta = Math.max(0, Math.min(count, Math.max(0, limit - used)));
-      const nextUsed = Math.min(limit, used + safeDelta);
-
-      await tx.offerDailyCounter.upsert({
-        where: { userId_dayLagos: { userId, dayLagos } },
-        create: { userId, dayLagos, count: nextUsed },
-        update: { count: nextUsed, updatedAt: new Date() },
-      });
-
-      return {
-        used: nextUsed,
-        limit,
-        remaining: Math.max(limit - nextUsed, 0),
-        resetsAt: this.nextResetAt(),
-        isPro,
-        isAtLimit: nextUsed >= limit,
-      } satisfies OfferLimitStatus;
     }
-
-    return this.prisma!.$transaction(async (transaction) => this.consumeInDatabase(userId, count, transaction));
+    await tx.$executeRaw`
+      UPDATE offer_daily_counters SET count = count + 1, updated_at = now()
+      WHERE user_id = ${userId}::uuid AND day_lagos = ${dayLagos}
+    `;
+    return this.status(used + 1, limit, isPro);
   }
 
-  private async getUsedCount(userId: string): Promise<number> {
-    if (this.prisma) {
-      const dayLagos = this.clock.lagosDay(this.clock.now());
-      const row = await this.prisma.offerDailyCounter.findUnique({
-        where: { userId_dayLagos: { userId, dayLagos } },
-      });
-      return row?.count ?? 0;
-    }
-
-    const counter = this.getOrCreateCounter(userId);
-    return counter.count;
+  /** The runner's daily allowance right now: the free limit, or the Pro fair-use cap. */
+  async allowanceFor(userId: string): Promise<OfferAllowance> {
+    const [freeLimit, proCap, isPro] = await Promise.all([
+      this.config.get('FREE_RUNNER_DAILY_OFFER_LIMIT'),
+      this.config.get('PRO_DAILY_OFFER_CAP'),
+      this.policy.isPro(userId),
+    ]);
+    return { value: isPro ? proCap : freeLimit, isPro };
   }
 
-  private getOrCreateCounter(userId: string): OfferDailyCounter {
-    const day = this.clock.lagosDay(this.clock.now());
-    const key = OfferDailyCounter.key(userId, day);
-    const existing = this.counters.get(key);
-    if (existing) {
-      return existing;
-    }
-
-    const fresh = new OfferDailyCounter(userId, day, 0);
-    this.counters.set(key, fresh);
-    return fresh;
-  }
-
-  private counterKey(userId: string): string {
-    return OfferDailyCounter.key(userId, this.clock.lagosDay(this.clock.now()));
-  }
-
-  private nextResetAt(): Date {
-    const start = this.clock.startOfDayLagos(this.clock.now());
-    return new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  }
-
-  private async withLock<T>(key: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.locks.get(key) ?? Promise.resolve();
-    const next = previous.then(work, work);
-    this.locks.set(key, next.then(() => undefined, () => undefined));
-    return next;
+  private status(used: number, limit: number, isPro: boolean): OfferLimitStatus {
+    const resetsAt = new Date(this.clock.startOfDayLagos(this.clock.now()).getTime() + DAY_MS);
+    return { used, limit, remaining: Math.max(limit - used, 0), resetsAt, isPro, isAtLimit: used >= limit };
   }
 }
