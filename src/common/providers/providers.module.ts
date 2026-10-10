@@ -18,6 +18,8 @@ import {
 } from './index.js';
 import { DojahKycProvider } from './dojah-kyc.provider.js';
 import { S3StorageProvider, type S3Settings } from './s3-storage.provider.js';
+import { SmtpEmailProvider, type SmtpSettings } from './smtp-email.provider.js';
+import { FcmPushProvider, parseServiceAccount } from './fcm-push.provider.js';
 import {
   FakeOtpProvider,
   FakeKycProvider,
@@ -44,6 +46,26 @@ function createDojahProvider(config: ConfigService): DojahKycProvider {
     throw new Error('KYC_PROVIDER=real is set but DOJAH_APP_ID, DOJAH_SECRET_KEY and DOJAH_BASE_URL are not all set');
   }
   return new DojahKycProvider(settings);
+}
+
+function createSmtpProvider(config: ConfigService): SmtpEmailProvider {
+  const settings = config.get<SmtpSettings>('smtp');
+  if (!settings?.host || !settings.port || !settings.user || !settings.pass || !settings.from) {
+    throw new Error('EMAIL_PROVIDER=real is set but SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and MAIL_FROM are not all set');
+  }
+  return new SmtpEmailProvider(settings);
+}
+
+function createFcmProvider(config: ConfigService): FcmPushProvider {
+  const raw = config.get<string>('firebase.credentials');
+  if (!raw) {
+    throw new Error('PUSH_PROVIDER=real is set but FIREBASE_CREDENTIALS is not set');
+  }
+  try {
+    return new FcmPushProvider(parseServiceAccount(raw));
+  } catch (error) {
+    throw new Error(`PUSH_PROVIDER=real is set but FIREBASE_CREDENTIALS is not usable: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 type ProviderName = keyof AppConfig['providers'];
@@ -90,8 +112,8 @@ export class ProvidersModule {
         providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah', createDojahProvider),
         providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3', createS3Provider),
         providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
-        providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM'),
-        providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP'),
+        providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM', createFcmProvider),
+        providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP', createSmtpProvider),
         providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack'),
       ],
       exports: [

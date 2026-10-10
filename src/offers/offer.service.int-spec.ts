@@ -155,9 +155,10 @@ describe('Offers: submit, lifecycle, list (P6-04, P6-06)', () => {
     });
 
     it('enforces the open-offer cap from the database', async () => {
+      // Set first, before any other request can read the old value into the 60 s cache.
+      await app.get(BusinessConfigService).set('MAX_OPEN_OFFERS_PER_RUNNER', 2);
       const requester = await signedInUser(app);
       const runner = await readyRunner(app);
-      await app.get(BusinessConfigService).set('MAX_OPEN_OFFERS_PER_RUNNER', 2);
       const statuses: number[] = [];
       let last: { body: { error?: { code: string } } } | undefined;
       for (let i = 0; i < 3; i += 1) {

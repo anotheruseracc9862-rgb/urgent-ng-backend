@@ -7,6 +7,7 @@ import { ErrandExpirySweeper } from './errand-expiry.sweeper.js';
 import { AssignmentAcceptanceSweeper } from './assignment-acceptance.sweeper.js';
 import { AutoCompletionSweeper } from './auto-completion.sweeper.js';
 import { ChangeRequestExpirySweeper } from './change-request-expiry.sweeper.js';
+import { ReminderSweeper } from './reminder.sweeper.js';
 import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
 
 /**
@@ -26,8 +27,9 @@ export class SweeperRegistry implements OnModuleDestroy {
     assignmentAcceptance: AssignmentAcceptanceSweeper,
     autoCompletion: AutoCompletionSweeper,
     changeRequestExpiry: ChangeRequestExpirySweeper,
+    reminders: ReminderSweeper,
   ) {
-    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry];
+    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry, reminders];
   }
 
   startAll(): void {

@@ -217,7 +217,10 @@ export class AssignmentService {
     }
 
     if (row.requesterId === userId) {
-      await this.lifecycle.cancel(userId, row.errandId, { reason: input.reason, note: input.note });
+      // Only the stage the requester saw: if the runner cancelled in the meantime (the errand is OPEN
+      // again), this is not the cancel the requester asked for, and the errand must stay.
+      const seen = row.status === 'PENDING_ACCEPTANCE' ? (['RUNNER_SELECTED'] as const) : (['ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED'] as const);
+      await this.lifecycle.cancel(userId, row.errandId, { reason: input.reason, note: input.note }, seen);
     } else {
       await this.runnerCancel(userId, row, input);
     }

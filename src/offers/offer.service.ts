@@ -21,6 +21,7 @@ import { EntitlementService } from '../entitlements/entitlement.service.js';
 import { RunnerEligibilityService } from '../runner/runner-eligibility.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
+import { ConversationService } from '../messaging/conversation.service.js';
 
 export type { OfferStatus, OfferCloseReason };
 export type AwaitingParty = 'RUNNER' | 'REQUESTER' | 'NONE';
@@ -86,6 +87,7 @@ export class OfferService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly conversations: ConversationService,
   ) {}
 
   // ---- Submit ----
@@ -172,8 +174,16 @@ export class OfferService {
           message: input.message,
         });
         await tx.$executeRaw`UPDATE errands SET offer_count = offer_count + 1 WHERE id = ${errandId}::uuid`;
-        await this.publish(tx, 'offer.created', offer, runnerId, 'offer.submitted');
-        return offer;
+        // The conversation opens with the first offer, in the same transaction (Backend PRD 18.1).
+        const conversationId = await this.conversations.ensureForOffer(tx, {
+          errandId,
+          requesterId: errand.requester_id,
+          runnerId,
+          offerId: offer.id,
+        });
+        const linked = await tx.offer.update({ where: { id: offer.id }, data: { conversationId } });
+        await this.publish(tx, 'offer.created', linked, runnerId, 'offer.submitted', { conversationId });
+        return linked;
       });
       return this.toRecord(created);
     } catch (error) {
@@ -672,6 +682,9 @@ export class OfferService {
         durationMinutes: offer.durationMinutes,
         version: offer.version,
         actorId,
+        /** What happened, for consumers that word a notification per action (offer.counter, offer.reconfirm...). */
+        action: auditAction,
+        closeReason: offer.closeReason ?? null,
       },
     });
     await this.audit.recordInTransaction(tx, {

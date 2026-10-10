@@ -766,6 +766,11 @@ model User {
   executionProblems      ExecutionProblem[]     @relation("ProblemReporter")
   changeRequestsMade     ChangeRequest[]        @relation("ChangeRequester")
   changeRequestsAnswered ChangeRequest[]        @relation("ChangeResponder")
+  conversationsAsRequester Conversation[]       @relation("ConversationRequester")
+  conversationsAsRunner    Conversation[]       @relation("ConversationRunner")
+  conversationParticipants ConversationParticipant[]
+  messagesSent             Message[]            @relation("MessageSender")
+  notifications            Notification[]
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1086,6 +1091,7 @@ model Media {
   executionEvents      ExecutionEvent[]
   executionProblems    ExecutionProblem[]
   checkpoints          Checkpoint[]
+  messages             Message[]
 
   @@index([ownerId, purpose], map: "media_owner_purpose_idx")
   @@index([status], map: "media_status_idx")
@@ -1196,6 +1202,7 @@ model Errand {
   negotiationEvents NegotiationEvent[]
   assignments       Assignment[]
   executionEvents   ExecutionEvent[]
+  conversations     Conversation[]
 
   @@index([status, categoryId], map: "errands_status_category_idx")
   @@index([requesterId, status], map: "errands_requester_status_idx")
@@ -1328,6 +1335,7 @@ model Offer {
 
   negotiationEvents NegotiationEvent[]
   assignments       Assignment[]
+  conversations     Conversation[]
 
   @@index([errandId, status, createdAt], map: "offers_errand_status_created_idx")
   @@index([runnerId, status, createdAt], map: "offers_runner_status_created_idx")
@@ -1509,4 +1517,121 @@ model ChangeRequest {
 
   @@index([assignmentId, createdAt], map: "change_requests_assignment_idx")
   @@map("change_requests")
+}
+
+// Phase 8: messaging and notifications (Backend PRD 18, 19, A.8). Migration
+// 20261017000000_messaging_and_notifications adds the partial unique indexes, CHECKs and the
+// parties trigger that Prisma cannot express.
+model Conversation {
+  id             String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId       String             @map("errand_id") @db.Uuid
+  errand         Errand             @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  requesterId    String             @map("requester_id") @db.Uuid
+  requester      User               @relation("ConversationRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  runnerId       String             @map("runner_id") @db.Uuid
+  runner         User               @relation("ConversationRunner", fields: [runnerId], references: [id], onDelete: Restrict)
+  offerId        String             @map("offer_id") @db.Uuid
+  offer          Offer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  status         ConversationStatus @default(ACTIVE)
+  sendDisabledAt DateTime?          @map("send_disabled_at") @db.Timestamptz(3)
+  lastMessageAt  DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id                String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  conversationId    String       @map("conversation_id") @db.Uuid
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  userId            String       @map("user_id") @db.Uuid
+  user              User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  muted             Boolean      @default(false)
+  lastReadMessageId String?      @map("last_read_message_id") @db.Uuid
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?    @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([userId], map: "conversation_participants_user_idx")
+  @@map("conversation_participants")
+}
+
+model Message {
+  id              String        @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  conversationId  String        @map("conversation_id") @db.Uuid
+  conversation    Conversation  @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  senderId        String        @map("sender_id") @db.Uuid
+  sender          User          @relation("MessageSender", fields: [senderId], references: [id], onDelete: Restrict)
+  type            MessageType
+  body            String?
+  mediaId         String?       @map("media_id") @db.Uuid
+  media           Media?        @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  status          MessageStatus @default(SENT)
+  clientMessageId String?       @map("client_message_id")
+  deliveredAt     DateTime?     @map("delivered_at") @db.Timestamptz(3)
+  readAt          DateTime?     @map("read_at") @db.Timestamptz(3)
+  removedAt       DateTime?     @map("removed_at") @db.Timestamptz(3)
+  removalReason   String?       @map("removal_reason")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt       DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt, id], map: "messages_conversation_created_idx")
+  @@index([senderId], map: "messages_sender_idx")
+  @@map("messages")
+}
+
+/// Transient: a retention job removes rows after 90 days.
+model Notification {
+  id        String               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId    String               @map("user_id") @db.Uuid
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  category  NotificationCategory
+  type      String
+  title     String
+  body      String
+  data      Json                 @default("{}")
+  dedupeKey String?              @map("dedupe_key")
+  readAt    DateTime?            @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  deliveries NotificationDelivery[]
+
+  @@index([userId, readAt, createdAt(sort: Desc)], map: "notifications_user_read_created_idx")
+  @@index([createdAt], map: "notifications_created_idx")
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id               String              @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  notificationId   String              @map("notification_id") @db.Uuid
+  notification     Notification        @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+  channel          NotificationChannel
+  /// QUEUED, SENT, FAILED or SUPPRESSED (database CHECK).
+  status           String
+  suppressedReason String?             @map("suppressed_reason")
+  providerRef      String?             @map("provider_ref")
+  attempts         Int                 @default(0)
+  lastError        String?             @map("last_error")
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([notificationId, channel], map: "notification_deliveries_notification_channel_unique")
+  @@map("notification_deliveries")
+}
+
+model NotificationTemplate {
+  key           String               @id
+  category      NotificationCategory
+  titleTemplate String               @map("title_template")
+  bodyTemplate  String               @map("body_template")
+  active        Boolean              @default(true)
+  updatedAt     DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt     DateTime?            @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("notification_templates")
 }

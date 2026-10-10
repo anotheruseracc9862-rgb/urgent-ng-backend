@@ -32,6 +32,9 @@ import { EntitlementsModule } from './entitlements/entitlements.module.js';
 import { MarketplaceModule } from './marketplace/marketplace.module.js';
 import { OffersModule } from './offers/offers.module.js';
 import { AssignmentsModule } from './assignments/assignments.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
+import { MessagingModule } from './messaging/messaging.module.js';
 import { ExecutionModule } from './execution/execution.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -93,6 +96,9 @@ const isTest = process.env.NODE_ENV === 'test';
     OffersModule,
     AssignmentsModule,
     ExecutionModule,
+    RealtimeModule,
+    NotificationsModule,
+    MessagingModule,
     MarketplaceModule,
   ],
   providers: [

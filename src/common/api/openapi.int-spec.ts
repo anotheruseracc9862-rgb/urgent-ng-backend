@@ -138,6 +138,8 @@ describe('OpenAPI document', () => {
       if (path.includes('/health')) continue;
       for (const [status, response] of Object.entries<any>(op.responses)) {
         if (!status.startsWith('2') || status === '204') continue;
+        // A server-sent event stream is not a JSON body: it has its own documented framing.
+        if (response.content?.['text/event-stream'] && !response.content?.['application/json']) continue;
         const schema = response.content?.['application/json']?.schema;
         expect(schema?.properties?.data, `${method} ${path} ${status} has no data`).toBeDefined();
         expect(schema?.properties?.requestId, `${method} ${path} ${status} has no requestId`).toBeDefined();

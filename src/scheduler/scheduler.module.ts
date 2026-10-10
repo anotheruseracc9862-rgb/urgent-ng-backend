@@ -14,6 +14,8 @@ import { AssignmentsModule } from '../assignments/assignments.module.js';
 import { AssignmentAcceptanceSweeper } from './assignment-acceptance.sweeper.js';
 import { AutoCompletionSweeper } from './auto-completion.sweeper.js';
 import { ChangeRequestExpirySweeper } from './change-request-expiry.sweeper.js';
+import { ReminderSweeper } from './reminder.sweeper.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { ExecutionModule } from '../execution/execution.module.js';
 import { SweeperRegistry } from './sweeper.registry.js';
 
@@ -22,8 +24,8 @@ import { SweeperRegistry } from './sweeper.registry.js';
  * Only the scheduler process starts them.
  */
 @Module({
-  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule],
-  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, SweeperRegistry],
+  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule, NotificationsModule],
+  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, ReminderSweeper, SweeperRegistry],
   exports: [SweeperRegistry],
 })
 export class SchedulerModule {}

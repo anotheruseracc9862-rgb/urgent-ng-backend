@@ -95,6 +95,7 @@ describe('validateEnv', () => {
     SMTP_PORT: '465',
     SMTP_USER: 'resend',
     SMTP_PASS: 'secret',
+    FIREBASE_CREDENTIALS: '{"project_id":"p"}',
     AWS_REGION: 'us-east-1',
     AWS_S3_BUCKET: 'bucket',
     AWS_ACCESS_KEY_ID: 'id',

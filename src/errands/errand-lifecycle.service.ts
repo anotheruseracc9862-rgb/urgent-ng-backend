@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AuditActorType, type ErrandCancellationReason } from '@prisma/client';
+import { AuditActorType, type ErrandCancellationReason, type ErrandStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -37,7 +37,13 @@ export class ErrandLifecycleService {
    * errand can only become a dispute. The stage is kept in the event so reliability rules (Phase 9)
    * can score it.
    */
-  async cancel(userId: string, errandId: string, dto: CancelErrandDto): Promise<ErrandDto> {
+  async cancel(
+    userId: string,
+    errandId: string,
+    dto: CancelErrandDto,
+    /** Refuse unless the errand is still in one of these statuses (the caller read them a moment ago). */
+    expectedFrom?: readonly ErrandStatus[],
+  ): Promise<ErrandDto> {
     if (!REQUESTER_REASONS.includes(dto.reason)) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'Choose one of the cancellation reasons offered.', details: { field: 'reason' } });
     }
@@ -61,6 +67,7 @@ export class ErrandLifecycleService {
         errandId,
         to: 'CANCELLED',
         ownerId: userId,
+        ...(expectedFrom ? { expectedFrom } : {}),
         actor: { type: 'REQUESTER', id: userId },
         cancellation: { reason: dto.reason, note: dto.note?.trim() || undefined },
         eventPayload: { stage: current?.status ?? null },

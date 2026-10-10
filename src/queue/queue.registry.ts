@@ -49,6 +49,7 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'errand.disputed': QUEUE_NAMES.NOTIFICATIONS,
   'errand.status_changed': QUEUE_NAMES.MARKETPLACE,
   'errand.updated': QUEUE_NAMES.NOTIFICATIONS,
+  'errand.nearby_delayed': QUEUE_NAMES.MARKETPLACE,
 
   // Offer events
   'offer.created': QUEUE_NAMES.NOTIFICATIONS,
@@ -84,6 +85,7 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
 
   // Message events
   'message.created': QUEUE_NAMES.NOTIFICATIONS,
+  'message.read': QUEUE_NAMES.NOTIFICATIONS,
 
   // Rating events
   'rating.created': QUEUE_NAMES.BADGES,

@@ -8,6 +8,7 @@ import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
 import { QueueModule } from '../queue/queue.module.js';
 import { RunnerModule } from '../runner/runner.module.js';
 import { VerificationModule } from '../verification/verification.module.js';
+import { MessagingModule } from '../messaging/messaging.module.js';
 import { OffersController } from './offers.controller.js';
 import { OfferService } from './offer.service.js';
 import { OfferListService } from './offer-list.service.js';
@@ -25,6 +26,7 @@ import { RunnerOffersService } from './runner-offers.service.js';
     QueueModule,
     RunnerModule,
     VerificationModule,
+    MessagingModule,
   ],
   controllers: [OffersController, RunnerOffersController],
   providers: [OfferService, OfferListService, RunnerOffersService],

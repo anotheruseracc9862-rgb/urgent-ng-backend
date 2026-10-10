@@ -25,6 +25,9 @@ export interface AppConfig {
     secretKey: string;
     baseUrl: string;
   };
+  firebase: {
+    credentials: string;
+  };
   smtp: {
     host: string;
     port: number;
@@ -93,6 +96,9 @@ export default (): AppConfig => {
     appId: process.env.DOJAH_APP_ID ?? '',
     secretKey: process.env.DOJAH_SECRET_KEY ?? '',
     baseUrl: process.env.DOJAH_BASE_URL ?? '',
+  },
+  firebase: {
+    credentials: process.env.FIREBASE_CREDENTIALS ?? '',
   },
   smtp: {
     host: process.env.SMTP_HOST ?? '',

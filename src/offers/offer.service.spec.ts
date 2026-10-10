@@ -14,7 +14,7 @@ function makeService(overrides: { assertCanOffer?: () => Promise<void> } = {}) {
   };
   const prisma = { $transaction: vi.fn() };
   const eligibility = { assertCanOffer: overrides.assertCanOffer ?? (async () => undefined) };
-  const service = new OfferService(config as never, {} as never, eligibility as never, prisma as never, {} as never, {} as never);
+  const service = new OfferService(config as never, {} as never, eligibility as never, prisma as never, {} as never, {} as never, {} as never);
   return { service, prisma };
 }
 

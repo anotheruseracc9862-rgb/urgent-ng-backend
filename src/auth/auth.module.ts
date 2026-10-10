@@ -73,6 +73,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     DELETION_BLOCKERS,
     BlockService,
     DeviceService,
+    NotificationPreferenceService,
     ConsumerAuthGuard,
     AccountStatusGuard,
     RestrictionGuard,

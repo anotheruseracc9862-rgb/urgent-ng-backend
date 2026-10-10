@@ -25,6 +25,9 @@ const usesRealKyc = (env: EnvironmentVariables): boolean =>
 const usesRealEmail = (env: EnvironmentVariables): boolean =>
   env.EMAIL_PROVIDER === 'real';
 
+const usesRealPush = (env: EnvironmentVariables): boolean =>
+  env.PUSH_PROVIDER === 'real';
+
 const usesRealStorage = (env: EnvironmentVariables): boolean =>
   env.STORAGE_PROVIDER === 'real';
 
@@ -166,6 +169,12 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsIn(PROVIDER_MODES)
   PUSH_PROVIDER: ProviderMode = 'fake';
+
+  // The Firebase service account (JSON, or the same JSON base64-encoded), only when push is "real".
+  @ValidateIf(usesRealPush)
+  @IsString()
+  @IsNotEmpty()
+  FIREBASE_CREDENTIALS?: string;
 
   @IsOptional()
   @IsIn(PROVIDER_MODES)

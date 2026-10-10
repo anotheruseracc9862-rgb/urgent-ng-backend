@@ -24,7 +24,9 @@ function sourceFiles(dir: string): string[] {
 
 const PATTERNS = [
   /eventType:\s*'([a-z_]+\.[a-z_]+)'/g,
-  /publish\(\s*[A-Za-z_.]+,\s*'([a-z_]+\.[a-z_]+)'/g,
+  // `this.publish(tx, 'offer.created', ...)` of the offer, assignment and change-request services.
+  // Not `realtime.publish(userId, 'notification.created', ...)`: that writes a stream entry, not an outbox event.
+  /this\.publish\(\s*[A-Za-z_.]+,\s*'([a-z_]+\.[a-z_]+)'/g,
   /outbox:\s*'([a-z_]+\.[a-z_]+)'/g,
 ];
 
