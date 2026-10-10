@@ -5,6 +5,7 @@ import { QueueModule } from '../queue/queue.module.js';
 import { MediaModule } from '../media/media.module.js';
 import { ReferenceDataModule } from '../reference-data/reference-data.module.js';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
+import { OffersModule } from '../offers/offers.module.js';
 import { ErrandLocationRepository } from './errand-location.repository.js';
 import { ErrandStateService } from './errand-state.service.js';
 import { LocationPrivacyService } from './location-privacy.service.js';
@@ -18,7 +19,7 @@ import { ErrandLifecycleService } from './errand-lifecycle.service.js';
 import { ErrandExpiryService } from './errand-expiry.service.js';
 import { ErrandQueryService } from './errand-query.service.js';
 import { ErrandsController } from './errands.controller.js';
-import { NoopOfferReconfirmationHook, OFFER_RECONFIRMATION_HOOK } from './offer-reconfirmation.hook.js';
+import { OfferReconfirmationHookImpl, OFFER_RECONFIRMATION_HOOK } from './offer-reconfirmation.hook.js';
 
 /**
  * Errands (Backend PRD section 11). `ErrandStateService` is the only way to change an errand's
@@ -26,7 +27,7 @@ import { NoopOfferReconfirmationHook, OFFER_RECONFIRMATION_HOOK } from './offer-
  * transaction.
  */
 @Module({
-  imports: [AuthModule, AuditModule, QueueModule, MediaModule, ReferenceDataModule, IdempotencyModule],
+  imports: [AuthModule, AuditModule, QueueModule, MediaModule, ReferenceDataModule, IdempotencyModule, OffersModule],
   controllers: [ErrandsController],
   providers: [
     ErrandLocationRepository,
@@ -41,7 +42,7 @@ import { NoopOfferReconfirmationHook, OFFER_RECONFIRMATION_HOOK } from './offer-
     ErrandLifecycleService,
     ErrandExpiryService,
     ErrandQueryService,
-    { provide: OFFER_RECONFIRMATION_HOOK, useClass: NoopOfferReconfirmationHook },
+    { provide: OFFER_RECONFIRMATION_HOOK, useClass: OfferReconfirmationHookImpl },
   ],
   exports: [
     ErrandLocationRepository,

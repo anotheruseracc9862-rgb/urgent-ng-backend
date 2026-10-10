@@ -12,8 +12,27 @@ export interface OfferReconfirmationHook {
 
 export const OFFER_RECONFIRMATION_HOOK = Symbol('OFFER_RECONFIRMATION_HOOK');
 
-export class NoopOfferReconfirmationHook implements OfferReconfirmationHook {
-  async flagOffers(): Promise<number> {
-    return 0;
+export class OfferReconfirmationHookImpl implements OfferReconfirmationHook {
+  async flagOffers(tx: Prisma.TransactionClient, errandId: string): Promise<number> {
+    const offerModel = (tx as any).offer ?? (tx as any).offers;
+    if (!offerModel?.updateMany) {
+      return 0;
+    }
+
+    try {
+      const result = await offerModel.updateMany({
+        where: { errandId, status: 'ACTIVE' },
+        data: {
+          needsReconfirmation: true,
+          awaitingParty: 'RUNNER',
+          updatedAt: new Date(),
+        },
+      });
+      return Number(result?.count ?? 0);
+    } catch {
+      return 0;
+    }
   }
 }
+
+export class NoopOfferReconfirmationHook extends OfferReconfirmationHookImpl {}

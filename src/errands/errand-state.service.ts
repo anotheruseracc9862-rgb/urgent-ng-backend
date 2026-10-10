@@ -6,6 +6,7 @@ import { OutboxService } from '../queue/outbox.service.js';
 import { lockRow } from '../database/lock-row.helper.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { ERRAND_INVALID_STATE, FORBIDDEN, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
+import { OfferService } from '../offers/offer.service.js';
 import { computeExpiresAt } from './errand-expiry.js';
 import { eventFor, findTransition, type ErrandActor } from './errand.state.js';
 
@@ -74,6 +75,7 @@ export class ErrandStateService {
     private readonly config: BusinessConfigService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly offerService?: OfferService,
   ) {}
 
   async transition(tx: Prisma.TransactionClient, input: TransitionInput): Promise<TransitionResult> {
@@ -158,6 +160,10 @@ export class ErrandStateService {
         ...input.eventPayload,
       },
     });
+
+    if (to === 'CANCELLED' || to === 'EXPIRED') {
+      await this.offerService?.closeForErrand(errand.id, to === 'EXPIRED' ? 'ERRAND_EXPIRED' : 'ERRAND_CANCELLED');
+    }
 
     return { errandId: errand.id, from, to, version };
   }

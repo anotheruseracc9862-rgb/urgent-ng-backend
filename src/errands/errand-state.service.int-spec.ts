@@ -7,6 +7,7 @@ import { seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { insertErrand, seedCategories } from '../test/errand.helper.js';
 import { ErrandStateService, type TransitionInput } from './errand-state.service.js';
 import { ERRAND_TRANSITIONS, type ErrandActor } from './errand.state.js';
+import { OfferService } from '../offers/offer.service.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
@@ -126,6 +127,35 @@ describe('ErrandStateService (P5-03)', () => {
     const after = await row(id);
     expect(after).toMatchObject({ status: 'CANCELLED', reason: 'DUPLICATE_ERRAND', by_type: 'USER' });
     expect(after.cancelled_at).toBeInstanceOf(Date);
+  });
+
+  it('closes all live offers when an errand is cancelled or expires', async () => {
+    const offerService = app.get(OfferService);
+    const runnerId = (await signedInUser(app)).userId;
+    const errandId = await make('OPEN');
+    const offer = await offerService.submitOffer({
+      errand: { id: errandId, requesterId, status: 'OPEN' },
+      runnerId,
+      amountMinor: 20000,
+      durationMinutes: 30,
+      availabilityConfirmedAt: new Date('2024-01-15T09:00:00.000Z'),
+    });
+    await run({ errandId, to: 'CANCELLED', actor: { type: 'REQUESTER', id: requesterId }, cancellation: { reason: 'REQUESTER_CANCELLED' } });
+    expect(offerService.getOffer(offer.id)?.status).toBe('CLOSED');
+    expect(offerService.getOffer(offer.id)?.closeReason).toBe('ERRAND_CANCELLED');
+
+    const secondRunnerId = (await signedInUser(app)).userId;
+    const secondErrandId = await make('OPEN');
+    const secondOffer = await offerService.submitOffer({
+      errand: { id: secondErrandId, requesterId, status: 'OPEN' },
+      runnerId: secondRunnerId,
+      amountMinor: 25000,
+      durationMinutes: 30,
+      availabilityConfirmedAt: new Date('2024-01-15T09:00:00.000Z'),
+    });
+    await run({ errandId: secondErrandId, to: 'EXPIRED', actor: { type: 'SYSTEM' }, reason: 'deadline passed' });
+    expect(offerService.getOffer(secondOffer.id)?.status).toBe('EXPIRED');
+    expect(offerService.getOffer(secondOffer.id)?.closeReason).toBe('ERRAND_EXPIRED');
   });
 
   describe('history, audit and outbox', () => {

@@ -82,3 +82,18 @@ export class RunnerEligibilityDto {
   @ApiPropertyOptional()
   note?: string;
 }
+
+export class RunnerOfferLimitDto {
+  @ApiProperty()
+  used!: number;
+  @ApiProperty()
+  limit!: number;
+  @ApiProperty()
+  remaining!: number;
+  @ApiProperty({ type: Date })
+  resetsAt!: Date;
+  @ApiProperty()
+  isPro!: boolean;
+  @ApiProperty()
+  isAtLimit!: boolean;
+}

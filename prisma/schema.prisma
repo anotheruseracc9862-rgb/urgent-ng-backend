@@ -109,6 +109,12 @@ enum ExecutionStatus {
   DISPUTED
 }
 
+enum OfferAwaitingParty {
+  NONE
+  RUNNER
+  REQUESTER
+}
+
 enum NegotiationMessageType {
   INITIAL_OFFER
   COUNTER_OFFER
@@ -752,6 +758,9 @@ model User {
   verificationAttempts VerificationAttempt[]
   errands              Errand[]                 @relation("ErrandRequester")
   savedErrands         SavedErrand[]            @relation("SavedErrands")
+  offersAsRunner       Offer[]                  @relation("OfferRunner")
+  offersAsRequester    Offer[]                  @relation("OfferRequester")
+  negotiationEvents    NegotiationEvent[]       @relation("NegotiationActor")
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1169,12 +1178,14 @@ model Errand {
   updatedAt                  DateTime                              @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt                  DateTime?                             @map("deleted_at") @db.Timestamptz(3)
 
-  locations     ErrandLocation[]
-  contact       ErrandContact?
-  versions      ErrandVersion[]
-  media         ErrandMedia[]
-  saves         SavedErrand[]
-  statusHistory ErrandStatusHistory[]
+  locations         ErrandLocation[]
+  contact           ErrandContact?
+  versions          ErrandVersion[]
+  media             ErrandMedia[]
+  saves             SavedErrand[]
+  statusHistory     ErrandStatusHistory[]
+  offers            Offer[]
+  negotiationEvents NegotiationEvent[]
 
   @@index([status, categoryId], map: "errands_status_category_idx")
   @@index([requesterId, status], map: "errands_requester_status_idx")
@@ -1278,4 +1289,70 @@ model ErrandStatusHistory {
 
   @@index([errandId, createdAt], map: "errand_status_history_errand_idx")
   @@map("errand_status_history")
+}
+
+model Offer {
+  id                      String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId                String             @map("errand_id") @db.Uuid
+  errand                  Errand             @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  runnerId                String             @map("runner_id") @db.Uuid
+  runner                  User               @relation("OfferRunner", fields: [runnerId], references: [id], onDelete: Restrict)
+  requesterId             String             @map("requester_id") @db.Uuid
+  requester               User               @relation("OfferRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  amountMinor             BigInt             @map("amount_minor")
+  durationMinutes         Int                @map("duration_minutes")
+  availabilityConfirmedAt DateTime?          @map("availability_confirmed_at") @db.Timestamptz(3)
+  message                 String?
+  status                  OfferStatus        @default(ACTIVE)
+  closeReason             OfferCloseReason?  @map("close_reason")
+  awaitingParty           OfferAwaitingParty @default(REQUESTER) @map("awaiting_party")
+  needsReconfirmation     Boolean            @default(false) @map("needs_reconfirmation")
+  conversationId          String?            @map("conversation_id") @db.Uuid
+  version                 Int                @default(0)
+  selectedAt              DateTime?          @map("selected_at") @db.Timestamptz(3)
+  withdrawnAt             DateTime?          @map("withdrawn_at") @db.Timestamptz(3)
+  closedAt                DateTime?          @map("closed_at") @db.Timestamptz(3)
+  createdAt               DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt               DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  negotiationEvents NegotiationEvent[]
+
+  @@index([errandId, status, createdAt], map: "offers_errand_status_created_idx")
+  @@index([runnerId, status, createdAt], map: "offers_runner_status_created_idx")
+  @@index([requesterId, status, createdAt], map: "offers_requester_status_created_idx")
+  @@index([errandId, runnerId], map: "offers_errand_runner_idx")
+  @@map("offers")
+}
+
+model OfferDailyCounter {
+  userId    String   @map("user_id") @db.Uuid
+  dayLagos  String   @map("day_lagos")
+  count     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([userId, dayLagos], map: "offer_daily_counters_pkey")
+  @@map("offer_daily_counters")
+}
+
+model NegotiationEvent {
+  id                   String               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId             String               @map("errand_id") @db.Uuid
+  errand               Errand               @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  offerId              String               @map("offer_id") @db.Uuid
+  offer                Offer                @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  actorUserId          String               @map("actor_user_id") @db.Uuid
+  actor                User                 @relation("NegotiationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  messageType          NegotiationMessageType @map("message_type")
+  proposedAmountMinor  BigInt?              @map("proposed_amount_minor")
+  proposedDurationMinutes Int?               @map("proposed_duration_minutes")
+  currency             String               @default("NGN")
+  message              String?
+  resultingOfferVersion Int                 @map("resulting_offer_version")
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([offerId, createdAt], map: "negotiation_events_offer_created_idx")
+  @@index([errandId, createdAt], map: "negotiation_events_errand_created_idx")
+  @@map("negotiation_events")
 }

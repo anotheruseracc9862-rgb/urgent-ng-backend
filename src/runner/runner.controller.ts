@@ -5,7 +5,8 @@ import { ConsumerAuth } from '../auth/decorators/consumer-auth.decorator.js';
 import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { RunnerProfileService } from './runner-profile.service.js';
 import { RunnerEligibilityService } from './runner-eligibility.service.js';
-import { RunnerEligibilityDto, RunnerProfileDto, UpdateAvailabilityDto, UpdateRunnerProfileDto } from './runner.dto.js';
+import { OfferLimitService } from '../entitlements/offer-limit.service.js';
+import { RunnerEligibilityDto, RunnerOfferLimitDto, RunnerProfileDto, UpdateAvailabilityDto, UpdateRunnerProfileDto } from './runner.dto.js';
 
 /** Runner profile, availability and eligibility (Backend PRD 30.2). */
 @ApiTags('Runner')
@@ -14,6 +15,7 @@ export class RunnerController {
   constructor(
     private readonly profile: RunnerProfileService,
     private readonly eligibility: RunnerEligibilityService,
+    private readonly offerLimit: OfferLimitService,
   ) {}
 
   @Get('profile')
@@ -55,5 +57,14 @@ export class RunnerController {
       this.eligibility.canBrowseFeed(user.userId),
     ]);
     return { canOffer: offer.allowed, canBrowseFeed: feed.allowed, reasons: offer.reasons };
+  }
+
+  /** Remaining free daily offers and the reset time. */
+  @Get('offer-limit')
+  @ConsumerAuth({ allow: ['DEACTIVATED', 'SUSPENDED'] })
+  @ApiConsumerAuth()
+  @ApiEnveloped(RunnerOfferLimitDto)
+  getOfferLimit(@CurrentUser() user: AuthenticatedUser) {
+    return this.offerLimit.getLimitStatus(user.userId);
   }
 }
