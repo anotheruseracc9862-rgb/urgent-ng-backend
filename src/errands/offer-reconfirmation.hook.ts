@@ -25,6 +25,7 @@ export class OfferReconfirmationHookImpl implements OfferReconfirmationHook {
         data: {
           needsReconfirmation: true,
           awaitingParty: 'RUNNER',
+          version: { increment: 1 },
           updatedAt: new Date(),
         },
       });

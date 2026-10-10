@@ -1,17 +1,22 @@
 import { ApiTags } from '@nestjs/swagger';
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiEnveloped, ApiErrors, ApiConsumerAuth } from '../common/api/api-docs.js';
 import { ConsumerAuth } from '../auth/decorators/consumer-auth.decorator.js';
 import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { FORBIDDEN } from '../common/constants/error-codes.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { OfferService } from './offer.service.js';
+import { OfferListService } from './offer-list.service.js';
 import { CounterOfferDto, OfferDto, ReconfirmOfferDto, SubmitOfferDto } from './offer.dto.js';
+import { OfferListItemDto, OfferListQueryDto } from './offer-list.dto.js';
 
 @ApiTags('Offers')
 @Controller()
 export class OffersController {
-  constructor(private readonly offers: OfferService) {}
+  constructor(
+    private readonly offers: OfferService,
+    private readonly offerList: OfferListService,
+  ) {}
 
   @Post('errands/:errandId/offers')
   @ConsumerAuth()
@@ -40,10 +45,13 @@ export class OffersController {
   @Get('errands/:errandId/offers')
   @ConsumerAuth()
   @ApiConsumerAuth()
-  @ApiEnveloped(OfferDto, { isArray: true })
+  @ApiEnveloped(OfferListItemDto, { isArray: true })
   @ApiErrors(400, 403, 404)
-  list(@Param('errandId', ParseUUIDPipe) errandId: string) {
-    return this.offers.getLiveOffersForErrand(errandId);
+  async list(
+    @Param('errandId', ParseUUIDPipe) errandId: string,
+    @Query() query: OfferListQueryDto,
+  ): Promise<OfferListItemDto[]> {
+    return this.offerList.getOffersForErrand(errandId, query.sort);
   }
 
   @Patch('offers/:id')
