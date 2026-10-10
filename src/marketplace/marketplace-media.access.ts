@@ -26,6 +26,18 @@ export class MarketplaceMediaAccess implements OnModuleInit {
     this.access.register({
       purposes,
       canView: async (media, viewerId) => {
+        // The runner of a live assignment on the errand (pending or accepted): the photos are
+        // non-sensitive, and the errand is no longer open so the feed rule below would refuse.
+        const assigned = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT a.id::text FROM assignments a
+          WHERE a.runner_id = ${viewerId}::uuid AND a.deleted_at IS NULL
+            AND a.status IN ('PENDING_ACCEPTANCE'::"AssignmentStatus", 'ACCEPTED'::"AssignmentStatus")
+            AND a.errand_id IN (SELECT errand_id FROM errand_media WHERE media_id = ${media.id}::uuid AND deleted_at IS NULL)
+          LIMIT 1
+        `);
+        if (assigned.length > 0) {
+          return true;
+        }
         if (!(await this.eligibility.canBrowseFeed(viewerId)).allowed) {
           return false;
         }

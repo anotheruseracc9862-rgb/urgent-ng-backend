@@ -8,6 +8,7 @@ import {
   ERRAND_INVALID_STATE,
   FORBIDDEN,
   OFFER_ALREADY_EXISTS,
+  OFFER_AWAITING_RUNNER,
   OFFER_INVALID_STATE,
   OFFER_NEEDS_RECONFIRMATION,
   OFFER_NOT_ELIGIBLE,
@@ -369,6 +370,133 @@ export class OfferService {
         amountMinor: Number(offer.amountMinor),
         durationMinutes: offer.durationMinutes,
         message: reason,
+      });
+      await this.publish(tx, 'offer.closed', offer, offer.requesterId, 'offer.closed');
+    }
+    return rows.length;
+  }
+
+  // ---- Selection (called by the assignment module inside its transaction) ----
+
+  /**
+   * Lock the offer and check it can be selected (Backend PRD 14.2 step 3): it belongs to the
+   * errand, is `ACTIVE`, is not flagged for reconfirmation, is not waiting on the runner, and
+   * still has the version the requester saw. The caller already holds the errand lock.
+   */
+  async lockForSelection(tx: Prisma.TransactionClient, offerId: string, errandId: string, expectedVersion: number): Promise<Offer> {
+    const locked = await lockRow<{ id: string }>(tx, 'offers', offerId, 'id');
+    const offer = locked ? await tx.offer.findFirst({ where: { id: offerId } }) : null;
+    if (!offer || offer.errandId !== errandId) {
+      throw DomainException.of(RESOURCE_NOT_FOUND);
+    }
+    if (offer.status !== 'ACTIVE') {
+      throw DomainException.of(OFFER_INVALID_STATE, {
+        message: 'This offer is no longer active.',
+        details: { offerId, status: offer.status },
+      });
+    }
+    if (offer.version !== expectedVersion) {
+      throw DomainException.of(OFFER_VERSION_MISMATCH, {
+        details: { offerId, actualVersion: offer.version, expectedVersion },
+      });
+    }
+    this.assertNoReconfirmation(offer);
+    if (offer.awaitingParty === 'RUNNER') {
+      throw DomainException.of(OFFER_AWAITING_RUNNER, { details: { offerId } });
+    }
+    return offer;
+  }
+
+  /** The chosen offer becomes `SELECTED`; the requester's choice is an `ACCEPT` event. */
+  async markSelected(tx: Prisma.TransactionClient, offer: Offer, requesterId: string): Promise<Offer> {
+    const now = await this.dbNow(tx);
+    const updated = await tx.offer.update({
+      where: { id: offer.id },
+      data: { status: 'SELECTED', awaitingParty: 'NONE', selectedAt: now, version: { increment: 1 } },
+    });
+    await this.recordEvent(tx, updated, requesterId, 'ACCEPT', updated.version, {
+      amountMinor: Number(updated.amountMinor),
+      durationMinutes: updated.durationMinutes,
+      message: 'SELECTED',
+    });
+    await this.publish(tx, 'offer.updated', updated, requesterId, 'offer.selected');
+    return updated;
+  }
+
+  /**
+   * The selected offer ends without being served (decline, acceptance timeout, errand cancelled
+   * while pending). It is closed, never restored (Backend PRD 13.5). A no-op if it is not `SELECTED`.
+   */
+  async closeSelected(
+    tx: Prisma.TransactionClient,
+    offerId: string,
+    reason: Extract<OfferCloseReason, 'ASSIGNMENT_DECLINED' | 'ASSIGNMENT_ACCEPTANCE_TIMEOUT' | 'ERRAND_CANCELLED'>,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE offers
+      SET status = 'CLOSED'::"OfferStatus", close_reason = ${reason}::"OfferCloseReason",
+          awaiting_party = 'NONE'::"OfferAwaitingParty", closed_at = clock_timestamp(),
+          version = version + 1, updated_at = clock_timestamp()
+      WHERE id = ${offerId}::uuid AND status = 'SELECTED'::"OfferStatus" AND deleted_at IS NULL
+      RETURNING id::text
+    `;
+    for (const { id } of rows) {
+      const offer = await tx.offer.findUniqueOrThrow({ where: { id } });
+      await this.recordEvent(tx, offer, offer.requesterId, 'SYSTEM_EVENT', offer.version, {
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        message: reason,
+      });
+      await this.publish(tx, 'offer.closed', offer, offer.requesterId, 'offer.closed');
+    }
+  }
+
+  /**
+   * An accepted `AMOUNT` change request after selection (Backend PRD 15.6): the offer carries the
+   * new amount and the history shows who proposed it and who agreed, so the offer, the assignment
+   * and the negotiation log agree.
+   */
+  async recordAgreedAmountChange(
+    tx: Prisma.TransactionClient,
+    offerId: string,
+    amountMinor: number,
+    proposerId: string,
+    responderId: string,
+  ): Promise<void> {
+    const updated = await tx.offer.update({
+      where: { id: offerId },
+      data: { amountMinor: BigInt(amountMinor), version: { increment: 2 } },
+    });
+    const durationMinutes = updated.durationMinutes;
+    await this.recordEvent(tx, updated, proposerId, 'COUNTER_OFFER', updated.version - 1, {
+      amountMinor,
+      durationMinutes,
+      message: 'CHANGE_REQUEST',
+    });
+    await this.recordEvent(tx, updated, responderId, 'ACCEPT', updated.version, {
+      amountMinor,
+      durationMinutes,
+      message: 'CHANGE_REQUEST',
+    });
+  }
+
+  /** Every other live offer on the errand closes when one is selected (PRD 14.2 step 7). */
+  async closeOthersOnSelection(tx: Prisma.TransactionClient, errandId: string, selectedOfferId: string): Promise<number> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE offers
+      SET status = 'CLOSED'::"OfferStatus", close_reason = 'RUNNER_SELECTED'::"OfferCloseReason",
+          awaiting_party = 'NONE'::"OfferAwaitingParty", closed_at = clock_timestamp(),
+          version = version + 1, updated_at = clock_timestamp()
+      WHERE errand_id = ${errandId}::uuid AND id <> ${selectedOfferId}::uuid
+        AND status = 'ACTIVE'::"OfferStatus" AND deleted_at IS NULL
+      RETURNING id::text
+    `;
+    for (const { id } of rows) {
+      const offer = await tx.offer.findUniqueOrThrow({ where: { id } });
+      await this.recordEvent(tx, offer, offer.requesterId, 'SYSTEM_EVENT', offer.version, {
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        message: 'RUNNER_SELECTED',
       });
       await this.publish(tx, 'offer.closed', offer, offer.requesterId, 'offer.closed');
     }

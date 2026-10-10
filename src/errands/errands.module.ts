@@ -8,6 +8,7 @@ import { IdempotencyModule } from '../common/idempotency/idempotency.module.js';
 import { OffersModule } from '../offers/offers.module.js';
 import { ErrandLocationRepository } from './errand-location.repository.js';
 import { ErrandStateService } from './errand-state.service.js';
+import { AssignmentTransitionRegistry } from './assignment-transition.registry.js';
 import { LocationPrivacyService } from './location-privacy.service.js';
 import { ErrandContactService } from './errand-contact.service.js';
 import { ErrandPhotosService } from './errand-photos.service.js';
@@ -32,6 +33,7 @@ import { OfferReconfirmationHookImpl, OFFER_RECONFIRMATION_HOOK } from './offer-
   providers: [
     ErrandLocationRepository,
     LocationPrivacyService,
+    AssignmentTransitionRegistry,
     ErrandStateService,
     ErrandContactService,
     ErrandPhotosService,
@@ -47,6 +49,7 @@ import { OfferReconfirmationHookImpl, OFFER_RECONFIRMATION_HOOK } from './offer-
   exports: [
     ErrandLocationRepository,
     LocationPrivacyService,
+    AssignmentTransitionRegistry,
     ErrandStateService,
     ErrandViewService,
     ErrandService,

@@ -761,6 +761,11 @@ model User {
   offersAsRunner       Offer[]                  @relation("OfferRunner")
   offersAsRequester    Offer[]                  @relation("OfferRequester")
   negotiationEvents    NegotiationEvent[]       @relation("NegotiationActor")
+  assignmentsAsRequester Assignment[]           @relation("AssignmentRequester")
+  assignmentsAsRunner    Assignment[]           @relation("AssignmentRunner")
+  executionProblems      ExecutionProblem[]     @relation("ProblemReporter")
+  changeRequestsMade     ChangeRequest[]        @relation("ChangeRequester")
+  changeRequestsAnswered ChangeRequest[]        @relation("ChangeResponder")
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1078,6 +1083,9 @@ model Media {
   profilePhotoOf       Profile[]             @relation("ProfilePhoto")
   verificationSelfieOf VerificationAttempt[]
   errandMedia          ErrandMedia[]
+  executionEvents      ExecutionEvent[]
+  executionProblems    ExecutionProblem[]
+  checkpoints          Checkpoint[]
 
   @@index([ownerId, purpose], map: "media_owner_purpose_idx")
   @@index([status], map: "media_status_idx")
@@ -1186,6 +1194,8 @@ model Errand {
   statusHistory     ErrandStatusHistory[]
   offers            Offer[]
   negotiationEvents NegotiationEvent[]
+  assignments       Assignment[]
+  executionEvents   ExecutionEvent[]
 
   @@index([status, categoryId], map: "errands_status_category_idx")
   @@index([requesterId, status], map: "errands_requester_status_idx")
@@ -1317,6 +1327,7 @@ model Offer {
   deletedAt               DateTime?          @map("deleted_at") @db.Timestamptz(3)
 
   negotiationEvents NegotiationEvent[]
+  assignments       Assignment[]
 
   @@index([errandId, status, createdAt], map: "offers_errand_status_created_idx")
   @@index([runnerId, status, createdAt], map: "offers_runner_status_created_idx")
@@ -1355,4 +1366,147 @@ model NegotiationEvent {
   @@index([offerId, createdAt], map: "negotiation_events_offer_created_idx")
   @@index([errandId, createdAt], map: "negotiation_events_errand_created_idx")
   @@map("negotiation_events")
+}
+
+// P7-01: assignment and execution (Backend PRD 14, 15, 16, A.7). Migration
+// 20261016000000_assignments_and_execution adds the partial unique indexes, the status CHECKs and
+// the triggers that Prisma cannot express; they are known drift in `prisma migrate diff`.
+// Errand status is the execution status: there is no separate column (Backend PRD 15.1).
+model Assignment {
+  id                 String                    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId           String                    @map("errand_id") @db.Uuid
+  errand             Errand                    @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  requesterId        String                    @map("requester_id") @db.Uuid
+  requester          User                      @relation("AssignmentRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  runnerId           String                    @map("runner_id") @db.Uuid
+  runner             User                      @relation("AssignmentRunner", fields: [runnerId], references: [id], onDelete: Restrict)
+  selectedOfferId    String                    @map("selected_offer_id") @db.Uuid
+  selectedOffer      Offer                     @relation(fields: [selectedOfferId], references: [id], onDelete: Restrict)
+  status             AssignmentStatus          @default(PENDING_ACCEPTANCE)
+  agreedAmountMinor  BigInt                    @map("agreed_amount_minor")
+  currency           String                    @default("NGN")
+  selectedAt         DateTime                  @map("selected_at") @db.Timestamptz(3)
+  acceptanceDeadline DateTime                  @map("acceptance_deadline") @db.Timestamptz(3)
+  acceptedAt         DateTime?                 @map("accepted_at") @db.Timestamptz(3)
+  declinedAt         DateTime?                 @map("declined_at") @db.Timestamptz(3)
+  timedOutAt         DateTime?                 @map("timed_out_at") @db.Timestamptz(3)
+  cancelledAt        DateTime?                 @map("cancelled_at") @db.Timestamptz(3)
+  completedAt        DateTime?                 @map("completed_at") @db.Timestamptz(3)
+  cancelledBy        String?                   @map("cancelled_by") @db.Uuid
+  cancelledByType    AuditActorType?           @map("cancelled_by_type")
+  cancellationReason ErrandCancellationReason? @map("cancellation_reason")
+  cancellationNote   String?                   @map("cancellation_note")
+  cancelledStage     ErrandStatus?             @map("cancelled_stage")
+  version            Int                       @default(0)
+  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?                 @map("deleted_at") @db.Timestamptz(3)
+
+  paymentAgreement PaymentAgreement?
+  executionEvents  ExecutionEvent[]
+  problems         ExecutionProblem[]
+  checkpoints      Checkpoint[]
+  changeRequests   ChangeRequest[]
+
+  @@index([runnerId, status], map: "assignments_runner_status_idx")
+  @@index([requesterId, status], map: "assignments_requester_status_idx")
+  @@index([errandId], map: "assignments_errand_idx")
+  @@map("assignments")
+}
+
+model PaymentAgreement {
+  assignmentId           String         @id @map("assignment_id") @db.Uuid
+  assignment             Assignment     @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  agreedAmountMinor      BigInt         @map("agreed_amount_minor")
+  currency               String         @default("NGN")
+  paymentMethod          PaymentMethod? @map("payment_method")
+  paymentTiming          PaymentTiming? @map("payment_timing")
+  confirmedByRequesterAt DateTime?      @map("confirmed_by_requester_at") @db.Timestamptz(3)
+  confirmedByRunnerAt    DateTime?      @map("confirmed_by_runner_at") @db.Timestamptz(3)
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt              DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("payment_agreements")
+}
+
+/// Append-only. The database rejects UPDATE and DELETE.
+model ExecutionEvent {
+  id           String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId String             @map("assignment_id") @db.Uuid
+  assignment   Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  errandId     String             @map("errand_id") @db.Uuid
+  errand       Errand             @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  type         ExecutionEventType
+  actorId      String?            @map("actor_id") @db.Uuid
+  actorType    AuditActorType     @map("actor_type")
+  note         String?
+  mediaId      String?            @map("media_id") @db.Uuid
+  media        Media?             @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  metadata     Json?
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([assignmentId, createdAt], map: "execution_events_assignment_created_idx")
+  @@index([errandId, createdAt], map: "execution_events_errand_created_idx")
+  @@map("execution_events")
+}
+
+model ExecutionProblem {
+  id           String               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId String               @map("assignment_id") @db.Uuid
+  assignment   Assignment           @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  reportedBy   String               @map("reported_by") @db.Uuid
+  reporter     User                 @relation("ProblemReporter", fields: [reportedBy], references: [id], onDelete: Restrict)
+  type         ExecutionProblemType
+  note         String?
+  mediaId      String?              @map("media_id") @db.Uuid
+  media        Media?               @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  /// OPEN or RESOLVED (database CHECK).
+  status       String               @default("OPEN")
+  resolvedAt   DateTime?            @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy   String?              @map("resolved_by") @db.Uuid
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt    DateTime?            @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([assignmentId, status], map: "execution_problems_assignment_status_idx")
+  @@map("execution_problems")
+}
+
+/// The point is private and read or written with raw SQL only.
+model Checkpoint {
+  id           String                                @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId String                                @map("assignment_id") @db.Uuid
+  assignment   Assignment                            @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  type         CheckpointType
+  point        Unsupported("geography(Point,4326)")?
+  capturedAt   DateTime                              @map("captured_at") @db.Timestamptz(3)
+  note         String?
+  mediaId      String?                               @map("media_id") @db.Uuid
+  media        Media?                                @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  createdAt    DateTime                              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([assignmentId, type], map: "checkpoints_assignment_type_unique")
+  @@map("checkpoints")
+}
+
+model ChangeRequest {
+  id           String              @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId String              @map("assignment_id") @db.Uuid
+  assignment   Assignment          @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  requestedBy  String              @map("requested_by") @db.Uuid
+  requester    User                @relation("ChangeRequester", fields: [requestedBy], references: [id], onDelete: Restrict)
+  type         ChangeRequestType
+  payload      Json
+  status       ChangeRequestStatus @default(PENDING)
+  respondedBy  String?             @map("responded_by") @db.Uuid
+  responder    User?               @relation("ChangeResponder", fields: [respondedBy], references: [id], onDelete: Restrict)
+  respondedAt  DateTime?           @map("responded_at") @db.Timestamptz(3)
+  expiresAt    DateTime            @map("expires_at") @db.Timestamptz(3)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt    DateTime?           @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([assignmentId, createdAt], map: "change_requests_assignment_idx")
+  @@map("change_requests")
 }

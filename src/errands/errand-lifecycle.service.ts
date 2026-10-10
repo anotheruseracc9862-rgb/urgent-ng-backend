@@ -43,6 +43,20 @@ export class ErrandLifecycleService {
     }
     await this.prisma.$transaction(async (tx) => {
       const current = await tx.errand.findFirst({ where: { id: errandId, requesterId: userId, deletedAt: null }, select: { status: true } });
+      // From pickup on there is no plain cancel: it is a dispute or safety workflow, or simply completion.
+      if (current?.status === 'PICKED_UP' || current?.status === 'DELIVERED') {
+        throw DomainException.of(ERRAND_INVALID_STATE, {
+          message:
+            current.status === 'PICKED_UP'
+              ? 'The item was already picked up. Open a dispute if there is a problem.'
+              : 'The errand was delivered. Confirm completion, or open a dispute if there is a problem.',
+          details: {
+            from: current.status,
+            to: 'CANCELLED',
+            suggestedAction: current.status === 'PICKED_UP' ? 'OPEN_DISPUTE' : 'COMPLETE_OR_DISPUTE',
+          },
+        });
+      }
       await this.state.transition(tx, {
         errandId,
         to: 'CANCELLED',

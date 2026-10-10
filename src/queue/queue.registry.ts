@@ -62,16 +62,25 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'assignment.accepted': QUEUE_NAMES.MARKETPLACE,
   'assignment.declined': QUEUE_NAMES.MARKETPLACE,
   'assignment.timed_out': QUEUE_NAMES.MARKETPLACE,
+  'assignment.cancelled': QUEUE_NAMES.MARKETPLACE,
+  'assignment.completed': QUEUE_NAMES.MARKETPLACE,
+  'payment_agreement.updated': QUEUE_NAMES.NOTIFICATIONS,
 
   // Execution events
   'execution.started': QUEUE_NAMES.MARKETPLACE,
   'execution.picked_up': QUEUE_NAMES.MARKETPLACE,
   'execution.delivered': QUEUE_NAMES.AUTO_COMPLETION,
   'execution.delay_notified': QUEUE_NAMES.NOTIFICATIONS,
+  'execution.problem_reported': QUEUE_NAMES.NOTIFICATIONS,
+  'execution.problem_resolved': QUEUE_NAMES.NOTIFICATIONS,
+  'execution.receipt_added': QUEUE_NAMES.NOTIFICATIONS,
 
   // Change request events
   'change_request.created': QUEUE_NAMES.NOTIFICATIONS,
   'change_request.accepted': QUEUE_NAMES.MARKETPLACE,
+  'change_request.rejected': QUEUE_NAMES.NOTIFICATIONS,
+  'change_request.cancelled': QUEUE_NAMES.NOTIFICATIONS,
+  'change_request.expired': QUEUE_NAMES.NOTIFICATIONS,
 
   // Message events
   'message.created': QUEUE_NAMES.NOTIFICATIONS,

@@ -7,6 +7,7 @@ import { lockRow } from '../database/lock-row.helper.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { ERRAND_INVALID_STATE, FORBIDDEN, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
 import { OfferService } from '../offers/offer.service.js';
+import { AssignmentTransitionRegistry } from './assignment-transition.registry.js';
 import { computeExpiresAt } from './errand-expiry.js';
 import { eventFor, findTransition, type ErrandActor } from './errand.state.js';
 
@@ -42,6 +43,11 @@ export interface TransitionInput {
   /** Extra outbox payload. */
   eventPayload?: Record<string, unknown>;
   /**
+   * Set by the assignment module for the transitions it performs itself (accept, decline,
+   * timeout): it has already updated the assignment, so the sync hook is skipped.
+   */
+  assignmentHandled?: true;
+  /**
    * Runs inside the lock, after every check and before the status changes. Use it to write the
    * fields that belong to the action (publishing writes its timing here).
    */
@@ -76,6 +82,7 @@ export class ErrandStateService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly offerService: OfferService,
+    private readonly assignmentTransitions: AssignmentTransitionRegistry,
   ) {}
 
   async transition(tx: Prisma.TransactionClient, input: TransitionInput): Promise<TransitionResult> {
@@ -163,6 +170,17 @@ export class ErrandStateService {
 
     if (to === 'CANCELLED' || to === 'EXPIRED') {
       await this.offerService.closeForErrand(tx, errand.id, to === 'EXPIRED' ? 'ERRAND_EXPIRED' : 'ERRAND_CANCELLED');
+    }
+
+    if (!input.assignmentHandled) {
+      await this.assignmentTransitions.run(tx, {
+        errandId: errand.id,
+        from,
+        to,
+        actor: input.actor,
+        cancellation: input.cancellation,
+        reason: input.reason,
+      });
     }
 
     return { errandId: errand.id, from, to, version };

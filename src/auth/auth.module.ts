@@ -16,7 +16,7 @@ import { RestrictionService } from './restriction.service.js';
 import { PolicyService } from './policy.service.js';
 import { ConsentService } from './consent.service.js';
 import { ProfileService } from './profile.service.js';
-import { AccountService } from './account.service.js';
+import { AccountService, DELETION_BLOCKERS, type DeletionBlocker } from './account.service.js';
 import { BlockService } from './block.service.js';
 import { DeviceService } from './device.service.js';
 import { NotificationPreferenceService } from './notification-preference.service.js';
@@ -49,6 +49,8 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     ConsentService,
     ProfileService,
     AccountService,
+    // One shared list: modules that own something a user can still depend on push a blocker here at startup.
+    { provide: DELETION_BLOCKERS, useFactory: (): DeletionBlocker[] => [] },
     BlockService,
     DeviceService,
     NotificationPreferenceService,
@@ -68,6 +70,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     ConsentService,
     ProfileService,
     AccountService,
+    DELETION_BLOCKERS,
     BlockService,
     DeviceService,
     ConsumerAuthGuard,

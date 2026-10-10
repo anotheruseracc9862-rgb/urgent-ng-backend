@@ -11,6 +11,8 @@ import { VerificationModule } from '../verification/verification.module.js';
 import { OffersController } from './offers.controller.js';
 import { OfferService } from './offer.service.js';
 import { OfferListService } from './offer-list.service.js';
+import { RunnerOffersController } from './runner-offers.controller.js';
+import { RunnerOffersService } from './runner-offers.service.js';
 
 @Module({
   imports: [
@@ -24,8 +26,8 @@ import { OfferListService } from './offer-list.service.js';
     RunnerModule,
     VerificationModule,
   ],
-  controllers: [OffersController],
-  providers: [OfferService, OfferListService],
+  controllers: [OffersController, RunnerOffersController],
+  providers: [OfferService, OfferListService, RunnerOffersService],
   exports: [OfferService, OfferListService],
 })
 export class OffersModule {}
