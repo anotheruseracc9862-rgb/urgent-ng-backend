@@ -1982,3 +1982,144 @@ model RiskFlag {
   @@index([status, createdAt], map: "risk_flags_status_created_idx")
   @@map("risk_flags")
 }
+
+// ---------------------------------------------------------------------------------------------
+// P10-01: Platform billing (Backend PRD 22, A.10). Urgent.ng's own products only. Every table is
+// never deleted: money rows change by status. Foreign keys, partial unique indexes and the
+// immutability of a completed refund are in the migration.
+// ---------------------------------------------------------------------------------------------
+model Order {
+  id             String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId         String      @map("user_id") @db.Uuid
+  type           OrderType
+  productId      String      @map("product_id") @db.Uuid
+  priceVersionId String      @map("price_version_id") @db.Uuid
+  amountMinor    BigInt      @map("amount_minor")
+  currency       String      @default("NGN") @db.Char(3)
+  status         OrderStatus @default(PENDING)
+  targetErrandId String?     @map("target_errand_id") @db.Uuid
+  idempotencyKey String      @map("idempotency_key")
+  metadata       Json?
+  paidAt         DateTime?   @map("paid_at") @db.Timestamptz(3)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId, status], map: "orders_user_status_idx")
+  @@map("orders")
+}
+
+model Payment {
+  id                String        @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  orderId           String        @map("order_id") @db.Uuid
+  provider          String
+  providerReference String        @map("provider_reference")
+  status            PaymentStatus @default(INITIATED)
+  amountMinor       BigInt        @map("amount_minor")
+  authorizationUrl  String?       @map("authorization_url")
+  authorizationCode String?       @map("authorization_code")
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz(3)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([orderId], map: "payments_order_idx")
+  @@map("payments")
+}
+
+model PaymentAttempt {
+  id               String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  paymentId        String   @map("payment_id") @db.Uuid
+  kind             String
+  status           String
+  providerResponse Json?    @map("provider_response")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([paymentId, createdAt], map: "payment_attempts_payment_idx")
+  @@map("payment_attempts")
+}
+
+model Refund {
+  id                String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  paymentId         String         @map("payment_id") @db.Uuid
+  amountMinor       BigInt         @map("amount_minor")
+  reason            String
+  status            RefundStatus   @default(REQUESTED)
+  requestedByType   AuditActorType @map("requested_by_type")
+  requestedById     String?        @map("requested_by_id") @db.Uuid
+  approvalRequestId String?        @map("approval_request_id") @db.Uuid
+  approvedBy        String?        @map("approved_by") @db.Uuid
+  providerRefundRef String?        @map("provider_refund_ref")
+  failureReason     String?        @map("failure_reason")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([paymentId], map: "refunds_payment_idx")
+  @@map("refunds")
+}
+
+model Entitlement {
+  id         String          @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId     String          @map("user_id") @db.Uuid
+  type       EntitlementType
+  /// ORDER, SUBSCRIPTION or ADMIN (database CHECK).
+  source     String
+  sourceId   String?         @map("source_id") @db.Uuid
+  quantity   Int             @default(1)
+  validFrom  DateTime        @map("valid_from") @db.Timestamptz(3)
+  validUntil DateTime?       @map("valid_until") @db.Timestamptz(3)
+  revokedAt  DateTime?       @map("revoked_at") @db.Timestamptz(3)
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, type, validUntil], map: "entitlements_user_type_until_idx")
+  @@map("entitlements")
+}
+
+model Subscription {
+  id                 String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId             String             @map("user_id") @db.Uuid
+  status             SubscriptionStatus
+  currentPeriodStart DateTime           @map("current_period_start") @db.Timestamptz(3)
+  currentPeriodEnd   DateTime           @map("current_period_end") @db.Timestamptz(3)
+  graceEndsAt        DateTime?          @map("grace_ends_at") @db.Timestamptz(3)
+  autoRenew          Boolean            @default(false) @map("auto_renew")
+  cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(3)
+  latestOrderId      String?            @map("latest_order_id") @db.Uuid
+  renewalAttemptedAt DateTime?          @map("renewal_attempted_at") @db.Timestamptz(3)
+  version            Int                @default(0)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([currentPeriodEnd], map: "subscriptions_period_end_idx")
+  @@map("subscriptions")
+}
+
+model Boost {
+  id          String      @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId    String      @map("errand_id") @db.Uuid
+  orderId     String      @unique(map: "boosts_order_unique") @map("order_id") @db.Uuid
+  status      BoostStatus @default(PURCHASED)
+  activatesAt DateTime?   @map("activates_at") @db.Timestamptz(3)
+  expiresAt   DateTime?   @map("expires_at") @db.Timestamptz(3)
+  endedReason String?     @map("ended_reason")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("boosts")
+}
+
+model WebhookEvent {
+  id               String                  @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  provider         String
+  eventId          String                  @map("event_id")
+  eventType        String                  @map("event_type")
+  signatureValid   Boolean                 @map("signature_valid")
+  processingStatus WebhookProcessingStatus @default(RECEIVED) @map("processing_status")
+  payloadHash      String                  @map("payload_hash")
+  payloadRef       String?                 @map("payload_ref")
+  failureReason    String?                 @map("failure_reason")
+  duplicateCount   Int                     @default(0) @map("duplicate_count")
+  receivedAt       DateTime                @default(now()) @map("received_at") @db.Timestamptz(3)
+  processedAt      DateTime?               @map("processed_at") @db.Timestamptz(3)
+
+  @@unique([provider, eventId], map: "webhook_events_provider_event_unique")
+  @@map("webhook_events")
+}
