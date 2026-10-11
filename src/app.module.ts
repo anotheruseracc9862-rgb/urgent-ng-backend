@@ -36,6 +36,15 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { MessagingModule } from './messaging/messaging.module.js';
 import { ExecutionModule } from './execution/execution.module.js';
+import { RatingsModule } from './ratings/ratings.module.js';
+import { ReliabilityModule } from './reliability/reliability.module.js';
+import { DisputesModule } from './disputes/disputes.module.js';
+import { ReportsModule } from './reports/reports.module.js';
+import { EnforcementModule } from './enforcement/enforcement.module.js';
+import { BadgesModule } from './badges/badges.module.js';
+import { LocationsModule } from './locations/locations.module.js';
+import { TrustedContactModule } from './trusted-contact/trusted-contact.module.js';
+import { RiskModule } from './risk/risk.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -100,6 +109,15 @@ const isTest = process.env.NODE_ENV === 'test';
     NotificationsModule,
     MessagingModule,
     MarketplaceModule,
+    RatingsModule,
+    ReliabilityModule,
+    DisputesModule,
+    ReportsModule,
+    EnforcementModule,
+    BadgesModule,
+    LocationsModule,
+    TrustedContactModule,
+    RiskModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { createTestApp } from '../test/app.factory.js';
-import { cleanAll, getTestPrisma } from '../test/database.helper.js';
+import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { fakeStorage, readyMedia } from '../test/media.helper.js';
 import { NIN, fakeKyc, readyRunner, type TestUser } from '../test/verification.helper.js';
@@ -80,9 +80,10 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
     });
 
     it('refuses a runner restricted from offering', async () => {
+      const action = await enforcementActionFor(runner.userId);
       await prisma.$executeRaw`
         INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
-        VALUES (${runner.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '1 hour', now() + interval '1 day', '00000000-0000-0000-0000-0000000000aa'::uuid, now())`;
+        VALUES (${runner.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '1 hour', now() + interval '1 day', ${action}::uuid, now())`;
       const res = await as(runner).get('/marketplace/errands').expect(403);
       expect(res.body.error.details.reasons).toContain('RESTRICTED');
     });

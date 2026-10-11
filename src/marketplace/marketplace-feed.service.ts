@@ -10,6 +10,8 @@ import { RunnerEligibilityService } from '../runner/runner-eligibility.service.j
 import { distanceBucket } from '../errands/location-privacy.js';
 import { FEED_BOOST_SOURCE, type FeedBoostSource } from './feed-boost.hook.js';
 import { FeedRateLimiter } from './feed-rate-limiter.js';
+import { sortForDisplay } from '../badges/badge.rules.js';
+import { RiskFlagService } from '../risk/risk-flag.service.js';
 import type { FeedItemDto, FeedQueryDto, MapPointDto, MapQueryDto, MarketplaceErrandDto, MarketplaceFilterDto } from './marketplace.dto.js';
 
 /** What a feed row looks like straight from the database. */
@@ -28,6 +30,9 @@ export interface FeedRow {
   offer_count: number;
   requester_first_name: string;
   requester_photo_media_id: string | null;
+  requester_rating_avg: number | null;
+  requester_rating_count: number;
+  requester_badges: string[] | null;
   pickup_area: string | null;
   pickup_lga: string | null;
   pickup_state: string | null;
@@ -44,6 +49,9 @@ export const FEED_COLUMNS = Prisma.sql`
   e.priority::text AS priority, e.time_mode::text AS time_mode, e.scheduled_at, e.suggested_budget_minor,
   e.published_at, e.expires_at, e.offer_count,
   u.first_name AS requester_first_name, pr.photo_media_id::text AS requester_photo_media_id,
+  us.requester_rating_avg::float8 AS requester_rating_avg, COALESCE(us.requester_rating_count, 0)::int AS requester_rating_count,
+  (SELECT array_agg(b.badge::text) FROM user_badges b
+    WHERE b.user_id = u.id AND b.revoked_at IS NULL AND b.badge IN ('NEW_REQUESTER'::"BadgeType", 'PROMPT_PAYER'::"BadgeType")) AS requester_badges,
   pl.area AS pickup_area, pl.lga AS pickup_lga, pl.state AS pickup_state,
   dl.area AS destination_area, dl.lga AS destination_lga, dl.state AS destination_state
 `;
@@ -53,13 +61,15 @@ export const FEED_JOINS = Prisma.sql`
   JOIN categories c ON c.id = e.category_id
   JOIN users u ON u.id = e.requester_id
   LEFT JOIN profiles pr ON pr.user_id = u.id AND pr.deleted_at IS NULL
+  LEFT JOIN user_stats us ON us.user_id = u.id
   LEFT JOIN errand_locations pl ON pl.errand_id = e.id AND pl.type = 'ERRAND_PICKUP'::"LocationType" AND pl.deleted_at IS NULL
   LEFT JOIN errand_locations dl ON dl.errand_id = e.id AND dl.type = 'ERRAND_DESTINATION'::"LocationType" AND dl.deleted_at IS NULL
 `;
 
 const area = (name: string | null, lga: string | null, state: string | null) => (name ? { area: name, lga, state } : null);
 
-export function toFeedItem(row: FeedRow, boosted = false): FeedItemDto {
+/** `ratingMinCount`: a public average needs at least this many published ratings (Backend PRD 20.4). */
+export function toFeedItem(row: FeedRow, boosted = false, ratingMinCount = 3): FeedItemDto {
   return {
     id: row.id,
     title: row.title,
@@ -75,8 +85,9 @@ export function toFeedItem(row: FeedRow, boosted = false): FeedItemDto {
     requester: {
       firstName: row.requester_first_name,
       photoMediaId: row.requester_photo_media_id,
-      rating: null, // ratings arrive in Phase 9
-      ratingCount: 0,
+      rating: row.requester_rating_avg !== null && row.requester_rating_count >= ratingMinCount ? Number(row.requester_rating_avg) : null,
+      ratingCount: row.requester_rating_count,
+      badges: sortForDisplay(row.requester_badges ?? []),
     },
     postedAt: row.published_at,
     expiresAt: row.expires_at,
@@ -116,6 +127,7 @@ export class MarketplaceFeedService {
     private readonly eligibility: RunnerEligibilityService,
     private readonly limiter: FeedRateLimiter,
     @Inject(FEED_BOOST_SOURCE) private readonly boosts: FeedBoostSource,
+    private readonly risk: RiskFlagService,
   ) {}
 
   // ---- Feed ----
@@ -128,6 +140,7 @@ export class MarketplaceFeedService {
     const limit = query.limit ?? 20;
     const cursor = query.cursor ? this.decode(query.cursor, sort) : undefined;
     const maxPinned = await this.config.get('FEED_MAX_PINNED_BOOSTS_PER_PAGE');
+    const ratingMin = await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE');
 
     // Boosted errands are pinned on the first page only and left out of the normal list.
     const boostedIds = cursor ? [] : await this.boosts.activeBoostedErrandIds();
@@ -140,7 +153,7 @@ export class MarketplaceFeedService {
     const last = page[page.length - 1];
 
     return new Paginated(
-      [...pinned.map((row) => toFeedItem(row, true)), ...page.map((row) => toFeedItem(row, false))],
+      [...pinned.map((row) => toFeedItem(row, true, ratingMin)), ...page.map((row) => toFeedItem(row, false, ratingMin))],
       {
         hasNextPage,
         ...(hasNextPage && last
@@ -202,6 +215,7 @@ export class MarketplaceFeedService {
           pickup_lng: number | null;
           destination_lat: number | null;
           destination_lng: number | null;
+          centre_key: string | null;
         }
       >
     >(Prisma.sql`
@@ -209,6 +223,7 @@ export class MarketplaceFeedService {
              ST_Y(pl.approx_point::geometry) AS pickup_lat, ST_X(pl.approx_point::geometry) AS pickup_lng,
              ST_Y(dl.approx_point::geometry) AS destination_lat, ST_X(dl.approx_point::geometry) AS destination_lng,
              round(ST_Distance(e.feed_point, me.area_center))::int AS dist_m,
+             ST_AsText(ST_SnapToGrid(me.area_center::geometry, 0.0001)) AS centre_key,
              EXISTS (SELECT 1 FROM saved_errands s WHERE s.user_id = ${userId}::uuid AND s.errand_id = e.id AND s.deleted_at IS NULL) AS saved
       FROM errands e
       LEFT JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
@@ -219,8 +234,9 @@ export class MarketplaceFeedService {
     if (!row) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
     }
+    await this.risk.watchProbing(userId, errandId, row.centre_key);
     const photos = await this.prisma.client.errandMedia.findMany({ where: { errandId }, orderBy: { position: 'asc' } });
-    const base = toFeedItem(row, (await this.boosts.activeBoostedErrandIds()).includes(row.id));
+    const base = toFeedItem(row, (await this.boosts.activeBoostedErrandIds()).includes(row.id), await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE'));
     const point = (lat: number | null, lng: number | null, place: { area: string; lga: string | null; state: string | null } | null) =>
       place && lat !== null && lng !== null ? { ...place, approx: { lat, lng } } : null;
     return {

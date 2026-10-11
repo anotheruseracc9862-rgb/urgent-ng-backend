@@ -6,6 +6,7 @@ import { Paginated } from '../common/pagination/paginated.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 import { RunnerEligibilityService } from '../runner/runner-eligibility.service.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
 import { FEED_COLUMNS, FEED_JOINS, openErrandVisibleTo, toFeedItem, type FeedRow } from './marketplace-feed.service.js';
 import type { SavedErrandItemDto } from './marketplace.dto.js';
 
@@ -22,6 +23,7 @@ export class SavedErrandsService {
     private readonly prisma: PrismaService,
     private readonly cursors: CursorService,
     private readonly eligibility: RunnerEligibilityService,
+    private readonly config: BusinessConfigService,
   ) {}
 
   /** Only an errand the runner could see in the feed can be saved. Saving twice keeps one row. */
@@ -80,8 +82,9 @@ export class SavedErrandsService {
     const hasNextPage = rows.length > limit;
     const page = hasNextPage ? rows.slice(0, limit) : rows;
     const last = page[page.length - 1];
+    const ratingMin = await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE');
     return new Paginated(
-      page.map((row) => ({ ...toFeedItem(row), status: row.status, savedAt: row.saved_at })),
+      page.map((row) => ({ ...toFeedItem(row, false, ratingMin), status: row.status, savedAt: row.saved_at })),
       {
         hasNextPage,
         ...(hasNextPage && last

@@ -106,10 +106,12 @@ export class RequesterSummaryDto {
   /** A media id. Fetch the picture with `GET /media/:id/url`. */
   @ApiProperty({ nullable: true, type: String })
   photoMediaId!: string | null;
-  /** Average rating, once the requester has enough ratings (Phase 9). */
+  /** Average rating, once the requester has enough published ratings (RATING_MIN_COUNT_FOR_AVERAGE). */
   @ApiProperty({ nullable: true, type: Number })
   rating!: number | null;
   ratingCount!: number;
+  @ApiProperty({ type: String, isArray: true, description: 'Earned requester badges, strongest first.' })
+  badges!: string[];
 }
 
 /** One entry of the feed. Never carries an exact address, coordinates or a contact (Backend PRD 12.2). */

@@ -149,3 +149,54 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Deadlines.** `expires_at` is set at publishing (`ERRAND_EXPIRY_HOURS`, or 30 minutes before a scheduled start, never more than `SCHEDULED_ERRAND_MAX_OPEN_DAYS`). The scheduler's `ErrandExpirySweeper` and a check on reads move overdue OPEN errands to EXPIRED (database clock).
 - **Hooks for later phases.** `OFFER_RECONFIRMATION_HOOK` (Phase 6 flags offers on a material edit) and `FEED_BOOST_SOURCE` (Phase 10 supplies active boosts to pin). Both have no-op defaults today. `errands.offer_count` is kept by the offer module.
 - **Tests.** `src/test/errand.helper.ts` seeds categories and prohibited items, inserts an errand in any status, and has HTTP helpers. The 50,000-errand feed check is opt-in: `RUN_PERF=1 npx vitest run --config ./vitest.config.int.ts src/marketplace/feed.performance.int-spec.ts`.
+
+## Ratings
+
+- **Routes.** `POST /assignments/:id/ratings` (with an `Idempotency-Key`), `GET /assignments/:id/ratings`, `PATCH /ratings/:id`, `GET /users/:id/ratings`. `GET /users/:id` also returns `stats`.
+- **Rules.** Only the two parties of a `COMPLETED` assignment, once each, within `RATING_WINDOW_DAYS` (7). `scores.overall` is required; reliability, communication, timeliness and payment conduct are optional (1 to 5). A rating is hidden from the other side and counts in no figure until both have rated or the window closes (blind reveal). It can be edited until the reveal or `RATING_EDIT_HOURS` (24) after submission.
+- **Figures.** Read a user's record with `UserStatsService` (`get`, `getMany`). An average is shown only from `RATING_MIN_COUNT_FOR_AVERAGE` (3) published ratings. After changing a rating's status, call `UserStatsService.recompute`.
+- **Scheduler.** `RatingRevealSweeper` reveals ratings whose window has closed.
+
+## Reliability and no-shows
+
+- **Routes.** `GET /me/reliability` (your points and every event behind them), `GET|POST /assignments/:id/no-show`, `POST /assignments/:id/no-show/respond`.
+- **Facts, not a score.** `reliability_events` is append-only. Points are the sum of `severity` over `RELIABILITY_WINDOW_DAYS` (90). Weights are `RELIABILITY_POINTS_LOW|MEDIUM|HIGH`. Write a new fact with `ReliabilityService.record(tx, { ..., points, dedupeKey })` (get `points` from `pointsTable()` before opening the transaction).
+- **Consumers.** `ReliabilityEventHandler` runs in the worker. A fact with points raises `reliability.recorded` for the enforcement ladder.
+- **Scheduler.** `NoShowSweeper` confirms no-show reports left unanswered.
+
+## Reports and disputes
+
+- **Routes.** `POST /reports`, `GET /reports`, `GET /reports/:id`, `POST /ratings/:id/report`, `POST /assignments/:id/disputes`, `GET /disputes/:id`, `POST /disputes/:id/evidence`. All writes take an `Idempotency-Key` except evidence.
+- **Report or dispute.** A report is a complaint about conduct or content and never changes an errand's status. A dispute is a case about an errand: opening one moves it to `DISPUTED` through `ErrandStateService`, and an admin decision (`DisputeService.adminResolve`) moves it on. Urgent.ng does not settle money; there is no payment evidence.
+- **Holds auto-completion.** An open dispute, or an open report filed by a party of the errand, clears `auto_complete_at`. Deciding the case restarts a fresh window. Use `ErrandStateService.pauseAutoCompletion` and `resumeAutoCompletion`; never write the column from another module.
+- **Evidence.** Add it with `EvidenceService.add(tx, { disputeId } | { reportId }, userId, item, scope)`. It checks the source belongs to the errand (message, checkpoint, execution event) or to the user (a `DISPUTE_EVIDENCE` photo, used once).
+- **Admin decisions.** `DisputeService` and `ReportService` expose `adminStartReview`, `adminResolve` and (reports) `adminSetStatus`, `adminLinkToDispute`. Their controllers come with the admin API.
+
+## Enforcement
+
+- **Routes.** `GET /me/enforcement` (what was done to your account and why), `POST /enforcement/:id/appeal`.
+- **Ladder.** Points in the rolling window decide: warning at 4, 7-day offering and posting restriction at 8, 30-day suspension at 12, an admin review at 16. Thresholds and durations are config. Each level is applied once per window.
+- **No status change without an action.** Change a user's restrictions or status only through `EnforcementService` (`adminApply`, `adminRevoke`, `adminDecideAppeal`). Severe events (`flagSevere`) go to an admin review, not the ladder.
+- **Suspended users.** Mark a route `@ConsumerAuth({ continueWhenSuspended: true })` if a user should still be able to finish work they already have; a safety-critical suspension still stops it.
+- **Scheduler.** `EnforcementExpirySweeper` ends actions and lifts suspensions.
+
+## Badges
+
+- **Routes.** `GET /runner/performance`. Badges also appear as `badges` on `GET /users/:id`, `runnerBadges` on the requester's offer list and `requester.badges` on feed items.
+- **Display only.** A badge never gates the feed or offering and never changes ordering. Read them with `BadgeService.visibleFor(userIds)`, which hides runner badges while the runner is not verified.
+- **Derived.** `user_badges` is a cache. `BadgeService.recompute(userId)` evaluates `badge.rules.ts` against source rows and writes only the difference. It runs from events and nightly (`BadgeRecomputeSweeper`). Windows and thresholds are config keys (`BADGE_*`, `TRUSTED_CANCELLATION_WINDOW`, `FAST_RESPONDER_WINDOW`), never columns.
+- **Adding a trigger.** If a new event changes an input of a rule, add its type to `BadgeEventHandler` with the user id it concerns.
+
+## Location sharing and trusted contacts
+
+- **Runner routes.** `POST /assignments/:id/location` (needs the `LOCATION_SHARING` consent), `PUT /assignments/:id/location/sharing`, `GET /assignments/:id/location` (the rounded live view).
+- **Trusted contact routes.** `POST|GET /errands/:id/trusted-contact`, `DELETE /trusted-contact/:id`, and the public `GET /shared/:token` and `POST /shared/:token/concern`.
+- **Privacy.** The exact position never leaves `location_records`: readers get a point rounded to about 250 m, labelled FRESH, STALE or EXPIRED, and nothing once expired. The shared link's response has a fixed list of fields (no address, phone, chat, exact GPS, payment or verification detail) and is the same 404 for an unknown, revoked or expired token. Only a keyed hash of the token is stored.
+- **Scheduler.** `LocationRetentionSweeper` (30 days) and `TrustedLinkExpirySweeper`.
+
+## Risk signals
+
+- **What it is.** A `risk_flags` row says something looked unusual (`OTP_ABUSE`, `OFFER_SPAM`, `FEED_PROBING`, `RATING_ANOMALY`, `SELF_DEALING`, `LOCATION_ANOMALY`). It never blocks or restricts anyone; a human decides what follows, through enforcement.
+- **Raise one** with `RiskFlagService.raiseQuietly({ signal, userId?, errandId?, subjectKey?, details })` from a code path that must not fail because of it. One open flag exists per signal and subject; a repeat raises `occurrences`. Keep `details` free of phone numbers, emails, addresses, message text and coordinates.
+- **Review.** `RiskFlagService.list` and `review` are the queue; the admin API for them comes with the admin console. Thresholds are `RISK_*` config keys.
+

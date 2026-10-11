@@ -129,8 +129,13 @@ export class ReminderService {
     return sent;
   }
 
-  /** Ratings arrive with Phase 9 (P9-01); until then nobody has rated. */
-  private async hasRated(_assignmentId: string, _userId: string): Promise<boolean> {
-    return false;
+  /** The user already rated this assignment, so a reminder would only nag. */
+  private async hasRated(assignmentId: string, userId: string): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<Array<{ ok: number }>>`
+      SELECT 1 AS ok FROM ratings
+      WHERE assignment_id = ${assignmentId}::uuid AND rater_id = ${userId}::uuid AND deleted_at IS NULL
+      LIMIT 1
+    `;
+    return rows.length > 0;
   }
 }

@@ -82,6 +82,31 @@ export class NotificationRules {
         return this.toRequester(p, 'execution.receipt_added', `assignment:${str(p, 'assignmentId')}:receipt:${num(p, 'receipt') ?? event.eventId}`, { runnerNameOf: 'runnerId' });
       case 'errand.completed':
         return this.errandCompleted(event);
+      case 'rating.revealed':
+        return this.ratingRevealed(p);
+      case 'trusted_contact.concern':
+        return this.trustedConcern(p);
+      case 'badge.awarded':
+      case 'badge.revoked':
+        return this.badgeChanged(event);
+      case 'enforcement.applied':
+        return this.enforcementApplied(p);
+      case 'enforcement.expired':
+      case 'enforcement.revoked':
+        return this.enforcementLifted(event);
+      case 'enforcement.appeal_decided':
+        return this.appealDecided(p);
+      case 'dispute.created':
+        return this.disputeOpened(p);
+      case 'dispute.resolved':
+        return this.disputeResolved(p);
+      case 'report.resolved':
+        return this.reportResolved(p);
+      case 'no_show.reported':
+      case 'no_show.contested':
+      case 'no_show.confirmed':
+      case 'no_show.dismissed':
+        return this.noShow(event);
       case 'errand.expired':
         return this.toRequester(p, 'errand.expired', `errand:${str(p, 'errandId')}:expired`, { errandIdKey: 'errandId' });
       case 'errand.cancelled':
@@ -249,6 +274,186 @@ export class NotificationRules {
       });
     }
     return out;
+  }
+
+  /** The ratee learns of a rating only at the reveal (blind rating, Backend PRD 20.3). Scores are never in the notice. */
+  private async ratingRevealed(p: Record<string, unknown>): Promise<NotificationIntent[]> {
+    const ratingId = str(p, 'ratingId');
+    const rateeId = str(p, 'rateeId');
+    if (!ratingId || !rateeId) return [];
+    return [
+      {
+        userId: rateeId,
+        template: 'rating.received',
+        vars: await this.vars(p, {}),
+        data: { ...this.ids(p), ratingId },
+        dedupeKey: `rating:${ratingId}:revealed`,
+      },
+    ];
+  }
+
+  /** The person who made the link hears that their trusted contact raised a safety concern. */
+  private async trustedConcern(p: Record<string, unknown>): Promise<NotificationIntent[]> {
+    const shareId = str(p, 'shareId');
+    const userId = str(p, 'createdBy');
+    const errandId = str(p, 'errandId');
+    if (!shareId || !userId || !errandId) return [];
+    return [
+      {
+        userId,
+        template: 'trusted_contact.concern',
+        vars: await this.vars({ errandId }, {}),
+        data: { errandId, shareId },
+        dedupeKey: `trusted-contact:${shareId}:concern:${str(p, 'at') ?? ''}`,
+      },
+    ];
+  }
+
+  /** Earned and lost badges. The ones that come and go with a count (NEW, PRO) are not announced. */
+  private badgeChanged(event: DomainEvent): NotificationIntent[] {
+    const p = event.payload;
+    const userId = str(p, 'userId');
+    const badge = str(p, 'badge');
+    if (!userId || !badge) return [];
+    const labels: Record<string, string> = {
+      TRUSTED: 'Trusted runner',
+      FAST_RESPONDER: 'Fast responder',
+      PROMPT_PAYER: 'Prompt payer',
+    };
+    if (!labels[badge]) return [];
+    const kind = event.eventType === 'badge.awarded' ? 'awarded' : 'revoked';
+    return [
+      {
+        userId,
+        template: `badge.${kind}`,
+        vars: { badge: labels[badge] },
+        data: { badge },
+        dedupeKey: `badge:${userId}:${badge}:${kind}:${event.eventId}`,
+      },
+    ];
+  }
+
+  /** A warning, restriction, suspension or other action on the user's own account. The reason is in the app, not the push. */
+  private enforcementApplied(p: Record<string, unknown>): NotificationIntent[] {
+    const actionId = str(p, 'actionId');
+    const userId = str(p, 'userId');
+    const type = str(p, 'type');
+    if (!actionId || !userId || !type) return [];
+    const template =
+      type === 'WARNING'
+        ? 'enforcement.warning'
+        : type === 'FEATURE_RESTRICTION'
+          ? 'enforcement.restricted'
+          : type === 'TEMPORARY_SUSPENSION' || type === 'PERMANENT_SUSPENSION'
+            ? 'enforcement.suspended'
+            : 'enforcement.notice';
+    return [{ userId, template, vars: {}, data: { actionId }, dedupeKey: `enforcement:${actionId}:applied` }];
+  }
+
+  private enforcementLifted(event: DomainEvent): NotificationIntent[] {
+    const p = event.payload;
+    const actionId = str(p, 'actionId');
+    const userId = str(p, 'userId');
+    const type = str(p, 'type');
+    if (!actionId || !userId || !type) return [];
+    // Only a restriction or a suspension ending is news to the user.
+    if (!['FEATURE_RESTRICTION', 'TEMPORARY_SUSPENSION', 'PERMANENT_SUSPENSION'].includes(type)) return [];
+    return [
+      { userId, template: 'enforcement.lifted', vars: {}, data: { actionId }, dedupeKey: `enforcement:${actionId}:${event.eventType.split('.')[1]}` },
+    ];
+  }
+
+  private appealDecided(p: Record<string, unknown>): NotificationIntent[] {
+    const actionId = str(p, 'actionId');
+    const userId = str(p, 'userId');
+    if (!actionId || !userId) return [];
+    const outcome = str(p, 'outcome') === 'REVOKED' ? 'the action was lifted' : 'the action stands';
+    return [{ userId, template: 'enforcement.appeal_decided', vars: { outcome }, data: { actionId }, dedupeKey: `enforcement:${actionId}:appeal_decided` }];
+  }
+
+  /** The other party hears that a dispute was opened. The claim text is never in the notice. */
+  private async disputeOpened(p: Record<string, unknown>): Promise<NotificationIntent[]> {
+    const disputeId = str(p, 'disputeId');
+    const openedBy = str(p, 'openedBy');
+    const requesterId = str(p, 'requesterId');
+    const runnerId = str(p, 'runnerId');
+    if (!disputeId || !openedBy || !requesterId || !runnerId) return [];
+    const userId = openedBy === requesterId ? runnerId : requesterId;
+    return [
+      {
+        userId,
+        template: 'dispute.opened',
+        vars: await this.vars(p, {}),
+        data: { ...this.ids(p), disputeId },
+        dedupeKey: `dispute:${disputeId}:opened:${userId}`,
+      },
+    ];
+  }
+
+  private async disputeResolved(p: Record<string, unknown>): Promise<NotificationIntent[]> {
+    const disputeId = str(p, 'disputeId');
+    const requesterId = str(p, 'requesterId');
+    const runnerId = str(p, 'runnerId');
+    if (!disputeId || !requesterId || !runnerId) return [];
+    const outcomeText: Record<string, string> = {
+      COMPLETE: 'the errand was marked completed',
+      CANCEL: 'the errand was cancelled',
+      DISMISS: 'the dispute was dismissed and the errand continues',
+    };
+    const vars = { ...(await this.vars(p, {})), outcome: outcomeText[str(p, 'outcome') ?? ''] ?? 'a decision was made' };
+    return [requesterId, runnerId].map((userId) => ({
+      userId,
+      template: 'dispute.resolved',
+      vars,
+      data: { ...this.ids(p), disputeId },
+      dedupeKey: `dispute:${disputeId}:resolved:${userId}`,
+    }));
+  }
+
+  /** The reporter hears that a decision was made, not what the admin wrote (Backend PRD 21.2). */
+  private reportResolved(p: Record<string, unknown>): NotificationIntent[] {
+    const reportId = str(p, 'reportId');
+    const reporterId = str(p, 'reporterId');
+    if (!reportId || !reporterId) return [];
+    return [
+      {
+        userId: reporterId,
+        template: 'report.resolved',
+        vars: {},
+        data: { reportId, errandId: str(p, 'errandId') ?? null },
+        dedupeKey: `report:${reportId}:resolved`,
+      },
+    ];
+  }
+
+  /** No-show reports (Backend PRD 21.1): the person reported is prompted, the reporter hears the outcome. */
+  private async noShow(event: DomainEvent): Promise<NotificationIntent[]> {
+    const p = event.payload;
+    const reportId = str(p, 'reportId');
+    const reporterId = str(p, 'reporterId');
+    const accusedId = str(p, 'accusedId');
+    if (!reportId || !reporterId || !accusedId) return [];
+    const vars = await this.vars(p, {});
+    const data = { ...this.ids(p), reportId };
+    const type = event.eventType.split('.')[1];
+    if (type === 'reported') {
+      return [
+        {
+          userId: accusedId,
+          template: 'no_show.reported',
+          vars: { ...vars, minutes: String(num(p, 'promptMinutes') ?? 15) },
+          data,
+          dedupeKey: `no-show:${reportId}:reported`,
+        },
+      ];
+    }
+    if (type === 'contested') {
+      return [{ userId: reporterId, template: 'no_show.contested', vars, data, dedupeKey: `no-show:${reportId}:contested` }];
+    }
+    return [
+      { userId: reporterId, template: `no_show.${type}.reporter`, vars, data, dedupeKey: `no-show:${reportId}:${type}:${reporterId}` },
+      { userId: accusedId, template: `no_show.${type}.accused`, vars, data, dedupeKey: `no-show:${reportId}:${type}:${accusedId}` },
+    ];
   }
 
   // ---- change requests and agreement ----

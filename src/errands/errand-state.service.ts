@@ -212,9 +212,17 @@ export class ErrandStateService {
     const now = errand.db_now;
     const autoCompleteHours = await this.config.get('DELIVERY_AUTO_COMPLETION_HOURS');
 
-    // The deadline for auto-completion starts when the errand is delivered (again, after a dismissed dispute).
+    // The deadline for auto-completion starts when the errand is delivered (again, after a dismissed
+    // dispute), unless a report or dispute is open: that case holds it (Backend PRD 15.3).
+    const held = to === 'DELIVERED' ? await this.hasOpenCase(tx, errand.id) : false;
     const autoCompleteAt =
-      to === 'DELIVERED' ? new Date(now.getTime() + autoCompleteHours * 3_600_000) : ['COMPLETED', 'CANCELLED', 'DISPUTED', 'EXPIRED'].includes(to) ? null : errand.auto_complete_at;
+      to === 'DELIVERED'
+        ? held
+          ? null
+          : new Date(now.getTime() + autoCompleteHours * 3_600_000)
+        : ['COMPLETED', 'CANCELLED', 'DISPUTED', 'EXPIRED'].includes(to)
+          ? null
+          : errand.auto_complete_at;
     const statusBeforeDispute = to === 'DISPUTED' ? from : from === 'DISPUTED' ? null : errand.status_before_dispute;
     const cancelling = to === 'CANCELLED' ? input.cancellation : undefined;
 
@@ -235,6 +243,55 @@ export class ErrandStateService {
         updated_at = ${now}::timestamptz
       WHERE id = ${errand.id}::uuid
     `;
+  }
+
+  /**
+   * An open report that pauses completion, or an open dispute, holds auto-completion
+   * (Backend PRD 15.3). Call inside the transaction that opens the case.
+   */
+  async pauseAutoCompletion(tx: Prisma.TransactionClient, errandId: string): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE errands SET auto_complete_at = NULL, updated_at = clock_timestamp()
+      WHERE id = ${errandId}::uuid AND auto_complete_at IS NOT NULL
+    `;
+  }
+
+  /**
+   * Restart a fresh auto-completion window for a DELIVERED errand once no report or dispute holds
+   * it any more. Returns whether the window was restarted. The errand row is locked first.
+   */
+  async resumeAutoCompletion(tx: Prisma.TransactionClient, errandId: string): Promise<boolean> {
+    const hours = await this.config.get('DELIVERY_AUTO_COMPLETION_HOURS');
+    const locked = await tx.$queryRaw<Array<{ status: string; auto_complete_at: Date | null }>>`
+      SELECT status::text AS status, auto_complete_at FROM errands WHERE id = ${errandId}::uuid AND deleted_at IS NULL FOR UPDATE
+    `;
+    const row = locked[0];
+    if (!row || row.status !== 'DELIVERED' || row.auto_complete_at !== null) return false;
+    if (await this.hasOpenCase(tx, errandId)) return false;
+    await tx.$executeRaw`
+      UPDATE errands
+      SET auto_complete_at = clock_timestamp() + make_interval(hours => ${hours}::int), updated_at = clock_timestamp()
+      WHERE id = ${errandId}::uuid
+    `;
+    return true;
+  }
+
+  private async hasOpenCase(tx: Prisma.TransactionClient, errandId: string): Promise<boolean> {
+    const rows = await tx.$queryRaw<Array<{ held: boolean }>>`
+      SELECT (
+        EXISTS (
+          SELECT 1 FROM reports
+          WHERE errand_id = ${errandId}::uuid AND pauses_auto_completion AND deleted_at IS NULL
+            AND status IN ('OPEN'::"ReportStatus", 'UNDER_REVIEW'::"ReportStatus", 'ACTION_REQUIRED'::"ReportStatus")
+        )
+        OR EXISTS (
+          SELECT 1 FROM disputes
+          WHERE errand_id = ${errandId}::uuid AND deleted_at IS NULL
+            AND status IN ('OPEN'::"DisputeStatus", 'UNDER_REVIEW'::"DisputeStatus")
+        )
+      ) AS held
+    `;
+    return rows[0]?.held === true;
   }
 
   private invalid(from: ErrandStatus, to: ErrandStatus, message: string, reason?: string): DomainException {

@@ -13,7 +13,7 @@ export class PaymentAgreementController {
   constructor(private readonly agreements: PaymentAgreementService) {}
 
   @Get()
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(PaymentAgreementDto)
   @ApiErrors(404)
@@ -22,7 +22,7 @@ export class PaymentAgreementController {
   }
 
   @Put()
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(PaymentAgreementDto)
   @ApiErrors(400, 404, 409)

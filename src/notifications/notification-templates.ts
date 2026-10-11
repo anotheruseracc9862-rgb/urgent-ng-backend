@@ -106,6 +106,78 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
   },
   'errand.cancelled.by_platform': { category: 'TRANSACTIONAL', title: 'Errand cancelled', body: '"{errandTitle}" was cancelled by Urgent.ng.' },
   'errand.nearby': { category: 'MARKETPLACE', title: 'New errand nearby', body: '"{errandTitle}" in {area}. Make an offer.' },
+  'no_show.reported': {
+    category: 'TRANSACTIONAL',
+    title: 'Did you miss this errand?',
+    body: 'The other person says you did not show up for "{errandTitle}". Please respond within {minutes} minutes.',
+  },
+  'no_show.contested': {
+    category: 'TRANSACTIONAL',
+    title: 'They say they are there',
+    body: 'The other person says they did show up for "{errandTitle}". Urgent.ng will review your report.',
+  },
+  'no_show.confirmed.reporter': {
+    category: 'TRANSACTIONAL',
+    title: 'No-show recorded',
+    body: 'Your no-show report for "{errandTitle}" was confirmed. You can cancel the errand without a penalty.',
+  },
+  'no_show.confirmed.accused': { category: 'TRANSACTIONAL', title: 'No-show recorded', body: 'A no-show was recorded against you for "{errandTitle}".' },
+  'no_show.dismissed.reporter': { category: 'TRANSACTIONAL', title: 'Report not upheld', body: 'Your no-show report for "{errandTitle}" was not upheld.' },
+  'no_show.dismissed.accused': { category: 'TRANSACTIONAL', title: 'Report dismissed', body: 'The no-show report for "{errandTitle}" was dismissed.' },
+  'dispute.opened': {
+    category: 'TRANSACTIONAL',
+    title: 'A dispute was opened',
+    body: 'A dispute was opened on "{errandTitle}". Add your side from the errand page.',
+  },
+  'dispute.resolved': {
+    category: 'TRANSACTIONAL',
+    title: 'Dispute decided',
+    body: 'The dispute on "{errandTitle}" was decided: {outcome}.',
+  },
+  'report.resolved': {
+    category: 'TRANSACTIONAL',
+    title: 'Your report was reviewed',
+    body: 'Urgent.ng reviewed your report and took a decision. Thank you for helping keep the marketplace safe.',
+  },
+  // Account standing (mandatory safety class)
+  'enforcement.warning': {
+    category: 'SAFETY',
+    title: 'A warning on your account',
+    body: 'Your account received a warning. Open Account standing to see why.',
+  },
+  'enforcement.restricted': {
+    category: 'SAFETY',
+    title: 'Some actions are paused',
+    body: 'Making offers and posting errands is paused on your account. Open Account standing for details.',
+  },
+  'enforcement.suspended': {
+    category: 'SAFETY',
+    title: 'Your account is suspended',
+    body: 'Your account is suspended. Open Account standing to see why and to appeal.',
+  },
+  'enforcement.notice': {
+    category: 'SAFETY',
+    title: 'A change to your account',
+    body: 'A change was made to your account. Open Account standing for details.',
+  },
+  'enforcement.lifted': {
+    category: 'SAFETY',
+    title: 'Restriction lifted',
+    body: 'The restriction on your account has ended. You can use Urgent.ng as before.',
+  },
+  'enforcement.appeal_decided': {
+    category: 'SAFETY',
+    title: 'Your appeal was decided',
+    body: 'Your appeal was decided: {outcome}.',
+  },
+  'badge.awarded': { category: 'MARKETPLACE', title: 'You earned a badge', body: 'You earned the {badge} badge.' },
+  'badge.revoked': { category: 'MARKETPLACE', title: 'A badge was removed', body: 'The {badge} badge is no longer on your profile.' },
+  'trusted_contact.concern': {
+    category: 'SAFETY',
+    title: 'Your trusted contact is worried',
+    body: 'The person you shared "{errandTitle}" with raised a safety concern. Open the errand to check in.',
+  },
+  'rating.received': { category: 'MARKETPLACE', title: 'You have a new rating', body: 'Your rating for "{errandTitle}" is now visible.' },
   'rating.reminder': { category: 'MARKETPLACE', title: 'How did it go?', body: 'Rate your experience with "{errandTitle}".' },
 
   // Change requests and agreement

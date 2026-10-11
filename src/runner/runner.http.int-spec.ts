@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { createTestApp } from '../test/app.factory.js';
-import { cleanAll, getTestPrisma } from '../test/database.helper.js';
+import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, createAdmin, seedAdminRoles, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { fakeStorage } from '../test/media.helper.js';
 import { NIN, fakeKyc, profileBody, readyRunner, startVerification, verifiedUser, type TestUser } from '../test/verification.helper.js';
@@ -320,12 +320,14 @@ describe('Runner profile and eligibility (Phase 4)', () => {
     });
 
     describe('restrictions', () => {
-      const restrict = (userId: string, type: string, window: { starts: string; ends: string | null }, status = 'ACTIVE') =>
-        prisma.$executeRawUnsafe(
+      const restrict = async (userId: string, type: string, window: { starts: string; ends: string | null }, status = 'ACTIVE') => {
+        const action = await enforcementActionFor(userId);
+        return prisma.$executeRawUnsafe(
           `INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
            VALUES ('${userId}'::uuid, '${type}'::"UserRestrictionType", '${status}'::"RestrictionStatus",
-                   now() - interval '${window.starts}', ${window.ends ? `now() + interval '${window.ends}'` : 'NULL'}, '${randomUUID()}'::uuid, now())`,
+                   now() - interval '${window.starts}', ${window.ends ? `now() + interval '${window.ends}'` : 'NULL'}, '${action}'::uuid, now())`,
         );
+      };
 
       it('an active OFFERING restriction blocks offers and the feed', async () => {
         const user = await readyRunner(app);
@@ -346,10 +348,11 @@ describe('Runner profile and eligibility (Phase 4)', () => {
         const user = await readyRunner(app);
         await restrict(user.userId, 'POSTING', { starts: '1 hour', ends: '1 day' });
         await restrict(user.userId, 'OFFERING', { starts: '2 days', ends: null }, 'REVOKED');
+        const action = await enforcementActionFor(user.userId);
         await prisma.$executeRaw`
           INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
-          VALUES (${user.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '2 days', now() - interval '1 day', ${randomUUID()}::uuid, now()),
-                 (${user.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() + interval '1 day', NULL, ${randomUUID()}::uuid, now())
+          VALUES (${user.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '2 days', now() - interval '1 day', ${action}::uuid, now()),
+                 (${user.userId}::uuid, 'OFFERING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() + interval '1 day', NULL, ${action}::uuid, now())
         `;
 
         expect((await eligibility().canOffer(user.userId)).allowed).toBe(true);

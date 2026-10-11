@@ -13,6 +13,7 @@ import {
   OTP_RATE_LIMITED,
 } from '../common/constants/error-codes.js';
 import { hmacSign } from '../common/utils/crypto.helper.js';
+import { RiskFlagService } from '../risk/risk-flag.service.js';
 import { AuthAuditService, type RequestContext } from './auth-audit.service.js';
 import { maskIdentifier, type Identifier } from './identifier.js';
 
@@ -90,6 +91,7 @@ export class OtpService {
     private readonly audit: AuthAuditService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(OTP_PROVIDER) private readonly provider: IOtpProvider,
+    private readonly risk: RiskFlagService,
   ) {}
 
   /**
@@ -148,6 +150,14 @@ export class OtpService {
         metadata: { purpose, destination: maskIdentifier(identifier.value), reason },
         ctx,
       });
+      // A cooldown is normal use. Hitting an hourly cap is not: signal it, never block on it.
+      if (reason !== 'cooldown') {
+        await this.risk.raiseQuietly({
+          signal: 'OTP_ABUSE',
+          subjectKey: reason === 'ip_limit' ? `ip:${this.digest(`ip:${ctx.ip ?? 'none'}`)}` : `dest:${keys.destination}`,
+          details: { reason, purpose },
+        });
+      }
       throw DomainException.of(OTP_RATE_LIMITED, { details: { reason, retryAfterSeconds } });
     }
 
@@ -223,6 +233,11 @@ export class OtpService {
       throw DomainException.of(OTP_INVALID, { details: { remainingAttempts } });
     }
     if (status === 3) {
+      await this.risk.raiseQuietly({
+        signal: 'OTP_ABUSE',
+        subjectKey: `verify:${keys.code}`,
+        details: { reason: 'attempts_exceeded', purpose },
+      });
       throw DomainException.of(OTP_RATE_LIMITED, { details: { reason: 'attempts_exceeded' } });
     }
     throw DomainException.of(OTP_EXPIRED);

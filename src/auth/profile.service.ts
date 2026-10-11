@@ -3,6 +3,8 @@ import type { StartMode } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
+import { sortForDisplay } from '../badges/badge.rules.js';
 
 export interface MeView {
   id: string;
@@ -26,6 +28,15 @@ export interface PublicProfileView {
   lastInitial: string;
   photoMediaId: string | null;
   memberSince: Date;
+  /** Earned badges, strongest first. Runner badges are hidden while the runner is not verified. */
+  badges: string[];
+  /** What other users may see of this user's record (Backend PRD 20.4). */
+  stats: {
+    completedAsRunner: number;
+    completedAsRequester: number;
+    runnerRating: { count: number; average: number | null };
+    requesterRating: { count: number; average: number | null };
+  };
 }
 
 /**
@@ -34,7 +45,10 @@ export interface PublicProfileView {
  */
 @Injectable()
 export class ProfileService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: BusinessConfigService,
+  ) {}
 
   async getMe(userId: string): Promise<MeView> {
     const user = await this.prisma.client.user.findUnique({
@@ -111,12 +125,40 @@ export class ProfileService {
     if (!user) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
     }
+    const [stats, minCount, badgeRows] = await Promise.all([
+      this.prisma.userStats.findUnique({ where: { userId } }),
+      this.config.get('RATING_MIN_COUNT_FOR_AVERAGE'),
+      this.prisma.$queryRaw<Array<{ badge: string }>>`
+        SELECT b.badge::text AS badge FROM user_badges b
+        WHERE b.user_id = ${userId}::uuid AND b.revoked_at IS NULL
+          AND (
+            b.badge IN ('NEW_REQUESTER'::"BadgeType", 'PROMPT_PAYER'::"BadgeType")
+            OR EXISTS (
+              SELECT 1 FROM verification_attempts v
+              WHERE v.user_id = b.user_id AND v.status = 'VERIFIED'::"VerificationStatus" AND v.deleted_at IS NULL
+                AND (v.expires_at IS NULL OR v.expires_at > now())
+            )
+          )
+      `,
+    ]);
+    // A public average needs enough published ratings (Backend PRD 20.4); the count is always shown.
+    const shown = (count: number, average: { toString(): string } | null | undefined) => ({
+      count,
+      average: average != null && count >= minCount ? Number(average.toString()) : null,
+    });
     return {
       id: user.id,
       firstName: user.firstName,
       lastInitial: user.lastName.charAt(0).toUpperCase(),
       photoMediaId: user.profile?.photoMediaId ?? null,
       memberSince: user.createdAt,
+      badges: sortForDisplay(badgeRows.map((r) => r.badge)),
+      stats: {
+        completedAsRunner: stats?.completedAsRunner ?? 0,
+        completedAsRequester: stats?.completedAsRequester ?? 0,
+        runnerRating: shown(stats?.runnerRatingCount ?? 0, stats?.runnerRatingAvg),
+        requesterRating: shown(stats?.requesterRatingCount ?? 0, stats?.requesterRatingAvg),
+      },
     };
   }
 }

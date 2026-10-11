@@ -81,6 +81,23 @@ export class MeDto {
   createdAt!: Date;
 }
 
+export class RatingFigureDto {
+  /** Published ratings counted. */
+  count!: number;
+  /** Null until there are enough published ratings to show an average. */
+  @ApiProperty({ nullable: true, type: Number })
+  average!: number | null;
+}
+
+export class PublicStatsDto {
+  completedAsRunner!: number;
+  completedAsRequester!: number;
+  @ApiProperty({ type: RatingFigureDto })
+  runnerRating!: RatingFigureDto;
+  @ApiProperty({ type: RatingFigureDto })
+  requesterRating!: RatingFigureDto;
+}
+
 export class PublicProfileDto {
   id!: string;
   firstName!: string;
@@ -89,6 +106,10 @@ export class PublicProfileDto {
   photoMediaId!: string | null;
   @ApiProperty({ type: String, format: 'date-time' })
   memberSince!: Date;
+  @ApiProperty({ type: String, isArray: true, description: 'Earned badges, strongest first.' })
+  badges!: string[];
+  @ApiProperty({ type: PublicStatsDto })
+  stats!: PublicStatsDto;
 }
 
 export class AccountChangeDto {

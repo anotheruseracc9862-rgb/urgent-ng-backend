@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { createTestApp } from '../test/app.factory.js';
-import { cleanAll, getTestPrisma } from '../test/database.helper.js';
+import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, loginMobile, registerUser, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { readyMedia } from '../test/media.helper.js';
 import { fakeStorage } from '../test/media.helper.js';
@@ -454,9 +454,10 @@ describe('Errands: drafts, publishing, editing, cancelling (P5-04, P5-05)', () =
 
     it('is closed to a requester restricted from posting', async () => {
       const draft = (await createDraft(app, user, draftBody(categories.delivery)).expect(201)).body.data.id;
+      const action = await enforcementActionFor(user.userId);
       await prisma.$executeRaw`
         INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
-        VALUES (${user.userId}::uuid, 'POSTING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '1 hour', now() + interval '1 day', '00000000-0000-0000-0000-0000000000aa'::uuid, now())`;
+        VALUES (${user.userId}::uuid, 'POSTING'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus", now() - interval '1 hour', now() + interval '1 day', ${action}::uuid, now())`;
       await publishErrand(app, user, draft).expect(403);
     });
 

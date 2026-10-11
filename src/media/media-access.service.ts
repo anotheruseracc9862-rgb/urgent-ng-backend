@@ -97,6 +97,26 @@ export class MediaAccessService {
     return result;
   }
 
+  /**
+   * A short-lived signed link to a profile photo's thumbnail for a reader who is already
+   * authorised by something other than an account, such as a trusted-contact link (Backend PRD
+   * 17.5). Only profile photos can be handed out this way; any other file is "not found".
+   */
+  async urlForSharedProfilePhoto(mediaId: string, ttlSeconds: number): Promise<MediaUrlResult | null> {
+    const media = await this.prisma.client.media.findUnique({ where: { id: mediaId } });
+    if (
+      !media ||
+      media.purpose !== 'PROFILE_PHOTO' ||
+      media.status !== 'READY' ||
+      media.moderationStatus === 'REMOVED' ||
+      !(media.thumbnailKey ?? media.storageKey)
+    ) {
+      return null;
+    }
+    const signed = await this.storage.createPresignedDownload((media.thumbnailKey ?? media.storageKey) as string, ttlSeconds);
+    return { url: signed.url, variant: 'thumbnail', expiresAt: signed.expiresAt };
+  }
+
   private async userMayView(media: Media, viewerId: string): Promise<boolean> {
     if (media.ownerId === viewerId) {
       return media.moderationStatus !== 'REMOVED';

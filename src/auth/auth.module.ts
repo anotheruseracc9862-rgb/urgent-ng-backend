@@ -22,6 +22,8 @@ import { DeviceService } from './device.service.js';
 import { NotificationPreferenceService } from './notification-preference.service.js';
 import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
 import { AccountStatusGuard } from './guards/account-status.guard.js';
+import { SuspensionPolicyGuard } from './guards/suspension-policy.guard.js';
+import { RiskModule } from '../risk/risk.module.js';
 import { RestrictionGuard } from './guards/restriction.guard.js';
 import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
 
@@ -33,7 +35,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
  * Signing keys are passed per call (SessionService), so this module needs no default secret.
  */
 @Module({
-  imports: [AuditModule, JwtModule.register({})],
+  imports: [AuditModule, RiskModule, JwtModule.register({})],
   controllers: [AuthController, MeController, UsersController],
   providers: [
     AuthAuditService,
@@ -56,6 +58,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     NotificationPreferenceService,
     ConsumerAuthGuard,
     AccountStatusGuard,
+    SuspensionPolicyGuard,
     RestrictionGuard,
     PolicyAcceptanceGuard,
   ],
@@ -76,6 +79,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     NotificationPreferenceService,
     ConsumerAuthGuard,
     AccountStatusGuard,
+    SuspensionPolicyGuard,
     RestrictionGuard,
     PolicyAcceptanceGuard,
   ],

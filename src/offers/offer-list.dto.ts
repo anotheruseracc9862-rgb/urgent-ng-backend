@@ -32,8 +32,14 @@ export class OfferListItemDto {
   @ApiProperty({ description: 'Runner has a valid identity verification' })
   runnerVerified!: boolean;
 
-  @ApiProperty({ description: 'Runner rating (1-5). Null until ratings exist (Phase 9).', nullable: true })
+  @ApiProperty({ description: 'Runner average rating (1-5). Null until the runner has enough published ratings.', nullable: true })
   runnerRating!: number | null;
+
+  @ApiProperty({ description: 'Errands this runner has completed.' })
+  runnerCompletedErrands!: number;
+
+  @ApiProperty({ type: String, isArray: true, description: 'Earned badges, strongest first (display only; they never change the order).' })
+  runnerBadges!: string[];
 
   @ApiProperty({ description: 'Runner has an active Runner Pro entitlement' })
   runnerIsPro!: boolean;

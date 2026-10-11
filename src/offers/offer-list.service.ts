@@ -5,6 +5,8 @@ import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 import { OfferLimitService } from '../entitlements/offer-limit.service.js';
 import { VerificationStatusService } from '../verification/verification-status.service.js';
 import { distanceBucket } from '../errands/location-privacy.js';
+import { UserStatsService } from '../ratings/user-stats.service.js';
+import { BadgeService } from '../badges/badge.service.js';
 import type { OfferListItemDto, OfferSort } from './offer-list.dto.js';
 
 interface Row {
@@ -35,6 +37,8 @@ export class OfferListService {
     private readonly prisma: PrismaService,
     private readonly offerLimit: OfferLimitService,
     private readonly verification: VerificationStatusService,
+    private readonly stats: UserStatsService,
+    private readonly badges: BadgeService,
   ) {}
 
   async getOffersForErrand(requesterId: string, errandId: string, sort: OfferSort = 'price_asc'): Promise<OfferListItemDto[]> {
@@ -59,6 +63,8 @@ export class OfferListService {
       WHERE o.errand_id = ${errandId}::uuid AND o.status = 'ACTIVE'::"OfferStatus" AND o.deleted_at IS NULL
     `;
 
+    const stats = await this.stats.getMany(rows.map((row) => row.runner_id));
+    const badges = await this.badges.visibleFor(rows.map((row) => row.runner_id));
     const entries: Array<Entry & { isPro: boolean }> = [];
     for (const row of rows) {
       const [isPro, verified] = await Promise.all([this.offerLimit.isPro(row.runner_id), this.verification.isVerified(row.runner_id)]);
@@ -71,7 +77,9 @@ export class OfferListService {
           runnerName: row.runner_name,
           runnerPhotoMediaId: row.photo_media_id,
           runnerVerified: verified,
-          runnerRating: null,
+          runnerRating: stats.get(row.runner_id)?.runner.average ?? null,
+          runnerCompletedErrands: stats.get(row.runner_id)?.completedAsRunner ?? 0,
+          runnerBadges: badges.get(row.runner_id) ?? [],
           runnerIsPro: isPro,
           amountMinor: Number(row.amount_minor),
           durationMinutes: row.duration_minutes,
@@ -94,7 +102,7 @@ function primary(a: Entry, b: Entry, sort: OfferSort): number {
     case 'eta_asc':
       return a.item.durationMinutes - b.item.durationMinutes;
     case 'rating_desc':
-      // Ratings arrive in Phase 9; until then every runner is unrated and this key ties.
+      // An unrated runner sorts last; ties fall through to the common tie-break.
       return (b.item.runnerRating ?? -1) - (a.item.runnerRating ?? -1);
     case 'distance_asc':
       return (a.distanceM ?? Number.POSITIVE_INFINITY) - (b.distanceM ?? Number.POSITIVE_INFINITY) || 0;

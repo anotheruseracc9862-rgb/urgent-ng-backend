@@ -94,3 +94,17 @@ export async function closeTestConnections(): Promise<void> {
     redis = null;
   }
 }
+
+/**
+ * A real enforcement action to hang a restriction on. A restriction always comes from an action
+ * (Backend PRD 21.4), so a test that inserts one by hand needs this row first.
+ */
+export async function enforcementActionFor(userId: string): Promise<string> {
+  const rows = await getTestPrisma().$queryRaw<Array<{ id: string }>>`
+    INSERT INTO enforcement_actions (user_id, type, reason, trigger, actor_type, starts_at, updated_at)
+    VALUES (${userId}::uuid, 'FEATURE_RESTRICTION'::"EnforcementActionType", 'test restriction', 'ADMIN',
+            'ADMIN'::"AuditActorType", now(), now())
+    RETURNING id::text
+  `;
+  return rows[0].id;
+}

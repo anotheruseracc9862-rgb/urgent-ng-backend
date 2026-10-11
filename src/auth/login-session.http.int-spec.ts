@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { JwtService } from '@nestjs/jwt';
 import { createTestApp } from '../test/app.factory.js';
-import { cleanAll, getTestPrisma } from '../test/database.helper.js';
+import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.helper.js';
 import {
   API,
   bearer,
@@ -134,7 +134,7 @@ describe('Login, sessions and tokens (HTTP)', () => {
 
     it('an active ACCOUNT_LOGIN restriction blocks login; an ended one does not', async () => {
       const user = await registerUser(app);
-      const enforcement = '00000000-0000-0000-0000-0000000000aa';
+      const enforcement = await enforcementActionFor(user.userId);
       await prisma.$executeRaw`
         INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
         VALUES (${user.userId}::uuid, 'ACCOUNT_LOGIN'::"UserRestrictionType", 'ACTIVE'::"RestrictionStatus",

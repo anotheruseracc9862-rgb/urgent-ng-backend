@@ -17,7 +17,7 @@ export class MessagingController {
   ) {}
 
   @Get('conversations')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ConversationDto, { isArray: true })
   @ApiErrors(400)
@@ -26,7 +26,7 @@ export class MessagingController {
   }
 
   @Get('conversations/:id')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ConversationDto)
   @ApiErrors(404)
@@ -35,7 +35,7 @@ export class MessagingController {
   }
 
   @Get('conversations/:id/messages')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(MessageDto, { isArray: true })
   @ApiErrors(400, 404)
@@ -44,7 +44,7 @@ export class MessagingController {
   }
 
   @Post('conversations/:id/messages')
-  @ConsumerAuth()
+  @ConsumerAuth({ continueWhenSuspended: true })
   @RequireNoRestriction('MESSAGING')
   @ApiConsumerAuth()
   @ApiEnveloped(MessageDto, { status: 201 })
@@ -55,7 +55,7 @@ export class MessagingController {
 
   @Post('conversations/:id/read')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(MarkedDto)
   @ApiErrors(404)
@@ -65,7 +65,7 @@ export class MessagingController {
 
   @Post('conversations/:id/mute')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(MuteStateDto)
   @ApiErrors(404)
@@ -76,7 +76,7 @@ export class MessagingController {
 
   @Post('conversations/:id/unmute')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(MuteStateDto)
   @ApiErrors(404)
@@ -86,7 +86,7 @@ export class MessagingController {
   }
 
   @Delete('messages/:id')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(MessageDto)
   @ApiErrors(404)

@@ -8,6 +8,12 @@ import { AssignmentAcceptanceSweeper } from './assignment-acceptance.sweeper.js'
 import { AutoCompletionSweeper } from './auto-completion.sweeper.js';
 import { ChangeRequestExpirySweeper } from './change-request-expiry.sweeper.js';
 import { ReminderSweeper } from './reminder.sweeper.js';
+import { RatingRevealSweeper } from './rating-reveal.sweeper.js';
+import { NoShowSweeper } from './no-show.sweeper.js';
+import { EnforcementExpirySweeper } from './enforcement-expiry.sweeper.js';
+import { BadgeRecomputeSweeper } from './badge-recompute.sweeper.js';
+import { LocationRetentionSweeper } from './location-retention.sweeper.js';
+import { TrustedLinkExpirySweeper } from './trusted-link-expiry.sweeper.js';
 import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
 
 /**
@@ -28,8 +34,14 @@ export class SweeperRegistry implements OnModuleDestroy {
     autoCompletion: AutoCompletionSweeper,
     changeRequestExpiry: ChangeRequestExpirySweeper,
     reminders: ReminderSweeper,
+    ratingReveal: RatingRevealSweeper,
+    noShows: NoShowSweeper,
+    enforcementExpiry: EnforcementExpirySweeper,
+    badgeRecompute: BadgeRecomputeSweeper,
+    locationRetention: LocationRetentionSweeper,
+    trustedLinkExpiry: TrustedLinkExpirySweeper,
   ) {
-    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry, reminders];
+    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry, reminders, ratingReveal, noShows, enforcementExpiry, badgeRecompute, locationRetention, trustedLinkExpiry];
   }
 
   startAll(): void {

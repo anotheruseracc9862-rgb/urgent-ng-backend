@@ -43,7 +43,7 @@ export class AssignmentsController {
   @Post('assignments/:id/cancel')
   @HttpCode(200)
   @Idempotent({ operation: 'assignment-cancel' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(AssignmentDto)
   @ApiErrors(400, 404, 409)

@@ -109,6 +109,11 @@ export class ExecutionService {
       SELECT id::text FROM errands
       WHERE status = 'DELIVERED'::"ErrandStatus" AND deleted_at IS NULL
         AND auto_complete_at IS NOT NULL AND auto_complete_at <= clock_timestamp()
+        AND NOT EXISTS (
+          SELECT 1 FROM reports r
+          WHERE r.errand_id = errands.id AND r.pauses_auto_completion AND r.deleted_at IS NULL
+            AND r.status IN ('OPEN'::"ReportStatus", 'UNDER_REVIEW'::"ReportStatus", 'ACTION_REQUIRED'::"ReportStatus")
+        )
       ORDER BY auto_complete_at
       LIMIT ${limit}
     `;

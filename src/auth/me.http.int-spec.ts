@@ -75,8 +75,13 @@ describe('My account, blocking, devices and consent (HTTP)', () => {
 
       const res = await get(`/users/${b.userId}`, a.accessToken).expect(200);
 
-      expect(Object.keys(res.body.data).sort()).toEqual(['firstName', 'id', 'lastInitial', 'memberSince', 'photoMediaId']);
-      expect(res.body.data).toMatchObject({ firstName: 'Chidi', lastInitial: 'O' });
+      expect(Object.keys(res.body.data).sort()).toEqual(['badges', 'firstName', 'id', 'lastInitial', 'memberSince', 'photoMediaId', 'stats']);
+      expect(res.body.data).toMatchObject({
+        firstName: 'Chidi',
+        lastInitial: 'O',
+        badges: [],
+        stats: { completedAsRunner: 0, completedAsRequester: 0, runnerRating: { count: 0, average: null }, requesterRating: { count: 0, average: null } },
+      });
       await get('/users/00000000-0000-4000-8000-000000000000', a.accessToken).expect(404);
     });
   });

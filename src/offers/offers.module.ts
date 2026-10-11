@@ -9,6 +9,8 @@ import { QueueModule } from '../queue/queue.module.js';
 import { RunnerModule } from '../runner/runner.module.js';
 import { VerificationModule } from '../verification/verification.module.js';
 import { MessagingModule } from '../messaging/messaging.module.js';
+import { RatingsModule } from '../ratings/ratings.module.js';
+import { BadgesModule } from '../badges/badges.module.js';
 import { OffersController } from './offers.controller.js';
 import { OfferService } from './offer.service.js';
 import { OfferListService } from './offer-list.service.js';
@@ -27,6 +29,8 @@ import { RunnerOffersService } from './runner-offers.service.js';
     RunnerModule,
     VerificationModule,
     MessagingModule,
+    RatingsModule,
+    BadgesModule,
   ],
   controllers: [OffersController, RunnerOffersController],
   providers: [OfferService, OfferListService, RunnerOffersService],

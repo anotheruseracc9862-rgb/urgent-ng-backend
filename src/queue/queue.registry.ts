@@ -88,10 +88,34 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'message.read': QUEUE_NAMES.NOTIFICATIONS,
 
   // Rating events
-  'rating.created': QUEUE_NAMES.BADGES,
+  'rating.submitted': QUEUE_NAMES.NOTIFICATIONS,
+  'rating.updated': QUEUE_NAMES.NOTIFICATIONS,
+  'rating.revealed': QUEUE_NAMES.BADGES,
+
+  // Reliability and no-show events
+  'reliability.recorded': QUEUE_NAMES.BADGES,
+  'no_show.reported': QUEUE_NAMES.NOTIFICATIONS,
+  'no_show.contested': QUEUE_NAMES.NOTIFICATIONS,
+  'no_show.confirmed': QUEUE_NAMES.NOTIFICATIONS,
+  'no_show.dismissed': QUEUE_NAMES.NOTIFICATIONS,
+
+  // Enforcement events
+  'enforcement.applied': QUEUE_NAMES.BADGES,
+  'enforcement.expired': QUEUE_NAMES.BADGES,
+  'enforcement.revoked': QUEUE_NAMES.BADGES,
+  'enforcement.appeal_requested': QUEUE_NAMES.NOTIFICATIONS,
+  'enforcement.appeal_decided': QUEUE_NAMES.NOTIFICATIONS,
+  'enforcement.review_needed': QUEUE_NAMES.NOTIFICATIONS,
+
+  // Location and trusted-contact events
+  'runner_location.anomaly': QUEUE_NAMES.NOTIFICATIONS,
+  'trusted_contact.created': QUEUE_NAMES.NOTIFICATIONS,
+  'trusted_contact.revoked': QUEUE_NAMES.NOTIFICATIONS,
+  'trusted_contact.concern': QUEUE_NAMES.NOTIFICATIONS,
 
   // Report and dispute events
   'report.created': QUEUE_NAMES.NOTIFICATIONS,
+  'report.resolved': QUEUE_NAMES.NOTIFICATIONS,
   'dispute.created': QUEUE_NAMES.NOTIFICATIONS,
   'dispute.resolved': QUEUE_NAMES.MARKETPLACE,
 

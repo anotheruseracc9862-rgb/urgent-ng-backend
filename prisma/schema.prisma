@@ -771,6 +771,9 @@ model User {
   conversationParticipants ConversationParticipant[]
   messagesSent             Message[]            @relation("MessageSender")
   notifications            Notification[]
+  ratingsGiven             Rating[]             @relation("RatingRater")
+  ratingsReceived          Rating[]             @relation("RatingRatee")
+  stats                    UserStats?
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1400,6 +1403,7 @@ model Assignment {
   timedOutAt         DateTime?                 @map("timed_out_at") @db.Timestamptz(3)
   cancelledAt        DateTime?                 @map("cancelled_at") @db.Timestamptz(3)
   completedAt        DateTime?                 @map("completed_at") @db.Timestamptz(3)
+  locationSharingStoppedAt DateTime?           @map("location_sharing_stopped_at") @db.Timestamptz(3)
   cancelledBy        String?                   @map("cancelled_by") @db.Uuid
   cancelledByType    AuditActorType?           @map("cancelled_by_type")
   cancellationReason ErrandCancellationReason? @map("cancellation_reason")
@@ -1415,6 +1419,7 @@ model Assignment {
   problems         ExecutionProblem[]
   checkpoints      Checkpoint[]
   changeRequests   ChangeRequest[]
+  ratings          Rating[]
 
   @@index([runnerId, status], map: "assignments_runner_status_idx")
   @@index([requesterId, status], map: "assignments_requester_status_idx")
@@ -1634,4 +1639,346 @@ model NotificationTemplate {
   deletedAt     DateTime?            @map("deleted_at") @db.Timestamptz(3)
 
   @@map("notification_templates")
+}
+
+// P9-01: Ratings (Backend PRD 20, A.9). One per party per assignment (partial unique index in the
+// migration). `revealed_at` is the blind reveal: until it is set only the rater can see the rating
+// and it counts in no aggregate. Scores and edit history are never deleted.
+model Rating {
+  id            String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId  String       @map("assignment_id") @db.Uuid
+  assignment    Assignment   @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  raterId       String       @map("rater_id") @db.Uuid
+  rater         User         @relation("RatingRater", fields: [raterId], references: [id], onDelete: Restrict)
+  rateeId       String       @map("ratee_id") @db.Uuid
+  ratee         User         @relation("RatingRatee", fields: [rateeId], references: [id], onDelete: Restrict)
+  /// REQUESTER_TO_RUNNER or RUNNER_TO_REQUESTER (database CHECK).
+  direction     String
+  review        String?
+  status        RatingStatus @default(PUBLISHED)
+  revealedAt    DateTime?    @map("revealed_at") @db.Timestamptz(3)
+  editableUntil DateTime     @map("editable_until") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz(3)
+
+  scores RatingScore[]
+  edits  RatingEdit[]
+
+  @@index([rateeId, status], map: "ratings_ratee_status_idx")
+  @@map("ratings")
+}
+
+model RatingScore {
+  ratingId  String          @map("rating_id") @db.Uuid
+  rating    Rating          @relation(fields: [ratingId], references: [id], onDelete: Restrict)
+  dimension RatingDimension
+  score     Int             @db.SmallInt
+
+  @@id([ratingId, dimension])
+  @@map("rating_scores")
+}
+
+model RatingEdit {
+  id        String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  ratingId  String   @map("rating_id") @db.Uuid
+  rating    Rating   @relation(fields: [ratingId], references: [id], onDelete: Restrict)
+  previous  Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ratingId], map: "rating_edits_rating_idx")
+  @@map("rating_edits")
+}
+
+// P9-01: Derived aggregates (Backend PRD A.2). Rebuildable from source rows; written only by
+// UserStatsService. Window-bound figures (cancellation rate, response time) are never stored here.
+model UserStats {
+  userId               String   @id @map("user_id") @db.Uuid
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  completedAsRunner    Int      @default(0) @map("completed_as_runner")
+  completedAsRequester Int      @default(0) @map("completed_as_requester")
+  runnerRatingCount    Int      @default(0) @map("runner_rating_count")
+  runnerRatingAvg      Decimal? @map("runner_rating_avg") @db.Decimal(3, 2)
+  requesterRatingCount Int      @default(0) @map("requester_rating_count")
+  requesterRatingAvg   Decimal? @map("requester_rating_avg") @db.Decimal(3, 2)
+  paymentConductAvg    Decimal? @map("payment_conduct_avg") @db.Decimal(3, 2)
+  paymentConductCount  Int      @default(0) @map("payment_conduct_count")
+  badgesComputedAt     DateTime? @map("badges_computed_at") @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("user_stats")
+}
+
+// P9-02: Reliability (Backend PRD 21.1, A.9). Append-only facts; severity is the points the event
+// carries when it was written (0 for positive and neutral events). `dedupe_key` makes a retried
+// consumer write each fact once. Foreign keys are in the migration.
+model ReliabilityEvent {
+  id           String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId       String         @map("user_id") @db.Uuid
+  errandId     String?        @map("errand_id") @db.Uuid
+  assignmentId String?        @map("assignment_id") @db.Uuid
+  eventType    String         @map("event_type")
+  severity     Int            @db.SmallInt
+  occurredAt   DateTime       @map("occurred_at") @db.Timestamptz(3)
+  source       AuditActorType
+  metadata     Json?
+  dedupeKey    String         @unique(map: "reliability_events_dedupe_key_unique") @map("dedupe_key")
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, occurredAt(sort: Desc)], map: "reliability_events_user_occurred_idx")
+  @@index([userId, eventType], map: "reliability_events_user_type_idx")
+  @@map("reliability_events")
+}
+
+// P9-02: A no-show report (Backend PRD 21.1 definitions). Status is PENDING, CONFIRMED, CONTESTED
+// or DISMISSED (database CHECK); one open report per assignment (partial unique index).
+model NoShowReport {
+  id               String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId     String    @map("assignment_id") @db.Uuid
+  errandId         String    @map("errand_id") @db.Uuid
+  reporterId       String    @map("reporter_id") @db.Uuid
+  accusedId        String    @map("accused_id") @db.Uuid
+  status           String    @default("PENDING")
+  note             String?
+  responseDueAt    DateTime  @map("response_due_at") @db.Timestamptz(3)
+  respondedAt      DateTime? @map("responded_at") @db.Timestamptz(3)
+  resolvedAt       DateTime? @map("resolved_at") @db.Timestamptz(3)
+  /// ACKNOWLEDGED, NO_RESPONSE or ADMIN (database CHECK).
+  resolutionSource String?   @map("resolution_source")
+  resolvedBy       String?   @map("resolved_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([assignmentId], map: "no_show_reports_assignment_idx")
+  @@map("no_show_reports")
+}
+
+// P9-03: Disputes (Backend PRD 21.3, A.9). One open dispute per assignment (partial unique index in
+// the migration). Opening one moves the errand to DISPUTED through ErrandStateService; resolving
+// one moves it on. Foreign keys are in the migration.
+model Dispute {
+  id              String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId        String             @map("errand_id") @db.Uuid
+  assignmentId    String             @map("assignment_id") @db.Uuid
+  openedBy        String             @map("opened_by") @db.Uuid
+  type            DisputeType
+  status          DisputeStatus      @default(OPEN)
+  claim           String
+  resolution      DisputeResolution?
+  resolutionNotes String?            @map("resolution_notes")
+  resolvedBy      String?            @map("resolved_by") @db.Uuid
+  resolvedAt      DateTime?          @map("resolved_at") @db.Timestamptz(3)
+  firstResponseAt DateTime?          @map("first_response_at") @db.Timestamptz(3)
+  slaDueAt        DateTime?          @map("sla_due_at") @db.Timestamptz(3)
+  resolutionDueAt DateTime?          @map("resolution_due_at") @db.Timestamptz(3)
+  retentionHold   Boolean            @default(true) @map("retention_hold")
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  evidence EvidenceLink[]
+
+  @@index([status, createdAt], map: "disputes_status_created_idx")
+  @@index([errandId], map: "disputes_errand_idx")
+  @@map("disputes")
+}
+
+// P9-03: Reports (Backend PRD 21.2, A.9). A persistent complaint case. An open report on an errand
+// (pauses_auto_completion) holds its auto-completion.
+model Report {
+  id                   String           @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  reporterId           String           @map("reporter_id") @db.Uuid
+  targetType           ReportTargetType @map("target_type")
+  targetUserId         String?          @map("target_user_id") @db.Uuid
+  errandId             String?          @map("errand_id") @db.Uuid
+  assignmentId         String?          @map("assignment_id") @db.Uuid
+  messageId            String?          @map("message_id") @db.Uuid
+  ratingId             String?          @map("rating_id") @db.Uuid
+  type                 ReportType
+  description          String
+  status               ReportStatus     @default(OPEN)
+  /// UPHELD or DISMISSED (database CHECK).
+  outcome              String?
+  resolution           String?
+  resolvedBy           String?          @map("resolved_by") @db.Uuid
+  resolvedAt           DateTime?        @map("resolved_at") @db.Timestamptz(3)
+  firstResponseAt      DateTime?        @map("first_response_at") @db.Timestamptz(3)
+  slaDueAt             DateTime?        @map("sla_due_at") @db.Timestamptz(3)
+  pausesAutoCompletion Boolean          @default(false) @map("pauses_auto_completion")
+  retentionHold        Boolean          @default(false) @map("retention_hold")
+  disputeId            String?          @map("dispute_id") @db.Uuid
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  evidence EvidenceLink[]
+
+  @@index([status, createdAt], map: "reports_status_created_idx")
+  @@map("reports")
+}
+
+model EvidenceLink {
+  id         String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  disputeId  String?            @map("dispute_id") @db.Uuid
+  dispute    Dispute?           @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+  reportId   String?            @map("report_id") @db.Uuid
+  report     Report?            @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  sourceType EvidenceSourceType @map("source_type")
+  sourceId   String?            @map("source_id") @db.Uuid
+  statement  String?
+  addedBy    String             @map("added_by") @db.Uuid
+  createdAt  DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("evidence_links")
+}
+
+// P9-04: Enforcement (Backend PRD 21.4, A.9). Every warning, restriction and suspension is one of
+// these rows; an action ends by status, never by removal. Foreign keys are in the migration.
+model EnforcementAction {
+  id                String                @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId            String                @map("user_id") @db.Uuid
+  type              EnforcementActionType
+  reason            String
+  /// LADDER, SEVERE_EVENT or ADMIN (database CHECK).
+  trigger           String
+  /// WARNING, RESTRICTION or SUSPENSION for ladder actions (database CHECK).
+  ladderLevel       String?               @map("ladder_level")
+  caseRef           String?               @map("case_ref")
+  actorType         AuditActorType        @map("actor_type")
+  actorId           String?               @map("actor_id") @db.Uuid
+  startsAt          DateTime              @map("starts_at") @db.Timestamptz(3)
+  endsAt            DateTime?             @map("ends_at") @db.Timestamptz(3)
+  status            RestrictionStatus     @default(ACTIVE)
+  safetyCritical    Boolean               @default(false) @map("safety_critical")
+  targetBadge       BadgeType?            @map("target_badge")
+  targetType        String?               @map("target_type")
+  targetId          String?               @map("target_id") @db.Uuid
+  userStatusBefore  UserStatus?           @map("user_status_before")
+  appealRequestedAt DateTime?             @map("appeal_requested_at") @db.Timestamptz(3)
+  appealNote        String?               @map("appeal_note")
+  appealDueAt       DateTime?             @map("appeal_due_at") @db.Timestamptz(3)
+  /// UPHELD or REVOKED (database CHECK).
+  appealOutcome     String?               @map("appeal_outcome")
+  appealDecidedBy   String?               @map("appeal_decided_by") @db.Uuid
+  appealDecidedAt   DateTime?             @map("appeal_decided_at") @db.Timestamptz(3)
+  approvalRequestId String?               @map("approval_request_id") @db.Uuid
+  endedReason       String?               @map("ended_reason")
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  causes EnforcementActionEvent[]
+
+  @@index([userId, status], map: "enforcement_actions_user_status_idx")
+  @@map("enforcement_actions")
+}
+
+model EnforcementActionEvent {
+  enforcementActionId String            @map("enforcement_action_id") @db.Uuid
+  action              EnforcementAction @relation(fields: [enforcementActionId], references: [id], onDelete: Restrict)
+  reliabilityEventId  String            @map("reliability_event_id") @db.Uuid
+
+  @@id([enforcementActionId, reliabilityEventId])
+  @@map("enforcement_action_events")
+}
+
+// P9-04: A case that needs an admin decision before any action (Backend PRD 21.4): the points
+// reached the admin-review threshold, or a severe event. One open review per user and trigger.
+model EnforcementReview {
+  id                String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  /// LADDER_ADMIN_REVIEW or SEVERE_EVENT (database CHECK).
+  trigger           String
+  reason            String
+  caseRef           String?   @map("case_ref")
+  points            Int?
+  /// OPEN, ACTIONED or DISMISSED (database CHECK).
+  status            String    @default("OPEN")
+  decidedBy         String?   @map("decided_by") @db.Uuid
+  decidedAt         DateTime? @map("decided_at") @db.Timestamptz(3)
+  decisionNote      String?   @map("decision_note")
+  resultingActionId String?   @map("resulting_action_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt], map: "enforcement_reviews_status_created_idx")
+  @@map("enforcement_reviews")
+}
+
+// P9-05: Earned badges (Backend PRD 21.5, A.9). A cache of rules computed from source rows by
+// BadgeService; a badge ends with `revoked_at`, never by removal. One live badge per kind per user
+// (partial unique index in the migration). The foreign key is in the migration.
+model UserBadge {
+  id             String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  badge          BadgeType
+  awardedAt      DateTime  @map("awarded_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason  String?   @map("revoked_reason")
+  reasonSnapshot Json      @map("reason_snapshot")
+
+  @@index([userId], map: "user_badges_user_idx")
+  @@map("user_badges")
+}
+
+// P9-07: The runner's exact position while an errand is active (Backend PRD 17.3, A.7). Transient:
+// a retention job removes rows after LOCATION_HISTORY_RETENTION_DAYS. The point is private and is
+// written and read with raw SQL only; the API returns a rounded point and a freshness label.
+model LocationRecord {
+  id             String                               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  assignmentId   String                               @map("assignment_id") @db.Uuid
+  userId         String                               @map("user_id") @db.Uuid
+  point          Unsupported("geography(Point,4326)")
+  accuracyMeters Decimal?                             @map("accuracy_meters") @db.Decimal(7, 1)
+  capturedAt     DateTime                             @map("captured_at") @db.Timestamptz(3)
+  receivedAt     DateTime                             @default(dbgenerated("clock_timestamp()")) @map("received_at") @db.Timestamptz(3)
+
+  @@index([assignmentId, capturedAt(sort: Desc)], map: "location_records_assignment_captured_idx")
+  @@index([capturedAt], map: "location_records_captured_idx")
+  @@map("location_records")
+}
+
+// P9-06: A read-only link to an active errand (Backend PRD 17.5, A.9). Only a keyed hash of the
+// token is stored. Foreign keys are in the migration.
+model TrustedContactShare {
+  id              String             @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId        String             @map("errand_id") @db.Uuid
+  createdBy       String             @map("created_by") @db.Uuid
+  tokenHash       String             @unique(map: "trusted_contact_shares_token_hash_unique") @map("token_hash")
+  status          TrustedShareStatus @default(ACTIVE)
+  expiresAt       DateTime           @map("expires_at") @db.Timestamptz(3)
+  revokedAt       DateTime?          @map("revoked_at") @db.Timestamptz(3)
+  viewCount       Int                @default(0) @map("view_count")
+  lastViewedAt    DateTime?          @map("last_viewed_at") @db.Timestamptz(3)
+  concernRaisedAt DateTime?          @map("concern_raised_at") @db.Timestamptz(3)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([errandId, status], map: "trusted_contact_shares_errand_status_idx")
+  @@map("trusted_contact_shares")
+}
+
+// P9-08: Risk flags (Backend PRD 21.6, A.9). A signal for an admin to review; it never blocks a
+// user by itself. One open flag per signal and subject (partial unique index in the migration):
+// the same signal again raises `occurrences`. Foreign keys are in the migration.
+model RiskFlag {
+  id          String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId      String?        @map("user_id") @db.Uuid
+  errandId    String?        @map("errand_id") @db.Uuid
+  signal      String
+  subjectKey  String?        @map("subject_key")
+  details     Json?
+  status      RiskFlagStatus @default(OPEN)
+  occurrences Int            @default(1)
+  lastSeenAt  DateTime       @default(dbgenerated("clock_timestamp()")) @map("last_seen_at") @db.Timestamptz(3)
+  reviewedBy  String?        @map("reviewed_by") @db.Uuid
+  reviewedAt  DateTime?      @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote  String?        @map("review_note")
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt   DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt], map: "risk_flags_status_created_idx")
+  @@map("risk_flags")
 }

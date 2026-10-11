@@ -41,6 +41,8 @@ export interface BusinessConfig {
   LOCATION_UPDATE_MIN_SECONDS: number;
   LOCATION_MOVEMENT_THRESHOLD_METERS: number;
   LOCATION_HISTORY_RETENTION_DAYS: number;
+  LOCATION_LIVE_ROUND_METERS: number;
+  LOCATION_MAX_SPEED_MPS: number;
   APPROX_GRID_METERS: number;
   APPROX_MAX_OFFSET_METERS: number;
   RUNNER_AREA_MIN_KM: number;
@@ -54,6 +56,8 @@ export interface BusinessConfig {
   TRUSTED_LINK_MAX_ACTIVE_PER_ERRAND: number;
   TRUSTED_LINK_MAX_HOURS: number;
   TRUSTED_LINK_POST_TERMINAL_HOURS: number;
+  TRUSTED_LINK_AREA_GRID_METERS: number;
+  TRUSTED_LINK_CONCERN_COOLDOWN_MINUTES: number;
 
   // 32.3 Identity and security
   OTP_TTL_MINUTES: number;
@@ -93,9 +97,22 @@ export interface BusinessConfig {
   LADDER_RESTRICTION_POINTS: number;
   LADDER_SUSPENSION_POINTS: number;
   LADDER_ADMIN_REVIEW_POINTS: number;
+  LADDER_RESTRICTION_DAYS: number;
+  LADDER_SUSPENSION_DAYS: number;
   NO_SHOW_PROMPT_MINUTES: number;
   NO_SHOW_EARLIEST_REPORT_MINUTES: number;
   BADGE_MIN_AGREED_AMOUNT: number;
+  BADGE_NEW_BELOW_COMPLETED: number;
+  BADGE_TRUSTED_MIN_COMPLETED: number;
+  BADGE_TRUSTED_MIN_RATINGS: number;
+  BADGE_RATING_EARN: number;
+  BADGE_RATING_KEEP: number;
+  BADGE_TRUSTED_MAX_CANCELLATION_PERCENT: number;
+  BADGE_FAST_RESPONDER_MAX_MINUTES: number;
+  BADGE_FAST_RESPONDER_MIN_SAMPLES: number;
+  BADGE_NEW_REQUESTER_BELOW_COMPLETED: number;
+  BADGE_PROMPT_PAYER_MIN_COMPLETED: number;
+  BADGE_PROMPT_PAYER_MIN_RATINGS: number;
   TRUSTED_CANCELLATION_WINDOW: number;
   FAST_RESPONDER_WINDOW: number;
   RESPONSE_TIME_WINDOW: number;
@@ -103,6 +120,21 @@ export interface BusinessConfig {
   DISPUTE_RESOLUTION_DAYS: number;
   REPORT_FIRST_RESPONSE_HOURS: number;
   APPEAL_RESPONSE_DAYS: number;
+  DISPUTE_MAX_EVIDENCE_ITEMS: number;
+  REPORT_MAX_EVIDENCE_ITEMS: number;
+  REPORT_MAX_OPEN_PER_REPORTER: number;
+  RISK_OFFER_SPAM_PER_HOUR: number;
+  RISK_LOW_RATING_COUNT: number;
+  RISK_LOW_RATING_MAX_SCORE: number;
+  RISK_LOW_RATING_WINDOW_DAYS: number;
+  RISK_REPEAT_PAIR_COUNT: number;
+  RISK_REPEAT_PAIR_DAYS: number;
+  RISK_PROBE_DISTINCT_POSITIONS: number;
+  RISK_PROBE_WINDOW_MINUTES: number;
+  RELIABILITY_POINTS_LOW: number;
+  RELIABILITY_POINTS_MEDIUM: number;
+  RELIABILITY_POINTS_HIGH: number;
+  LATE_CANCELLATION_MINUTES_BEFORE_START: number;
 
   // 32.6 Media and rate limits
   MAX_UPLOAD_BYTES: number;
@@ -163,6 +195,8 @@ export const DEFAULTS: BusinessConfig = {
   LOCATION_UPDATE_MIN_SECONDS: 30,
   LOCATION_MOVEMENT_THRESHOLD_METERS: 100,
   LOCATION_HISTORY_RETENTION_DAYS: 30,
+  LOCATION_LIVE_ROUND_METERS: 250, // the live view rounds the runner's position to this grid
+  LOCATION_MAX_SPEED_MPS: 55, // faster than this between two updates is a travel-plausibility signal (about 200 km/h)
   APPROX_GRID_METERS: 500,
   APPROX_MAX_OFFSET_METERS: 250,
   RUNNER_AREA_MIN_KM: 1,
@@ -176,6 +210,8 @@ export const DEFAULTS: BusinessConfig = {
   TRUSTED_LINK_MAX_ACTIVE_PER_ERRAND: 5,
   TRUSTED_LINK_MAX_HOURS: 48,
   TRUSTED_LINK_POST_TERMINAL_HOURS: 2,
+  TRUSTED_LINK_AREA_GRID_METERS: 1000, // pickup and destination areas on a shared link snap to this grid
+  TRUSTED_LINK_CONCERN_COOLDOWN_MINUTES: 10, // one safety concern per link in this time
 
   // 32.3 Identity and security
   OTP_TTL_MINUTES: 10,
@@ -214,9 +250,22 @@ export const DEFAULTS: BusinessConfig = {
   LADDER_RESTRICTION_POINTS: 8,
   LADDER_SUSPENSION_POINTS: 12,
   LADDER_ADMIN_REVIEW_POINTS: 16,
+  LADDER_RESTRICTION_DAYS: 7, // offering and posting restriction at the restriction threshold
+  LADDER_SUSPENSION_DAYS: 30, // suspension at the suspension threshold
   NO_SHOW_PROMPT_MINUTES: 15,
   NO_SHOW_EARLIEST_REPORT_MINUTES: 30,
   BADGE_MIN_AGREED_AMOUNT: 50000, // ₦500 in kobo
+  BADGE_NEW_BELOW_COMPLETED: 5,
+  BADGE_TRUSTED_MIN_COMPLETED: 25,
+  BADGE_TRUSTED_MIN_RATINGS: 10, // from distinct requesters
+  BADGE_RATING_EARN: 4.5,
+  BADGE_RATING_KEEP: 4.3, // hysteresis: a held badge is lost only below this
+  BADGE_TRUSTED_MAX_CANCELLATION_PERCENT: 5,
+  BADGE_FAST_RESPONDER_MAX_MINUTES: 10,
+  BADGE_FAST_RESPONDER_MIN_SAMPLES: 5,
+  BADGE_NEW_REQUESTER_BELOW_COMPLETED: 3,
+  BADGE_PROMPT_PAYER_MIN_COMPLETED: 5,
+  BADGE_PROMPT_PAYER_MIN_RATINGS: 5,
   TRUSTED_CANCELLATION_WINDOW: 20,
   FAST_RESPONDER_WINDOW: 20,
   RESPONSE_TIME_WINDOW: 20,
@@ -224,6 +273,21 @@ export const DEFAULTS: BusinessConfig = {
   DISPUTE_RESOLUTION_DAYS: 7,
   REPORT_FIRST_RESPONSE_HOURS: 72,
   APPEAL_RESPONSE_DAYS: 7,
+  DISPUTE_MAX_EVIDENCE_ITEMS: 20, // per party per dispute
+  REPORT_MAX_EVIDENCE_ITEMS: 5,
+  REPORT_MAX_OPEN_PER_REPORTER: 20, // open reports one user can have at a time
+  RISK_OFFER_SPAM_PER_HOUR: 8, // offers by one runner in an hour that raise a flag
+  RISK_LOW_RATING_COUNT: 3, // this many very low ratings on one person ...
+  RISK_LOW_RATING_MAX_SCORE: 2, // ... of this score or lower ...
+  RISK_LOW_RATING_WINDOW_DAYS: 7, // ... within this many days raise a flag
+  RISK_REPEAT_PAIR_COUNT: 3, // the same requester and runner completing this many errands ...
+  RISK_REPEAT_PAIR_DAYS: 30, // ... within this many days raise a self-dealing flag
+  RISK_PROBE_DISTINCT_POSITIONS: 5, // one errand viewed from this many different operating-area centres ...
+  RISK_PROBE_WINDOW_MINUTES: 60, // ... within this many minutes raises a probing flag
+  RELIABILITY_POINTS_LOW: 1,
+  RELIABILITY_POINTS_MEDIUM: 2,
+  RELIABILITY_POINTS_HIGH: 4,
+  LATE_CANCELLATION_MINUTES_BEFORE_START: 60, // a requester cancel this close to the start is a late cancellation
 
   // 32.6 Media and rate limits
   MAX_UPLOAD_BYTES: 5 * 1024 * 1024, // 5 MB

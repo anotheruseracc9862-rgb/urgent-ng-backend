@@ -115,3 +115,33 @@ export async function acceptedScene(app: INestApplication, categoryId: string, o
   await acceptAssignment(app, scene.runner, scene.assignmentId).expect(201);
   return scene;
 }
+
+/** Select, accept, start, pick up, deliver and complete: the errand and assignment are COMPLETED. */
+export async function completedScene(app: INestApplication, categoryId: string, options: { requester?: TestUser } = {}) {
+  const scene = await acceptedScene(app, categoryId, options);
+  for (const name of ['start', 'pickup', 'deliver'] as const) {
+    await executionStep(app, scene.runner, scene.assignmentId, name).expect(201);
+  }
+  await completeErrand(app, scene.requester, scene.errandId).expect(201);
+  return scene;
+}
+
+/** Another completed errand for an existing runner, from a new requester (or the one given). */
+export async function completedFor(
+  app: INestApplication,
+  categoryId: string,
+  runner: Authed,
+  options: { requester?: TestUser } = {},
+) {
+  const requester = options.requester ?? (await signedInUser(app));
+  const errandId = await insertErrand({ requesterId: requester.userId, categoryId });
+  const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
+  const selected = await selectRunner(app, requester, errandId, offer.id, offer.version).expect(201);
+  const assignmentId = selected.body.data.id as string;
+  await acceptAssignment(app, runner, assignmentId).expect(201);
+  for (const name of ['start', 'pickup', 'deliver'] as const) {
+    await executionStep(app, runner, assignmentId, name).expect(201);
+  }
+  await completeErrand(app, requester, errandId).expect(201);
+  return { requester, errandId, assignmentId };
+}

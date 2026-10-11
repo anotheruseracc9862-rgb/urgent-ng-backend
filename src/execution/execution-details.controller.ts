@@ -15,7 +15,7 @@ export class ExecutionDetailsController {
 
   @Post('problems')
   @Idempotent({ operation: 'execution-problem' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ProblemDto, { status: 201 })
@@ -25,7 +25,7 @@ export class ExecutionDetailsController {
   }
 
   @Get('problems')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ProblemDto, { isArray: true })
   @ApiErrors(404)
@@ -35,7 +35,7 @@ export class ExecutionDetailsController {
 
   @Post('problems/:problemId/resolve')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ProblemDto)
   @ApiErrors(404, 409)
@@ -49,7 +49,7 @@ export class ExecutionDetailsController {
 
   @Post('delay-notices')
   @Idempotent({ operation: 'execution-delay-notice' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionEventDto, { status: 201 })
@@ -60,7 +60,7 @@ export class ExecutionDetailsController {
 
   @Post('receipt')
   @Idempotent({ operation: 'execution-receipt' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionEventDto, { status: 201 })
@@ -70,7 +70,7 @@ export class ExecutionDetailsController {
   }
 
   @Get('timeline')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionEventDto, { isArray: true })
   @ApiErrors(404)

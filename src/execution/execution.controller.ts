@@ -19,7 +19,7 @@ export class ExecutionController {
 
   @Post('assignments/:id/start')
   @Idempotent({ operation: 'execution-start' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionStepDto, { status: 201 })
@@ -30,7 +30,7 @@ export class ExecutionController {
 
   @Post('assignments/:id/pickup')
   @Idempotent({ operation: 'execution-pickup' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionStepDto, { status: 201 })
@@ -41,7 +41,7 @@ export class ExecutionController {
 
   @Post('assignments/:id/deliver')
   @Idempotent({ operation: 'execution-deliver' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @RequireNoRestriction('RUNNING')
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionStepDto, { status: 201 })
@@ -53,7 +53,7 @@ export class ExecutionController {
   /** The requester confirms the errand was done. Completion never depends on payment. */
   @Post('errands/:id/complete')
   @Idempotent({ operation: 'errand-complete' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ExecutionStepDto, { status: 201 })
   @ApiErrors(404, 409)

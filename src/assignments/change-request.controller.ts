@@ -15,7 +15,7 @@ export class ChangeRequestController {
 
   @Post('assignments/:id/change-requests')
   @Idempotent({ operation: 'change-request-create' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ChangeRequestDto, { status: 201 })
   @ApiErrors(400, 404, 409)
@@ -24,7 +24,7 @@ export class ChangeRequestController {
   }
 
   @Get('assignments/:id/change-requests')
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ChangeRequestDto, { isArray: true })
   @ApiErrors(404)
@@ -35,7 +35,7 @@ export class ChangeRequestController {
   @Post('change-requests/:id/accept')
   @HttpCode(200)
   @Idempotent({ operation: 'change-request-accept' })
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ChangeRequestDto)
   @ApiErrors(403, 404, 409)
@@ -45,7 +45,7 @@ export class ChangeRequestController {
 
   @Post('change-requests/:id/reject')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ChangeRequestDto)
   @ApiErrors(403, 404, 409)
@@ -55,7 +55,7 @@ export class ChangeRequestController {
 
   @Post('change-requests/:id/cancel')
   @HttpCode(200)
-  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
   @ApiConsumerAuth()
   @ApiEnveloped(ChangeRequestDto)
   @ApiErrors(403, 404, 409)

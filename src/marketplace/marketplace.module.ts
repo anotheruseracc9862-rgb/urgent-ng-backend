@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { RiskModule } from '../risk/risk.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { MediaModule } from '../media/media.module.js';
 import { RunnerModule } from '../runner/runner.module.js';
@@ -19,7 +20,7 @@ import { DatabaseModule } from '../database/database.module.js';
 
 /** Marketplace discovery (Backend PRD section 12): feed, map, detail and saved errands. */
 @Module({
-  imports: [AuthModule, MediaModule, RunnerModule, CommonModule, NotificationsModule, EntitlementsModule, QueueModule, ConfigStoreModule, DatabaseModule],
+  imports: [AuthModule, RiskModule, MediaModule, RunnerModule, CommonModule, NotificationsModule, EntitlementsModule, QueueModule, ConfigStoreModule, DatabaseModule],
   controllers: [MarketplaceController, SavedErrandsController],
   providers: [
     MarketplaceFeedService,

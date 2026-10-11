@@ -10,6 +10,8 @@ import {
 import type { AuthenticatedUser } from '../decorators/current-user.decorator.js';
 
 export const ALLOWED_STATUSES_KEY = 'allowedAccountStatuses';
+/** Set by `@ConsumerAuth({ continueWhenSuspended: true })`; read by SuspensionPolicyGuard. */
+export const CONTINUE_WHEN_SUSPENDED_KEY = 'continueWhenSuspended';
 
 /**
  * Account-status guard (Backend PRD 9.5, INV-019). Runs after ConsumerAuthGuard.

@@ -10,7 +10,7 @@ import {
   RequireNoRestriction,
   RequiresPolicyAcceptance,
 } from './decorators/consumer-auth.decorator.js';
-import { cleanAll, getTestPrisma } from '../test/database.helper.js';
+import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { PolicyService } from './policy.service.js';
 
@@ -62,16 +62,17 @@ describe('Consumer guards (HTTP)', () => {
   };
   const setStatus = (userId: string, status: string) =>
     prisma.$executeRaw`UPDATE users SET status = ${status}::"UserStatus" WHERE id = ${userId}::uuid`;
-  const restrict = (
+  const restrict = async (
     userId: string,
     type: string,
     options: { status?: string; starts?: string; ends?: string | null } = {},
   ) => {
     const ends = options.ends === undefined ? "now() + interval '1 hour'" : options.ends;
+    const action = await enforcementActionFor(userId);
     return prisma.$executeRawUnsafe(
       `INSERT INTO user_restrictions (user_id, type, status, starts_at, ends_at, enforcement_action_id, updated_at)
        VALUES ('${userId}'::uuid, '${type}'::"UserRestrictionType", '${options.status ?? 'ACTIVE'}'::"RestrictionStatus",
-               ${options.starts ?? "now() - interval '1 hour'"}, ${ends ?? 'NULL'}, '00000000-0000-0000-0000-0000000000aa'::uuid, now())`,
+               ${options.starts ?? "now() - interval '1 hour'"}, ${ends ?? 'NULL'}, '${action}'::uuid, now())`,
     );
   };
 
