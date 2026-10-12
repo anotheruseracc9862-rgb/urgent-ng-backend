@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiProduces, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuditActorType, Prisma } from '@prisma/client';
@@ -328,6 +328,8 @@ export class AdminAuditAnalyticsController {
   /** The audit log as a file. Needs AUDIT_EXPORT, and the export itself is audited. */
   @Get('audit/export.csv')
   @NoEnvelope()
+  @ApiProduces('text/csv')
+  @ApiOkResponse({ description: 'The report as CSV.', content: { 'text/csv': { schema: { type: 'string' } } } })
   @AdminAuth('AUDIT_VIEW', 'AUDIT_EXPORT')
   @ApiErrors(400, 403)
   async export(
@@ -386,6 +388,8 @@ export class AdminAuditAnalyticsController {
   /** Any of the reports as a file. Needs ANALYTICS_EXPORT. */
   @Get('analytics/export.csv')
   @NoEnvelope()
+  @ApiProduces('text/csv')
+  @ApiOkResponse({ description: 'The report as CSV.', content: { 'text/csv': { schema: { type: 'string' } } } })
   @AdminAuth('ANALYTICS_VIEW', 'ANALYTICS_EXPORT')
   @ApiErrors(400, 403)
   async exportReport(

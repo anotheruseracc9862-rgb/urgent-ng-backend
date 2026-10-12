@@ -1,3 +1,4 @@
+import { ADMIN_PERMISSIONS } from './admin.permissions.js';
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { Controller, Get, INestApplication } from '@nestjs/common';
@@ -380,7 +381,7 @@ describe('Admin identity and access (HTTP)', () => {
 
       const me = await get('/admin/auth/me', root.accessToken).expect(200);
 
-      expect(me.body.data.permissions).toHaveLength(33);
+      expect(me.body.data.permissions).toHaveLength(ADMIN_PERMISSIONS.length);
       expect(me.body.data.permissions).toContain('ADMIN_ACCOUNTS_MANAGE');
     });
   });

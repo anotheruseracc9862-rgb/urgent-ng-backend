@@ -8,7 +8,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { Paginated } from '../../common/pagination/paginated.js';
 import { PaginationQueryDto } from '../../common/pagination/pagination.dto.js';
 import { DomainException } from '../../common/exceptions/domain.exception.js';
-import { RESOURCE_NOT_FOUND } from '../../common/constants/error-codes.js';
+import { ERRAND_INVALID_STATE, RESOURCE_NOT_FOUND } from '../../common/constants/error-codes.js';
 import { ApiEnveloped, ApiErrors } from '../../common/api/api-docs.js';
 import { ReqCtx } from '../../auth/decorators/request-context.decorator.js';
 import type { RequestContext } from '../../auth/auth-audit.service.js';
@@ -350,6 +350,18 @@ export class AdminErrandsService {
     return a;
   }
 
+  /** An errand that was never published has nothing to reopen to: it was only ever a draft. */
+  async assertWasPublished(errandId: string): Promise<void> {
+    const rows = await this.prisma.$queryRaw<Array<{ ok: boolean }>>`
+      SELECT (published_at IS NOT NULL AND expires_at IS NOT NULL AND time_mode IS NOT NULL AND prohibited_items_confirmed_at IS NOT NULL) AS ok
+      FROM errands WHERE id = ${errandId}::uuid AND deleted_at IS NULL
+    `;
+    if (!rows[0]) throw DomainException.of(RESOURCE_NOT_FOUND);
+    if (!rows[0].ok) {
+      throw DomainException.of(ERRAND_INVALID_STATE, { message: 'This errand was never published, so it cannot be reopened.', details: { reason: 'NEVER_PUBLISHED' } });
+    }
+  }
+
   async requesterOf(errandId: string): Promise<string> {
     const e = await this.prisma.errand.findFirst({ where: { id: errandId }, select: { requesterId: true } });
     if (!e) throw DomainException.of(RESOURCE_NOT_FOUND);
@@ -441,7 +453,8 @@ export class AdminErrandsController {
   @AdminAuth('ERRANDS_MODERATE')
   @ApiEnveloped(AnyObjectDto)
   @ApiErrors(400, 403, 404, 409)
-  reopen(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AdminActionDto, @ReqCtx() ctx: RequestContext) {
+  async reopen(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AdminActionDto, @ReqCtx() ctx: RequestContext) {
+    await this.service.assertWasPublished(id);
     return this.transition(admin, id, 'OPEN', dto, ctx, 'errand.reopen');
   }
 

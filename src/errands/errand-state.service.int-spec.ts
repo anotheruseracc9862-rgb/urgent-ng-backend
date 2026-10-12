@@ -63,7 +63,8 @@ describe('ErrandStateService (P5-03)', () => {
             to: transition.to,
             actor: { type: actor, id: actor === 'SYSTEM' ? undefined : requesterId },
             cancellation: transition.needsCancellation ? { reason: 'REQUESTER_CANCELLED', note: 'changed my mind' } : undefined,
-            apply: transition.from === 'DRAFT' && transition.to === 'OPEN' ? publishFields(id) : undefined,
+            // Publishing writes the fields an OPEN errand needs; so does an admin reopening one that never had them.
+            apply: (transition.from === 'DRAFT' || transition.from === 'CANCELLED') && transition.to === 'OPEN' ? publishFields(id) : undefined,
           });
 
           // A reopening keeps its target unless the deadline rules end the errand.
