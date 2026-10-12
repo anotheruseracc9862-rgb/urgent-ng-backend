@@ -88,7 +88,7 @@ export class SetPriceDto extends AdminActionDto {
   @ApiPropertyOptional({ maxLength: 300 }) @IsOptional() @IsString() @MaxLength(300) notes?: string;
 }
 
-export class CategoryDto {
+export class AdminCategoryDto {
   @ApiProperty() id!: string;
   @ApiProperty() key!: string;
   @ApiProperty() name!: string;
@@ -118,7 +118,7 @@ export class UpdateCategoryDto extends AdminActionDto {
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(1000) sortOrder?: number;
 }
 
-export class ProhibitedItemDto {
+export class AdminProhibitedItemDto {
   @ApiProperty() id!: string;
   @ApiProperty() category!: string;
   @ApiProperty() keyword!: string;
@@ -271,13 +271,13 @@ export class AdminConfigService {
 
   async categories() {
     const rows = await this.prisma.category.findMany({ where: { deletedAt: null }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
-    return rows.map((c): CategoryDto => ({
+    return rows.map((c): AdminCategoryDto => ({
       id: c.id, key: c.key, name: c.name, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination,
       isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder,
     }));
   }
 
-  async createCategory(input: CreateCategoryDto): Promise<CategoryDto> {
+  async createCategory(input: CreateCategoryDto): Promise<AdminCategoryDto> {
     if (!/^[a-z][a-z0-9_]*$/.test(input.key)) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'The key is lower-case letters, digits and underscores.', details: { field: 'key' } });
     }
@@ -295,7 +295,7 @@ export class AdminConfigService {
     return { id: c.id, key: c.key, name: c.name, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination, isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder };
   }
 
-  async updateCategory(id: string, input: UpdateCategoryDto): Promise<CategoryDto> {
+  async updateCategory(id: string, input: UpdateCategoryDto): Promise<AdminCategoryDto> {
     const existing = await this.prisma.category.findFirst({ where: { id, deletedAt: null } });
     if (!existing) throw DomainException.of(RESOURCE_NOT_FOUND);
     const pickup = input.requiresPickup ?? existing.requiresPickup;
@@ -319,12 +319,12 @@ export class AdminConfigService {
 
   // ---- prohibited items ----
 
-  async prohibitedItems(): Promise<ProhibitedItemDto[]> {
+  async prohibitedItems(): Promise<AdminProhibitedItemDto[]> {
     const rows = await this.prisma.prohibitedItemRule.findMany({ where: { deletedAt: null }, orderBy: [{ category: 'asc' }, { keyword: 'asc' }] });
     return rows.map((r) => ({ id: r.id, category: r.category, keyword: r.keyword, description: r.description, status: r.status, policyVersion: r.policyVersion }));
   }
 
-  async createProhibitedItem(input: CreateProhibitedItemDto): Promise<ProhibitedItemDto> {
+  async createProhibitedItem(input: CreateProhibitedItemDto): Promise<AdminProhibitedItemDto> {
     const keyword = input.keyword.trim().toLowerCase();
     const dup = await this.prisma.prohibitedItemRule.findFirst({ where: { keyword, deletedAt: null } });
     if (dup) throw DomainException.of(RESOURCE_CONFLICT, { message: 'This keyword is already listed.' });
@@ -337,7 +337,7 @@ export class AdminConfigService {
     return { id: rows[0].id, category: input.category.trim(), keyword, description: input.description?.trim() || null, status: 'ACTIVE', policyVersion: input.policyVersion };
   }
 
-  async updateProhibitedItem(id: string, input: UpdateProhibitedItemDto): Promise<ProhibitedItemDto> {
+  async updateProhibitedItem(id: string, input: UpdateProhibitedItemDto): Promise<AdminProhibitedItemDto> {
     const existing = await this.prisma.prohibitedItemRule.findFirst({ where: { id, deletedAt: null } });
     if (!existing) throw DomainException.of(RESOURCE_NOT_FOUND);
     const r = await this.prisma.prohibitedItemRule.update({
@@ -579,14 +579,14 @@ export class AdminConfigController {
 
   @Get('categories')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(CategoryDto, { isArray: true })
+  @ApiEnveloped(AdminCategoryDto, { isArray: true })
   categories() {
     return this.service.categories();
   }
 
   @Post('categories')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(CategoryDto, { status: 201 })
+  @ApiEnveloped(AdminCategoryDto, { status: 201 })
   @ApiErrors(400, 403, 409)
   createCategory(@CurrentAdmin() admin: AuthenticatedAdmin, @Body() dto: CreateCategoryDto, @ReqCtx() ctx: RequestContext) {
     return this.actions.run({
@@ -602,7 +602,7 @@ export class AdminConfigController {
 
   @Patch('categories/:id')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(CategoryDto)
+  @ApiEnveloped(AdminCategoryDto)
   @ApiErrors(400, 403, 404)
   updateCategory(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCategoryDto, @ReqCtx() ctx: RequestContext) {
     return this.actions.run({
@@ -620,14 +620,14 @@ export class AdminConfigController {
 
   @Get('prohibited-items')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(ProhibitedItemDto, { isArray: true })
+  @ApiEnveloped(AdminProhibitedItemDto, { isArray: true })
   prohibited() {
     return this.service.prohibitedItems();
   }
 
   @Post('prohibited-items')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(ProhibitedItemDto, { status: 201 })
+  @ApiEnveloped(AdminProhibitedItemDto, { status: 201 })
   @ApiErrors(400, 403, 409)
   createProhibited(@CurrentAdmin() admin: AuthenticatedAdmin, @Body() dto: CreateProhibitedItemDto, @ReqCtx() ctx: RequestContext) {
     return this.actions.run({
@@ -642,7 +642,7 @@ export class AdminConfigController {
 
   @Patch('prohibited-items/:id')
   @AdminAuth('REFERENCE_DATA_MANAGE')
-  @ApiEnveloped(ProhibitedItemDto)
+  @ApiEnveloped(AdminProhibitedItemDto)
   @ApiErrors(400, 403, 404)
   updateProhibited(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateProhibitedItemDto, @ReqCtx() ctx: RequestContext) {
     return this.actions.run({
