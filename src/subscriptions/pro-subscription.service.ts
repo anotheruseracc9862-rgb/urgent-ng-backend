@@ -147,6 +147,99 @@ export class ProSubscriptionService {
     return { subscriptionId, periodStart: period.start, periodEnd: period.end, extended: sub !== undefined };
   }
 
+  /**
+   * An admin grants Runner Pro for a number of days, or extends a running period by that many (a
+   * goodwill gesture, a support case). No order and no money: the period gets its own entitlement
+   * row like any other, so the benefits stop on their own at `valid_until`.
+   */
+  async adminGrant(userId: string, days: number, adminId: string): Promise<{ subscriptionId: string; periodEnd: Date; extended: boolean }> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`pro:${userId}`}))`;
+      const existing = await tx.$queryRaw<SubRow[]>`
+        SELECT id::text, status, current_period_start, current_period_end, grace_ends_at, auto_renew, version, clock_timestamp() AS db_now
+        FROM subscriptions WHERE user_id = ${userId}::uuid AND status IN (${LIVE_SQL}) FOR UPDATE
+      `;
+      const sub = existing[0];
+      const now = sub?.db_now ?? (await this.dbNow(tx));
+      const running = sub && sub.current_period_end.getTime() > now.getTime() ? sub.current_period_end : null;
+      const period = nextProPeriod({ now, currentEnd: running, days });
+      let subscriptionId: string;
+      if (!sub) {
+        const created = await tx.$queryRaw<Array<{ id: string }>>`
+          INSERT INTO subscriptions (user_id, status, current_period_start, current_period_end, auto_renew, updated_at)
+          VALUES (${userId}::uuid, 'ACTIVE'::"SubscriptionStatus", ${period.start}::timestamptz, ${period.end}::timestamptz, FALSE, clock_timestamp())
+          RETURNING id::text
+        `;
+        subscriptionId = created[0].id;
+      } else {
+        subscriptionId = sub.id;
+        await tx.$executeRaw`
+          UPDATE subscriptions
+          SET status = 'ACTIVE'::"SubscriptionStatus",
+              current_period_start = ${running ? sub.current_period_start : period.start}::timestamptz,
+              current_period_end = ${period.end}::timestamptz, grace_ends_at = NULL, cancelled_at = NULL,
+              version = version + 1, updated_at = clock_timestamp()
+          WHERE id = ${subscriptionId}::uuid
+        `;
+      }
+      await tx.$executeRaw`
+        INSERT INTO entitlements (user_id, type, source, source_id, valid_from, valid_until)
+        VALUES (${userId}::uuid, 'RUNNER_PRO'::"EntitlementType", 'SUBSCRIPTION', ${subscriptionId}::uuid,
+                ${period.start}::timestamptz, ${period.end}::timestamptz)
+        ON CONFLICT ("source", "source_id", "type", "valid_from") WHERE "source_id" IS NOT NULL DO NOTHING
+      `;
+      await this.outbox.add(tx, {
+        eventType: 'subscription.activated',
+        aggregateType: 'user',
+        aggregateId: userId,
+        payload: { userId, subscriptionId, orderId: null, periodEnd: period.end, extended: sub !== undefined, byAdmin: true },
+      });
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: adminId,
+        action: sub ? 'subscription.extended_by_admin' : 'subscription.granted_by_admin',
+        entityType: 'subscription',
+        entityId: subscriptionId,
+        metadata: { userId, days, periodEnd: period.end },
+      });
+      return { subscriptionId, periodEnd: period.end, extended: sub !== undefined };
+    });
+  }
+
+  /** An admin ends Runner Pro now: the subscription expires and the entitlements stop at this moment. */
+  async adminEnd(userId: string, adminId: string): Promise<ProView> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`pro:${userId}`}))`;
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        UPDATE subscriptions
+        SET status = 'EXPIRED'::"SubscriptionStatus", auto_renew = FALSE, version = version + 1, updated_at = clock_timestamp()
+        WHERE user_id = ${userId}::uuid AND status IN (${LIVE_SQL})
+        RETURNING id::text
+      `;
+      if (!rows[0]) throw DomainException.of(SUBSCRIPTION_NOT_ACTIVE);
+      await tx.$executeRaw`
+        UPDATE entitlements SET revoked_at = clock_timestamp()
+        WHERE user_id = ${userId}::uuid AND type = 'RUNNER_PRO'::"EntitlementType" AND revoked_at IS NULL
+          AND (valid_until IS NULL OR valid_until > clock_timestamp())
+      `;
+      await this.outbox.add(tx, {
+        eventType: 'subscription.expired',
+        aggregateType: 'user',
+        aggregateId: userId,
+        payload: { userId, subscriptionId: rows[0].id, byAdmin: true },
+      });
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: adminId,
+        action: 'subscription.ended_by_admin',
+        entityType: 'subscription',
+        entityId: rows[0].id,
+        metadata: { userId },
+      });
+    });
+    return this.current(userId);
+  }
+
   /** The user stops auto-renew. Benefits last to the end of the paid period (Backend PRD 22.4). */
   async cancel(userId: string): Promise<ProView> {
     await this.prisma.$transaction(async (tx) => {

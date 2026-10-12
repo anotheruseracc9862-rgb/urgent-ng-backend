@@ -90,6 +90,8 @@ export interface BusinessConfig {
   PRIORITY_BOOST_PRICE: number;
   PRIORITY_BOOST_MAX_HOURS: number;
   REFUND_FOUR_EYES_THRESHOLD: number;
+  /** Hours a four-eyes request waits for a second admin before it expires. */
+  APPROVAL_EXPIRY_HOURS: number;
   VAT_RATE: number;
 
   // 32.5 Trust and safety
@@ -244,6 +246,7 @@ export const DEFAULTS: BusinessConfig = {
   PRIORITY_BOOST_PRICE: 100000, // ₦1,000 in kobo
   PRIORITY_BOOST_MAX_HOURS: 24,
   REFUND_FOUR_EYES_THRESHOLD: 2000000, // ₦20,000 in kobo
+  APPROVAL_EXPIRY_HOURS: 72,
   VAT_RATE: 7.5,
 
   // 32.5 Trust and safety

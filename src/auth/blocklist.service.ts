@@ -73,6 +73,14 @@ export class BlocklistService {
     await this.remove(BlocklistType.EMAIL, this.hash('email', normaliseEmail(email)));
   }
 
+  /** An admin lifts one entry from the list (the list shows entries, never the values). Returns false if there is none. */
+  async unblockById(entryId: string): Promise<boolean> {
+    const changed = await this.prisma.$executeRaw`
+      UPDATE blocklist_entries SET deleted_at = now() WHERE id = ${entryId}::uuid AND deleted_at IS NULL
+    `;
+    return changed > 0;
+  }
+
   private async exists(type: BlocklistType, valueHash: string): Promise<boolean> {
     const rows = await this.prisma.$queryRaw<Array<{ one: number }>>`
       SELECT 1 AS one FROM blocklist_entries

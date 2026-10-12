@@ -40,6 +40,6 @@ import { VerificationFeeRefundHandler } from './verification-fee-refund.handler.
   ],
   controllers: [BillingController, BoostPurchaseController, ProSubscriptionController, WebhookController],
   providers: [OrderService, PaymentSettlementService, WebhookService, RefundService, ProRenewalService, ReconciliationService, VerificationFeeRefundHandler],
-  exports: [OrderService, PaymentSettlementService, RefundService, ProRenewalService, ReconciliationService],
+  exports: [OrderService, PaymentSettlementService, WebhookService, RefundService, ProRenewalService, ReconciliationService],
 })
 export class BillingModule {}

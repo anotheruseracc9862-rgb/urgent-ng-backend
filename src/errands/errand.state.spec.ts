@@ -19,7 +19,7 @@ const EXPECTED: Array<[ErrandStatus, ErrandStatus, ErrandActor[]]> = [
   ['DRAFT', 'CANCELLED', ['REQUESTER']],
   ['OPEN', 'RUNNER_SELECTED', ['REQUESTER']],
   ['OPEN', 'CANCELLED', ['REQUESTER', 'ADMIN']],
-  ['OPEN', 'EXPIRED', ['SYSTEM']],
+  ['OPEN', 'EXPIRED', ['SYSTEM', 'ADMIN']],
   ['RUNNER_SELECTED', 'ACCEPTED', ['RUNNER']],
   ['RUNNER_SELECTED', 'OPEN', ['RUNNER', 'SYSTEM']],
   ['RUNNER_SELECTED', 'EXPIRED', ['RUNNER', 'SYSTEM']],
@@ -41,6 +41,9 @@ const EXPECTED: Array<[ErrandStatus, ErrandStatus, ErrandActor[]]> = [
   ['DISPUTED', 'IN_PROGRESS', ['ADMIN', 'SYSTEM']],
   ['DISPUTED', 'PICKED_UP', ['ADMIN', 'SYSTEM']],
   ['DISPUTED', 'DELIVERED', ['ADMIN', 'SYSTEM']],
+  // Backend PRD 24.4: an admin reopens an errand that ended without the work being done.
+  ['EXPIRED', 'OPEN', ['ADMIN']],
+  ['CANCELLED', 'OPEN', ['ADMIN']],
 ];
 
 describe('errand state machine table', () => {

@@ -386,6 +386,39 @@ export class OfferService {
     return rows.length;
   }
 
+  /**
+   * An admin closes one active offer (spam, a policy breach, a support case). The runner and the
+   * requester are told through the normal `offer.closed` event.
+   */
+  async adminClose(offerId: string, adminId: string, reason: string): Promise<Offer> {
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await lockRow<{ id: string }>(tx, 'offers', offerId, 'id');
+      if (!locked) {
+        throw DomainException.of(RESOURCE_NOT_FOUND);
+      }
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        UPDATE offers
+        SET status = 'CLOSED'::"OfferStatus", close_reason = 'ADMIN_CLOSED'::"OfferCloseReason",
+            awaiting_party = 'NONE'::"OfferAwaitingParty", closed_at = clock_timestamp(),
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE id = ${offerId}::uuid AND status = 'ACTIVE'::"OfferStatus" AND deleted_at IS NULL
+        RETURNING id::text
+      `;
+      if (rows.length === 0) {
+        throw DomainException.of(OFFER_INVALID_STATE, { message: 'Only an active offer can be closed.' });
+      }
+      const offer = await tx.offer.findUniqueOrThrow({ where: { id: offerId } });
+      // The history row names the requester as the actor of record (a system event): admins are not users.
+      await this.recordEvent(tx, offer, offer.requesterId, 'SYSTEM_EVENT', offer.version, {
+        amountMinor: Number(offer.amountMinor),
+        durationMinutes: offer.durationMinutes,
+        message: `ADMIN_CLOSED by ${adminId}: ${reason}`.slice(0, 500),
+      });
+      await this.publish(tx, 'offer.closed', offer, offer.requesterId, 'offer.closed');
+      return offer;
+    });
+  }
+
   // ---- Selection (called by the assignment module inside its transaction) ----
 
   /**

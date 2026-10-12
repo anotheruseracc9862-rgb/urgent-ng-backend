@@ -934,6 +934,9 @@ model Admin {
   status             AdminStatus @default(INVITED)
   mfaEnabled         Boolean     @default(false) @map("mfa_enabled")
   mfaSecretEncrypted String?     @map("mfa_secret_encrypted")
+  inviteTokenHash    String?     @unique(map: "admins_invite_token_hash_key") @map("invite_token_hash")
+  inviteExpiresAt    DateTime?   @map("invite_expires_at") @db.Timestamptz(3)
+  invitedBy          String?     @map("invited_by") @db.Uuid
   failedLoginCount   Int         @default(0) @map("failed_login_count")
   firstFailedLoginAt DateTime?   @map("first_failed_login_at") @db.Timestamptz(3)
   lockedUntil        DateTime?   @map("locked_until") @db.Timestamptz(3)
@@ -1815,6 +1818,10 @@ model Dispute {
   slaDueAt        DateTime?          @map("sla_due_at") @db.Timestamptz(3)
   resolutionDueAt DateTime?          @map("resolution_due_at") @db.Timestamptz(3)
   retentionHold   Boolean            @default(true) @map("retention_hold")
+  assignedTo      String?            @map("assigned_to") @db.Uuid
+  assignedAt      DateTime?          @map("assigned_at") @db.Timestamptz(3)
+  escalatedAt     DateTime?          @map("escalated_at") @db.Timestamptz(3)
+  escalatedBy     String?            @map("escalated_by") @db.Uuid
   createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt       DateTime?          @map("deleted_at") @db.Timestamptz(3)
@@ -1850,6 +1857,10 @@ model Report {
   pausesAutoCompletion Boolean          @default(false) @map("pauses_auto_completion")
   retentionHold        Boolean          @default(false) @map("retention_hold")
   disputeId            String?          @map("dispute_id") @db.Uuid
+  assignedTo           String?          @map("assigned_to") @db.Uuid
+  assignedAt           DateTime?        @map("assigned_at") @db.Timestamptz(3)
+  escalatedAt          DateTime?        @map("escalated_at") @db.Timestamptz(3)
+  escalatedBy          String?          @map("escalated_by") @db.Uuid
   createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt            DateTime?        @map("deleted_at") @db.Timestamptz(3)
@@ -2164,4 +2175,103 @@ model WebhookEvent {
 
   @@unique([provider, eventId], map: "webhook_events_provider_event_unique")
   @@map("webhook_events")
+}
+
+// P11-01: Four-eyes approval (Backend PRD 24.5). An admin asks for a high-impact action; a DIFFERENT
+// admin holding the approving permission approves or rejects it, and the action runs only then.
+// Refunds keep their own two-step flow on the refund row. Foreign keys are in the migration.
+enum ApprovalKind {
+  PERMANENT_SUSPENSION
+  ADMIN_ROLE_CHANGE
+  PRICE_CHANGE
+  KILL_SWITCH
+  CONFIG_CHANGE
+}
+
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  EXECUTED
+  FAILED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+model ApprovalRequest {
+  id            String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  kind          ApprovalKind
+  status        ApprovalRequestStatus @default(PENDING)
+  requestedBy   String         @map("requested_by") @db.Uuid
+  reasonCode    String         @map("reason_code")
+  reasonText    String?        @map("reason_text")
+  summary       String
+  targetType    String?        @map("target_type")
+  targetId      String?        @map("target_id")
+  payload       Json
+  decidedBy     String?        @map("decided_by") @db.Uuid
+  decisionNote  String?        @map("decision_note")
+  decidedAt     DateTime?      @map("decided_at") @db.Timestamptz(3)
+  executedAt    DateTime?      @map("executed_at") @db.Timestamptz(3)
+  result        Json?
+  failureReason String?        @map("failure_reason")
+  expiresAt     DateTime       @map("expires_at") @db.Timestamptz(3)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt], map: "approval_requests_status_created_idx")
+  @@index([kind, status], map: "approval_requests_kind_status_idx")
+  @@map("approval_requests")
+}
+
+// P11-04: a note an admin leaves on a dispute, report, user or errand. Never deleted.
+// Foreign keys are in the migration.
+model AdminCaseNote {
+  id         String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id") @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  body       String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([entityType, entityId, createdAt], map: "admin_case_notes_entity_idx")
+  @@map("admin_case_notes")
+}
+
+// P11-07: what each sweeper last did, written by the scheduler process after every sweep.
+model SweeperRun {
+  name           String    @id
+  lastStartedAt  DateTime? @map("last_started_at") @db.Timestamptz(3)
+  lastFinishedAt DateTime? @map("last_finished_at") @db.Timestamptz(3)
+  lastDurationMs Int?      @map("last_duration_ms")
+  lastProcessed  Int       @default(0) @map("last_processed")
+  lastError      String?   @map("last_error")
+  lastErrorAt    DateTime? @map("last_error_at") @db.Timestamptz(3)
+  runs           BigInt    @default(0)
+  failures       BigInt    @default(0)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("sweeper_runs")
+}
+
+// P11-07: access, correction and deletion requests, tracked to their due date. Never deleted.
+// Foreign keys are in the migration.
+model DataSubjectRequest {
+  id          String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId      String?   @map("user_id") @db.Uuid
+  type        DsrType
+  status      DsrStatus @default(OPEN)
+  channel     String    @default("SUPPORT")
+  summary     String
+  dueAt       DateTime  @map("due_at") @db.Timestamptz(3)
+  assignedTo  String?   @map("assigned_to") @db.Uuid
+  resolution  String?
+  resolvedBy  String?   @map("resolved_by") @db.Uuid
+  resolvedAt  DateTime? @map("resolved_at") @db.Timestamptz(3)
+  createdBy   String    @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, dueAt], map: "data_subject_requests_status_due_idx")
+  @@map("data_subject_requests")
 }

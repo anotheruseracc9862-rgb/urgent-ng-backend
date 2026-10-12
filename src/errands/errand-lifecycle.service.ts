@@ -152,6 +152,49 @@ export class ErrandLifecycleService {
   }
 
   /**
+   * An admin keeps an open errand open longer (a support case). Unlike the requester's single
+   * extension, it can be repeated, and the admin chooses the hours. The deadline moves from the
+   * later of now and the current deadline; the errand status does not change.
+   */
+  async adminExtend(errandId: string, hours: number, adminId: string): Promise<{ errandId: string; expiresAt: Date }> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await lockRow<{ requester_id: string; status: string; expires_at: Date | null; db_now: Date }>(
+        tx,
+        'errands',
+        errandId,
+        'requester_id, status::text AS status, expires_at, clock_timestamp() AS db_now',
+      );
+      if (!row) {
+        throw DomainException.of(RESOURCE_NOT_FOUND);
+      }
+      if (row.status !== 'OPEN') {
+        throw DomainException.of(ERRAND_INVALID_STATE, { message: 'Only an open errand can be extended.', details: { status: row.status } });
+      }
+      const base = row.expires_at && row.expires_at > row.db_now ? row.expires_at : row.db_now;
+      const expiresAt = new Date(base.getTime() + hours * 3_600_000);
+      await tx.$executeRaw`
+        UPDATE errands SET expires_at = ${expiresAt}::timestamptz, version = version + 1, updated_at = ${row.db_now}::timestamptz
+        WHERE id = ${errandId}::uuid
+      `;
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: adminId,
+        action: 'errand.extended_by_admin',
+        entityType: 'errand',
+        entityId: errandId,
+        metadata: { expiresAt: expiresAt.toISOString(), hours },
+      });
+      await this.outbox.add(tx, {
+        eventType: 'errand.extended',
+        aggregateType: 'errand',
+        aggregateId: errandId,
+        payload: { errandId, requesterId: row.requester_id, previousExpiresAt: row.expires_at, expiresAt, byAdmin: true },
+      });
+      return { errandId, expiresAt };
+    });
+  }
+
+  /**
    * Copy an errand into a new draft (repost). The schedule is not copied (it is probably in the
    * past); an ASAP errand stays ASAP. Locations get a new approximate point, photos are shared.
    */

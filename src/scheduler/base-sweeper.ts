@@ -52,11 +52,14 @@ export abstract class BaseSweeper {
    */
   private intervalHandle?: NodeJS.Timeout;
 
+  private readonly sweeperName: string;
+
   constructor(
     protected readonly prisma: PrismaService,
     loggerName: string,
   ) {
     this.logger = new Logger(loggerName);
+    this.sweeperName = loggerName;
   }
 
   /**
@@ -111,18 +114,43 @@ export abstract class BaseSweeper {
     }
 
     this.sweeping = true;
+    const startedAt = new Date();
+    const startTime = Date.now();
+    let processed = 0;
+    let failure: string | null = null;
     try {
-      const startTime = Date.now();
-      const processed = await this.processBatch();
+      processed = await this.processBatch();
       const duration = Date.now() - startTime;
 
       if (processed > 0) {
         this.logger.log(`Processed ${processed} rows in ${duration}ms`);
       }
     } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
       this.logger.error('Sweep error', error);
     } finally {
       this.sweeping = false;
+      await this.recordRun(startedAt, Date.now() - startTime, processed, failure);
+    }
+  }
+
+  /** Leave a heartbeat the admin console can show. Best effort: a failure here never stops the sweeper. */
+  private async recordRun(startedAt: Date, durationMs: number, processed: number, failure: string | null): Promise<void> {
+    try {
+      await this.prisma.$executeRaw`
+        INSERT INTO sweeper_runs (name, last_started_at, last_finished_at, last_duration_ms, last_processed, last_error, last_error_at, runs, failures, updated_at)
+        VALUES (${this.sweeperName}, ${startedAt}::timestamptz, clock_timestamp(), ${durationMs}::int, ${processed}::int,
+                ${failure?.slice(0, 500) ?? null}, ${failure ? new Date() : null}::timestamptz, 1, ${failure ? 1 : 0}, clock_timestamp())
+        ON CONFLICT (name) DO UPDATE SET
+          last_started_at = EXCLUDED.last_started_at, last_finished_at = EXCLUDED.last_finished_at,
+          last_duration_ms = EXCLUDED.last_duration_ms, last_processed = EXCLUDED.last_processed,
+          last_error = COALESCE(EXCLUDED.last_error, sweeper_runs.last_error),
+          last_error_at = COALESCE(EXCLUDED.last_error_at, sweeper_runs.last_error_at),
+          runs = sweeper_runs.runs + 1, failures = sweeper_runs.failures + ${failure ? 1 : 0},
+          updated_at = clock_timestamp()
+      `;
+    } catch {
+      // The heartbeat is a convenience.
     }
   }
 

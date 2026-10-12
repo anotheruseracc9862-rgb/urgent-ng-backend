@@ -235,3 +235,16 @@ One database login (`DATABASE_URL`) is used everywhere.
 - `GET /me/ratings?direction=RECEIVED|GIVEN&minStars&maxStars` is the reviews page. `GET /users/:id/ratings` takes the star filters too.
 - `GET /runner/assignments` takes `q`, `from` and `to`; `GET /runner/assignments/summary?months=` gives counts per month; `GET /runner/assignments/export.csv` is the history as a file.
 - `GET /me/summary` has the dashboard figures and the latest activity. `GET /billing/products/public` is the price list without signing in.
+
+
+## Admin API (Phase 11)
+
+- **Where.** Everything under `/api/v1/admin/*` lives in `src/admin-api/` (one file per area) plus the framework in `src/admin/framework/`. Controllers are thin: they check a permission, take a reason, and call the same domain service a user action would.
+- **Every write has a reason.** The body extends `AdminActionDto`: `reasonCode` (a closed list, `GET /admin/reason-codes`) and `reasonText` (required for `OTHER`). `AdminActionService.run` audits the admin, the reason, a hash of the state before and after, and the request id; a failed attempt is audited as `<action>.failed`.
+- **No raw status writes.** Errand and assignment changes go through `ErrandStateService` with `actor = ADMIN`; a test scans `src/admin-api` for `UPDATE errands` and `UPDATE assignments`. The state table gained three admin-only rows: force expire (`OPEN` to `EXPIRED`), and reopen (`EXPIRED` or `CANCELLED` to `OPEN`).
+- **Four eyes.** `ApprovalService` holds a request until a different admin with the approving permission decides; the action then runs through its executor (`approval-executors.ts`). Kinds: permanent suspension, admin role or permission change, price change, kill switch, high-impact config (ladder thresholds, offer limits, refund threshold). A refund keeps its own two-step flow on the refund row. A request expires after `APPROVAL_EXPIRY_HOURS`.
+- **Sensitive reads** (exact locations, full contact, identity details, chat) need their own permission, a reason where it makes sense, and are audited before the data is returned (`SensitiveAccessService`).
+- **Permissions apply on the next request.** They are read live from the database: no cache to expire.
+- **Added permission.** `AUDIT_EXPORT`, so exporting the audit log is separate from reading it. Re-run the seed to add it to an existing database.
+- **Sweeper heartbeat.** Every sweeper writes its last run to `sweeper_runs`; `GET /admin/ops/sweepers` marks one stale after five minutes.
+- **Invitations.** `POST /admin/admins/invite` creates an account with no roles; the invitee sets a password at `POST /admin/auth/accept-invite`. Roles are a separate, approved change. `ADMIN_APP_URL` (optional) builds the link in the email.

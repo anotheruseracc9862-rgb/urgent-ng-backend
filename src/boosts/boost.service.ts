@@ -5,7 +5,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
-import { BOOST_NOT_ELIGIBLE, RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
+import { BOOST_NOT_ELIGIBLE, RESOURCE_CONFLICT, RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 import { boostWindow } from '../billing/billing.rules.js';
 
 export interface BoostActivation {
@@ -130,6 +130,59 @@ export class BoostService {
       });
     }
     return ended.length;
+  }
+
+  /** An admin ends a live boost now (a mistake, a policy case). Any refund is a separate, explicit action. */
+  async adminEnd(boostId: string, adminId: string, reason: string): Promise<{ id: string; status: string }> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; errand_id: string }>>`
+        UPDATE boosts
+        SET status = 'EXPIRED'::"BoostStatus", ended_reason = 'ADMIN_ENDED', updated_at = clock_timestamp()
+        WHERE id = ${boostId}::uuid AND status IN ('ACTIVE'::"BoostStatus", 'SCHEDULED'::"BoostStatus", 'PURCHASED'::"BoostStatus")
+        RETURNING id::text, errand_id::text
+      `;
+      if (!rows[0]) throw DomainException.of(RESOURCE_CONFLICT, { message: 'This boost is not running.' });
+      await this.outbox.add(tx, {
+        eventType: 'boost.expired',
+        aggregateType: 'errand',
+        aggregateId: rows[0].errand_id,
+        payload: { boostId, errandId: rows[0].errand_id, reason: 'ADMIN_ENDED' },
+      });
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: adminId,
+        action: 'boost.ended_by_admin',
+        entityType: 'boost',
+        entityId: boostId,
+        metadata: { errandId: rows[0].errand_id, reason: reason.slice(0, 300) },
+      });
+      return { id: boostId, status: 'EXPIRED' };
+    });
+  }
+
+  /** An admin keeps a running boost going `hours` longer, never past the errand's own deadline. */
+  async adminExtend(boostId: string, hours: number, adminId: string): Promise<{ id: string; expiresAt: Date }> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; errand_id: string; expires_at: Date; errand_expires_at: Date | null }>>`
+        SELECT b.id::text, b.errand_id::text, b.expires_at, e.expires_at AS errand_expires_at
+        FROM boosts b JOIN errands e ON e.id = b.errand_id
+        WHERE b.id = ${boostId}::uuid AND b.status = 'ACTIVE'::"BoostStatus" FOR UPDATE OF b
+      `;
+      const row = rows[0];
+      if (!row) throw DomainException.of(RESOURCE_CONFLICT, { message: 'Only a running boost can be extended.' });
+      let expiresAt = new Date(row.expires_at.getTime() + hours * 3_600_000);
+      if (row.errand_expires_at && expiresAt > row.errand_expires_at) expiresAt = row.errand_expires_at;
+      await tx.$executeRaw`UPDATE boosts SET expires_at = ${expiresAt}::timestamptz, updated_at = clock_timestamp() WHERE id = ${boostId}::uuid`;
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: adminId,
+        action: 'boost.extended_by_admin',
+        entityType: 'boost',
+        entityId: boostId,
+        metadata: { errandId: row.errand_id, hours, expiresAt: expiresAt.toISOString() },
+      });
+      return { id: boostId, expiresAt };
+    });
   }
 
   /** End boosts whose time ran out. The feed also ignores an overdue boost on read, so a late sweep is harmless. */

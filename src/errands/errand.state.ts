@@ -28,7 +28,7 @@ export const ERRAND_TRANSITIONS: readonly ErrandTransition[] = [
   { from: 'DRAFT', to: 'CANCELLED', actors: ['REQUESTER'], trigger: 'Requester cancels the draft', needsCancellation: true },
   { from: 'OPEN', to: 'RUNNER_SELECTED', actors: ['REQUESTER'], trigger: 'Requester selects a runner' },
   { from: 'OPEN', to: 'CANCELLED', actors: ['REQUESTER', 'ADMIN'], trigger: 'Requester cancels', needsCancellation: true },
-  { from: 'OPEN', to: 'EXPIRED', actors: ['SYSTEM'], trigger: 'No runner selected before expiresAt' },
+  { from: 'OPEN', to: 'EXPIRED', actors: ['SYSTEM', 'ADMIN'], trigger: 'No runner selected before expiresAt, or an admin ends it' },
   { from: 'RUNNER_SELECTED', to: 'ACCEPTED', actors: ['RUNNER'], trigger: 'Selected runner accepts in time' },
   { from: 'RUNNER_SELECTED', to: 'OPEN', actors: ['RUNNER', 'SYSTEM'], trigger: 'Runner declines or the acceptance window ends', expiry: 'KEEP' },
   // Backend PRD 11.4: a decline or timeout after the deadline has passed ends the errand instead.
@@ -41,6 +41,9 @@ export const ERRAND_TRANSITIONS: readonly ErrandTransition[] = [
   { from: 'IN_PROGRESS', to: 'CANCELLED', actors: ['REQUESTER', 'RUNNER', 'ADMIN'], trigger: 'Either party cancels', needsCancellation: true },
   { from: 'PICKED_UP', to: 'DELIVERED', actors: ['RUNNER'], trigger: 'Runner confirms delivery' },
   { from: 'DELIVERED', to: 'COMPLETED', actors: ['REQUESTER', 'SYSTEM'], trigger: 'Requester confirms, or auto-completion' },
+  // An admin reopens an errand that ended without a runner doing the work (a mistake, a support case).
+  { from: 'EXPIRED', to: 'OPEN', actors: ['ADMIN'], trigger: 'Admin reopens an expired errand', expiry: 'RECOMPUTE' },
+  { from: 'CANCELLED', to: 'OPEN', actors: ['ADMIN'], trigger: 'Admin reopens a cancelled errand', expiry: 'RECOMPUTE' },
   ...IN_FLIGHT.map(
     (from): ErrandTransition => ({ from, to: 'DISPUTED', actors: ['REQUESTER', 'RUNNER', 'ADMIN', 'SYSTEM'], trigger: 'A dispute is opened' }),
   ),

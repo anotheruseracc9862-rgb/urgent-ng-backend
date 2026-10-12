@@ -96,6 +96,30 @@ export class OfferLimitService {
     return this.status(used + 1, limit, isPro);
   }
 
+  /**
+   * An admin gives the runner back offers today: all of them (`extra` left out), or `extra` more.
+   * It only lowers today's counter, so it never raises a limit and never touches another day.
+   */
+  async adminAdjust(userId: string, extra?: number): Promise<OfferLimitStatus> {
+    const dayLagos = this.clock.lagosDay(this.clock.now());
+    await this.prisma.$executeRaw`
+      INSERT INTO offer_daily_counters (user_id, day_lagos, count, updated_at)
+      VALUES (${userId}::uuid, ${dayLagos}, 0, now())
+      ON CONFLICT (user_id, day_lagos) DO NOTHING
+    `;
+    if (extra === undefined) {
+      await this.prisma.$executeRaw`
+        UPDATE offer_daily_counters SET count = 0, updated_at = now() WHERE user_id = ${userId}::uuid AND day_lagos = ${dayLagos}
+      `;
+    } else {
+      await this.prisma.$executeRaw`
+        UPDATE offer_daily_counters SET count = GREATEST(count - ${extra}::int, 0), updated_at = now()
+        WHERE user_id = ${userId}::uuid AND day_lagos = ${dayLagos}
+      `;
+    }
+    return this.getLimitStatus(userId);
+  }
+
   /** The runner's daily allowance right now: the free limit, or the Pro fair-use cap. */
   async allowanceFor(userId: string): Promise<OfferAllowance> {
     const [freeLimit, proCap, isPro] = await Promise.all([

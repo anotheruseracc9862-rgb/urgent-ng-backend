@@ -379,6 +379,45 @@ export class RatingService {
     );
   }
 
+  /**
+   * An admin moderates a rating: hide it, remove it, mark it under review, or restore it. A rating
+   * that is not PUBLISHED no longer counts towards the average; the ratee's figures are rebuilt in
+   * the same transaction. Nothing is deleted.
+   */
+  async adminModerate(
+    ratingId: string,
+    status: 'PUBLISHED' | 'HIDDEN' | 'REMOVED' | 'UNDER_REVIEW',
+    admin: { adminId: string },
+    reason: string,
+  ): Promise<{ id: string; status: string; previous: string }> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; status: string; ratee_id: string }>>`
+        SELECT id::text, status::text AS status, ratee_id::text FROM ratings
+        WHERE id = ${ratingId}::uuid AND deleted_at IS NULL FOR UPDATE
+      `;
+      const row = rows[0];
+      if (!row) throw DomainException.of(RESOURCE_NOT_FOUND);
+      if (row.status !== status) {
+        await tx.$executeRaw`
+          UPDATE ratings SET status = ${status}::"RatingStatus", updated_at = clock_timestamp() WHERE id = ${ratingId}::uuid
+        `;
+        await this.stats.recompute(tx, row.ratee_id);
+      }
+      await this.audit.recordInTransaction(tx, {
+        actorType: AuditActorType.ADMIN,
+        actorId: admin.adminId,
+        action: 'rating.moderated',
+        entityType: 'rating',
+        entityId: ratingId,
+        reasonCode: status,
+        before: { status: row.status },
+        after: { status },
+        metadata: { rateeId: row.ratee_id, reason: reason.slice(0, 300) },
+      });
+      return { id: ratingId, status, previous: row.status };
+    });
+  }
+
   /** `minStars` and `maxStars` bound the overall score. */
   private starFilter(query: { minStars?: number; maxStars?: number }): Prisma.RatingWhereInput {
     if (query.minStars === undefined && query.maxStars === undefined) {

@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { AuditModule } from '../audit/audit.module.js';
 import { CommonModule } from '../common/common.module.js';
 import { ConfigStoreModule } from '../config/config-store.module.js';
 import { DatabaseModule } from '../database/database.module.js';
+import { EntitlementAdminService } from './entitlement-admin.service.js';
 import { EntitlementService } from './entitlement.service.js';
 import { OFFER_LIMIT_POLICY, OfferLimitService } from './offer-limit.service.js';
 import { ProEntitlementPolicy } from './pro-entitlement.policy.js';
@@ -12,8 +14,8 @@ import { ProEntitlementPolicy } from './pro-entitlement.policy.js';
  * runner eligibility and offer submission flows without a circular dependency.
  */
 @Module({
-  imports: [CommonModule, ConfigStoreModule, DatabaseModule],
-  providers: [ProEntitlementPolicy, { provide: OFFER_LIMIT_POLICY, useExisting: ProEntitlementPolicy }, OfferLimitService, EntitlementService],
-  exports: [OfferLimitService, EntitlementService],
+  imports: [AuditModule, CommonModule, ConfigStoreModule, DatabaseModule],
+  providers: [ProEntitlementPolicy, { provide: OFFER_LIMIT_POLICY, useExisting: ProEntitlementPolicy }, OfferLimitService, EntitlementService, EntitlementAdminService],
+  exports: [OfferLimitService, EntitlementService, EntitlementAdminService],
 })
 export class EntitlementsModule {}

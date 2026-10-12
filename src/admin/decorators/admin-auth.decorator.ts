@@ -2,6 +2,7 @@ import { applyDecorators, createParamDecorator, ExecutionContext, SetMetadata, U
 import { AdminAuthGuard } from '../guards/admin-auth.guard.js';
 import { PermissionGuard, REQUIRED_PERMISSIONS_KEY } from '../guards/permission.guard.js';
 import type { AdminPermissionKey } from '../admin.permissions.js';
+import { ApiAdminAuth } from '../../common/api/api-docs.js';
 
 /** The signed-in admin, attached to the request by AdminAuthGuard. */
 export interface AuthenticatedAdmin {
@@ -28,4 +29,4 @@ export const CurrentAdmin = createParamDecorator((_data: unknown, ctx: Execution
  * The module that owns the controller must import AdminModule.
  */
 export const AdminAuth = (...permissions: AdminPermissionKey[]) =>
-  applyDecorators(SetMetadata(REQUIRED_PERMISSIONS_KEY, permissions), UseGuards(AdminAuthGuard, PermissionGuard));
+  applyDecorators(SetMetadata(REQUIRED_PERMISSIONS_KEY, permissions), UseGuards(AdminAuthGuard, PermissionGuard), ApiAdminAuth());

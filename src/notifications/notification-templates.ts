@@ -204,6 +204,9 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     body: 'Both of you confirmed the payment terms for "{errandTitle}".',
   },
 
+  // Service notices an admin sends (security, outage, policy, payment, safety). Never marketing.
+  'system.announcement': { category: 'TRANSACTIONAL', title: 'Service notice', body: '{message}', email: true },
+
   // Account security
   'account.password_changed': {
     category: 'TRANSACTIONAL',
