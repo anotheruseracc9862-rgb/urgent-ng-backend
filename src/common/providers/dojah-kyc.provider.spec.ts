@@ -11,7 +11,7 @@ import type { KycVerifyResult } from './kyc.provider.js';
  * shape is asserted for the real adapter and for the fake.
  *
  * Not covered here: the live Dojah sandbox. Run the adapter against https://sandbox.dojah.io
- * with real sandbox credentials before switching KYC_PROVIDER to "real".
+ * with real sandbox credentials before launch.
  */
 
 const NIN = '12345678901';

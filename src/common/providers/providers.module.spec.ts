@@ -2,6 +2,7 @@
  * Providers module tests
  */
 
+import { LogOtpProvider } from './log-otp.provider.js';
 import { describe, it, expect } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
@@ -72,13 +73,12 @@ describe('ProvidersModule', () => {
   });
 
   it.each([
-    ['sms', OTP_PROVIDER, 'SMS_PROVIDER=real'],
-    ['maps', MAPS_PROVIDER, 'MAPS_PROVIDER=real'],
-    ['push', PUSH_PROVIDER, 'PUSH_PROVIDER=real'],
-    ['email', EMAIL_PROVIDER, 'EMAIL_PROVIDER=real'],
-    ['payments', PAYMENT_PROVIDER, 'PAYMENTS_PROVIDER=real'],
+    ['maps', MAPS_PROVIDER, 'Maps is not configured'],
+    ['push', PUSH_PROVIDER, 'Push is not configured'],
+    ['email', EMAIL_PROVIDER, 'Email is not configured'],
+    ['payments', PAYMENT_PROVIDER, 'Payments are not configured'],
   ])(
-    'fails fast instead of silently using a fake when %s is "real" but not implemented',
+    'fails fast instead of silently using a stand-in when %s has no keys',
     async (name, token, message) => {
       // Provider factories run at module compile time, so a bad setting stops boot.
       await expect(build({ ...allFake, [name]: 'real' })).rejects.toThrow(message);
@@ -86,8 +86,13 @@ describe('ProvidersModule', () => {
     },
   );
 
+  it('logs one-time codes when sms is "real" but has no keys outside production', async () => {
+    const module = await build({ ...allFake, sms: 'real' });
+    expect(module.get(OTP_PROVIDER)).toBeInstanceOf(LogOtpProvider);
+  });
+
   it('fails fast when storage is "real" but the AWS settings are missing', async () => {
-    await expect(build({ ...allFake, storage: 'real' })).rejects.toThrow('STORAGE_PROVIDER=real');
+    await expect(build({ ...allFake, storage: 'real' })).rejects.toThrow('Storage is not configured');
   });
 
   it('builds the S3 provider when storage is "real" and the AWS settings are present', async () => {
@@ -122,7 +127,7 @@ describe('ProvidersModule', () => {
   });
 
   it('fails fast when KYC is "real" but the Dojah settings are missing', async () => {
-    await expect(build({ ...allFake, kyc: 'real' })).rejects.toThrow('KYC_PROVIDER=real');
+    await expect(build({ ...allFake, kyc: 'real' })).rejects.toThrow('KYC is not configured');
   });
 
   it('builds the Dojah provider when KYC is "real" and the settings are present', async () => {

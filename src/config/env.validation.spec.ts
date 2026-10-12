@@ -1,6 +1,8 @@
 import { validateEnv } from './env.validation.js';
 
+// Under NODE_ENV=test every vendor defaults to its fake, so a minimal environment is enough.
 const valid = {
+  NODE_ENV: 'test',
   DATABASE_URL: 'postgresql://urgent:urgent@localhost:5544/urgent_ng',
 };
 
@@ -10,6 +12,28 @@ const productionSecrets = {
   JWT_REFRESH_SECRET: longSecret,
   DATA_ENCRYPTION_KEY: longSecret,
   HMAC_SECRET: longSecret,
+};
+
+// Every vendor's keys: what a real environment (development or production) provides.
+const vendors = {
+  DOJAH_APP_ID: 'app',
+  DOJAH_SECRET_KEY: 'secret',
+  DOJAH_BASE_URL: 'https://api.dojah.io',
+  MAIL_FROM: 'Urgent.ng <a@b.ng>',
+  SMTP_HOST: 'smtp.resend.com',
+  SMTP_PORT: '465',
+  SMTP_USER: 'resend',
+  SMTP_PASS: 'secret',
+  FIREBASE_CREDENTIALS: '{"project_id":"p"}',
+  AWS_REGION: 'us-east-1',
+  AWS_S3_BUCKET: 'bucket',
+  AWS_ACCESS_KEY_ID: 'id',
+  AWS_SECRET_ACCESS_KEY: 'secret',
+  MAPS_API_KEY: 'maps-key',
+  GOOGLE_CLIENT_ID: '123.apps.googleusercontent.com',
+  SMS_API_KEY: 'sms-key',
+  SMS_SENDER_ID: 'Urgent',
+  PAYSTACK_SECRET_KEY: 'sk_test_x',
 };
 
 describe('validateEnv', () => {
@@ -38,35 +62,33 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...valid, PORT: 'abc' })).toThrow(/PORT/);
   });
 
-  it('rejects an unknown provider mode', () => {
-    expect(() => validateEnv({ ...valid, KYC_PROVIDER: 'maybe' })).toThrow(
-      /KYC_PROVIDER/,
-    );
-  });
-
-  it('needs the SMTP settings only when EMAIL_PROVIDER=real', () => {
-    expect(() => validateEnv({ ...valid, EMAIL_PROVIDER: 'fake' })).not.toThrow();
-    expect(() => validateEnv({ ...valid, EMAIL_PROVIDER: 'real' })).toThrow(/SMTP_HOST/);
-    expect(() =>
-      validateEnv({
-        ...valid,
-        EMAIL_PROVIDER: 'real',
-        MAIL_FROM: 'Urgent.ng <a@b.ng>',
-        SMTP_HOST: 'smtp.mailgun.org',
-        SMTP_PORT: '465',
-        SMTP_USER: 'postmaster@mg.example.ng',
-        SMTP_PASS: 'secret',
-      }),
-    ).not.toThrow();
-  });
-
-  it('treats an empty provider mode as fake', () => {
-    expect(() => validateEnv({ ...valid, SMS_PROVIDER: '' })).not.toThrow();
+  it('needs the SMTP settings outside the automated tests', () => {
+    expect(() => validateEnv({ ...valid })).not.toThrow();
+    expect(() => validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'development', ...vendors, SMTP_HOST: '' })).toThrow(/SMTP_HOST/);
+    expect(() => validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'development', ...vendors })).not.toThrow();
   });
 
   it('does not require secrets outside production', () => {
-    expect(() => validateEnv({ ...valid, NODE_ENV: 'development' })).not.toThrow();
     expect(() => validateEnv({ ...valid, NODE_ENV: 'test' })).not.toThrow();
+    expect(() => validateEnv({ ...valid, NODE_ENV: 'development', ...vendors })).not.toThrow();
+  });
+
+  it('runs development with real vendors, so it asks for their keys', () => {
+    let message = '';
+    try {
+      validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'development' });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    for (const name of ['DOJAH_APP_ID', 'SMTP_HOST', 'AWS_REGION', 'MAPS_API_KEY', 'GOOGLE_CLIENT_ID', 'PAYSTACK_SECRET_KEY']) {
+      expect(message, name).toContain(name);
+    }
+  });
+
+  it('lets development run without SMS keys (the code is logged) but not production', () => {
+    const { SMS_API_KEY: _a, SMS_SENDER_ID: _b, ...withoutSms } = vendors;
+    expect(() => validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'development', ...withoutSms })).not.toThrow();
+    expect(() => validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'production', ...productionSecrets, ...withoutSms })).toThrow(/SMS_API_KEY/);
   });
 
   it('requires long secrets in production and names every missing one', () => {
@@ -86,75 +108,29 @@ describe('validateEnv', () => {
     ).toThrow(/JWT_SECRET/);
   });
 
-  const productionVendors = {
-    DOJAH_APP_ID: 'app',
-    DOJAH_SECRET_KEY: 'secret',
-    DOJAH_BASE_URL: 'https://api.dojah.io',
-    MAIL_FROM: 'Urgent.ng <a@b.ng>',
-    SMTP_HOST: 'smtp.resend.com',
-    SMTP_PORT: '465',
-    SMTP_USER: 'resend',
-    SMTP_PASS: 'secret',
-    FIREBASE_CREDENTIALS: '{"project_id":"p"}',
-    AWS_REGION: 'us-east-1',
-    AWS_S3_BUCKET: 'bucket',
-    AWS_ACCESS_KEY_ID: 'id',
-    AWS_SECRET_ACCESS_KEY: 'secret',
-  };
+  const productionVendors = vendors;
 
-  it('accepts a complete production environment, with every vendor real by default', () => {
+  it('accepts a complete production environment', () => {
     expect(() =>
       validateEnv({ ...valid, ...productionSecrets, ...productionVendors, NODE_ENV: 'production' }),
     ).not.toThrow();
   });
 
-  it('asks production for vendor keys when no provider mode is set', () => {
+  it('asks production for the vendor keys', () => {
+    let message = '';
+    try {
+      validateEnv({ ...valid, ...productionSecrets, NODE_ENV: 'production' });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    for (const name of ['DOJAH_APP_ID', 'SMTP_HOST', 'AWS_REGION', 'SMS_API_KEY', 'MAPS_API_KEY', 'PAYSTACK_SECRET_KEY']) {
+      expect(message, name).toContain(name);
+    }
+  });
+
+  it('ignores a provider switch in the environment: there is none', () => {
     expect(() =>
-      validateEnv({ ...valid, ...productionSecrets, NODE_ENV: 'production' }),
-    ).toThrow(/DOJAH_APP_ID[\s\S]*SMTP_HOST[\s\S]*AWS_REGION/);
-  });
-
-  it('refuses a fake provider in production', () => {
-    expect(() =>
-      validateEnv({
-        ...valid,
-        ...productionSecrets,
-        ...productionVendors,
-        NODE_ENV: 'production',
-        SMS_PROVIDER: 'fake',
-      }),
-    ).toThrow(/SMS_PROVIDER: must not be "fake" in production/);
-  });
-
-  it('lets development try a live vendor with an explicit mode', () => {
-    expect(() => validateEnv({ ...valid, STORAGE_PROVIDER: 'real' })).toThrow(/AWS_REGION/);
-  });
-
-  it('does not require Dojah credentials while KYC runs on the fake provider', () => {
-    expect(() => validateEnv({ ...valid, KYC_PROVIDER: 'fake' })).not.toThrow();
-  });
-
-  it('requires Dojah credentials when KYC_PROVIDER is real', () => {
-    expect(() => validateEnv({ ...valid, KYC_PROVIDER: 'real' })).toThrow(
-      /DOJAH_APP_ID[\s\S]*DOJAH_SECRET_KEY[\s\S]*DOJAH_BASE_URL/,
-    );
-  });
-
-  it('accepts a complete real Dojah configuration', () => {
-    expect(() =>
-      validateEnv({
-        ...valid,
-        KYC_PROVIDER: 'real',
-        DOJAH_APP_ID: 'app',
-        DOJAH_SECRET_KEY: 'secret',
-        DOJAH_BASE_URL: 'https://sandbox.dojah.io',
-      }),
-    ).not.toThrow();
-  });
-
-  it('rejects an unknown NODE_ENV', () => {
-    expect(() => validateEnv({ ...valid, NODE_ENV: 'staging' })).toThrow(
-      /NODE_ENV/,
-    );
+      validateEnv({ DATABASE_URL: valid.DATABASE_URL, NODE_ENV: 'development', SMS_PROVIDER: 'fake', KYC_PROVIDER: 'fake' }),
+    ).toThrow(/DOJAH_APP_ID/);
   });
 });

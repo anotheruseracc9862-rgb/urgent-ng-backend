@@ -1,10 +1,12 @@
 import { createHmac } from 'node:crypto';
-import { resolveProviderMode, type ProviderMode } from './env.validation.js';
+import type { ProviderMode } from './env.validation.js';
 
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'production';
   port: number;
   corsOrigins: string[];
+  /** Proxy hops to trust for the client IP (X-Forwarded-For). 0 trusts none. */
+  trustProxyHops: number;
   database: {
     url: string;
   };
@@ -53,6 +55,12 @@ export interface AppConfig {
   maps: {
     apiKey: string;
   };
+  sms: {
+    apiKey: string;
+    senderId: string;
+    baseUrl: string;
+    channel: string;
+  };
   providers: {
     google: ProviderMode;
     kyc: ProviderMode;
@@ -65,8 +73,9 @@ export interface AppConfig {
   };
 }
 
-const mode = (value: string | undefined): ProviderMode =>
-  resolveProviderMode(value, process.env.NODE_ENV) === 'real' ? 'real' : 'fake';
+// There is no switch: the automated tests (NODE_ENV=test) use in-process stand-ins for every vendor,
+// everything else uses the vendor.
+const mode = (): ProviderMode => (process.env.NODE_ENV === 'test' ? 'fake' : 'real');
 
 // Secrets default to a clearly fake value outside production so cursors and
 // encrypted columns work locally. Production requires real values (see
@@ -83,7 +92,8 @@ export default (): AppConfig => {
       ? process.env.NODE_ENV
       : 'development',
   port: Number.parseInt(process.env.PORT ?? '4000', 10),
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3001')
+  trustProxyHops: Number.parseInt(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'), 10),
+  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:3001')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
@@ -138,15 +148,21 @@ export default (): AppConfig => {
   maps: {
     apiKey: process.env.MAPS_API_KEY ?? '',
   },
+  sms: {
+    apiKey: process.env.SMS_API_KEY ?? '',
+    senderId: process.env.SMS_SENDER_ID ?? '',
+    baseUrl: process.env.SMS_BASE_URL ?? 'https://api.ng.termii.com',
+    channel: process.env.SMS_CHANNEL ?? 'generic',
+  },
   providers: {
-    google: mode(process.env.GOOGLE_AUTH_PROVIDER),
-    kyc: mode(process.env.KYC_PROVIDER),
-    maps: mode(process.env.MAPS_PROVIDER),
-    sms: mode(process.env.SMS_PROVIDER),
-    email: mode(process.env.EMAIL_PROVIDER),
-    push: mode(process.env.PUSH_PROVIDER),
-    storage: mode(process.env.STORAGE_PROVIDER),
-    payments: mode(process.env.PAYMENTS_PROVIDER),
+    google: mode(),
+    kyc: mode(),
+    maps: mode(),
+    sms: mode(),
+    email: mode(),
+    push: mode(),
+    storage: mode(),
+    payments: mode(),
   },
 };
 };

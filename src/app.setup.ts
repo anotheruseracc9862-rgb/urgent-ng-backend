@@ -23,6 +23,14 @@ export function configureApp(app: INestApplication): void {
 
   app.use(cookieParser());
 
+  // Behind the web app's proxy or a load balancer the socket address is the proxy's. Trusting the
+  // configured number of hops makes `req.ip` the real client, which the rate limits, the audit log
+  // and consent records depend on.
+  const hops = config.get('trustProxyHops') ?? 0;
+  if (hops > 0) {
+    (app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void }).set('trust proxy', hops);
+  }
+
   app.enableCors({
     origin: config.getOrThrow('corsOrigins'),
     credentials: true,

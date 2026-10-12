@@ -33,8 +33,11 @@ const LOG_CALL = /\b(?:this\.)?(?:logger|log)\.(?:log|warn|error|debug|verbose|f
 /** Interpolations that are fine although the name matches: they log a count, a flag or an id. */
 const SAFE_INTERPOLATION = /\$\{\s*(?:[\w.]*\.)?(?:\w*(?:Count|Id|Ids|Length|Kind|Type))\s*\}/g;
 
+/** Files that write a code to the log on purpose, with the reason. Development only, refused in production. */
+const ALLOWED_TO_LOG_CODES = new Set(['src\\common\\providers\\log-otp.provider.ts', 'src/common/providers/log-otp.provider.ts']);
+
 describe('Personal data in logs (P12-04)', () => {
-  const files = sourceFiles('src');
+  const files = sourceFiles('src').filter((file) => !ALLOWED_TO_LOG_CODES.has(file));
 
   it('does not use console in application code', () => {
     const offenders = files.filter((file) => /\bconsole\.(log|warn|error|debug|info)\(/.test(readFileSync(file, 'utf8')) && !file.endsWith('main.ts'));

@@ -31,11 +31,10 @@ npm run start:dev      # http://localhost:4000/api/v1
   the app with a message naming it. In production, `JWT_SECRET`,
   `JWT_REFRESH_SECRET`, `DATA_ENCRYPTION_KEY` and `HMAC_SECRET` must each be at
   least 32 characters.
-- Every external provider (KYC, maps, SMS, email, push, storage, payments) has a
-  mode that follows `NODE_ENV`: `fake` in development and test (no vendor account
-  needed), `real` in production, where `fake` is refused at boot. To try one live
-  vendor in development, set its variable (`STORAGE_PROVIDER=real`, `KYC_PROVIDER=real`,
-  and so on); leave it unset otherwise.
+- Every external vendor (KYC, maps, SMS, email, push, storage, payments, Google sign-in) is
+  used the same way in development and production, so there is no fake/real setting. The app
+  refuses to start until each vendor's keys are set (the error names the variable). The
+  automated tests (`NODE_ENV=test`) run on in-process stand-ins instead.
 
 ## Process types
 
@@ -127,16 +126,16 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Limits.** JPEG, PNG and WebP only, `MAX_UPLOAD_BYTES` (5 MB) per file, hard cap `SERVER_HARD_UPLOAD_BYTES` (8 MB). Config keys `MEDIA_UPLOAD_URL_SECONDS`, `MEDIA_DOWNLOAD_URL_SECONDS`, `MEDIA_ORPHAN_HOURS`, `MEDIA_MAX_DIMENSION` are editable by an admin.
 - **Processing** runs in the worker process (`npm run start:worker`): real type from the file bytes, EXIF and GPS removed, scaled to 1600 px, 320 px thumbnail, moderation hook. Start the scheduler (`npm run start:scheduler`) to delete abandoned uploads.
 - **Attach media from another module** with `MediaService.requireReadyOwned(userId, mediaId, purpose)`. **Let other users see a purpose** by registering a `MediaAccessPolicy` on `MediaAccessService` in `onModuleInit`; a purpose with no policy is visible to its owner only.
-- **Storage.** `STORAGE_PROVIDER=fake` (default, in memory) or `real` (AWS S3; set `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Keep the bucket private. The IAM user needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::BUCKET/*` **and `s3:ListBucket` on `arn:aws:s3:::BUCKET`**; without ListBucket, S3 answers 403 instead of 404 for an object that was never uploaded, and confirming such an upload fails with an error instead of `MEDIA_INVALID`. Add the bucket's CORS rule for the web origins (PUT, GET, HEAD).
+- **Storage.** AWS S3 (set `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Keep the bucket private. The IAM user needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::BUCKET/*` **and `s3:ListBucket` on `arn:aws:s3:::BUCKET`**; without ListBucket, S3 answers 403 instead of 404 for an object that was never uploaded, and confirming such an upload fails with an error instead of `MEDIA_INVALID`. Uploads go through the API (`PUT /media/{id}/content`), so the bucket needs **no CORS rule**; downloads are short-lived signed URLs opened by the browser, which are plain navigations or `<img>` loads and need no CORS either.
 - **Profile photo.** `PUT /me/photo` with a `READY` `PROFILE_PHOTO`, `DELETE /me/photo`.
-- **Tests.** `src/test/media.helper.ts` builds real images (with GPS EXIF if asked) and walks the upload flow against the fake storage.
+- **Tests.** `src/test/media.helper.ts` builds real images (with GPS EXIF if asked) and walks the upload flow against the test stand-in for storage.
 
 ## Runner profile and verification
 
 - **Routes.** `GET|PUT /runner/profile`, `PUT /runner/availability`, `GET /runner/eligibility`, `GET /verification`, `POST /verification/attempts` (with an `Idempotency-Key`), `GET /verification/attempts/:id`.
 - **Verification flow.** Upload a selfie as media with purpose `VERIFICATION_INPUT` and wait for `READY`. Then `POST /verification/attempts` with the 11-digit `nin` and the `selfieMediaId`. The answer is the finished attempt (`VERIFIED` or `FAILED` with a `failureReason`). The NIN is never stored, logged or returned.
 - **Check eligibility** with `RunnerEligibilityService` (`canOffer`, `canBrowseFeed`, `assertCanOffer`). Never re-implement these checks in another module.
-- **Providers.** `KYC_PROVIDER=fake` (default) is deterministic by the last four digits of the NIN: `0000` selfie mismatch, `1111` NIN not found, `8888` timeout, `9999` provider error, anything else verified. `KYC_PROVIDER=real` needs `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` and `DOJAH_BASE_URL`, and has not yet been run against the live sandbox.
+- **Providers.** Under test the KYC stand-in is deterministic by the last four digits of the NIN: `0000` selfie mismatch, `1111` NIN not found, `8888` timeout, `9999` provider error, anything else verified. The real adapter needs `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` and `DOJAH_BASE_URL`, and has not yet been run against the live sandbox.
 - **Config** (editable by an admin): `VERIFICATION_ATTEMPTS_PER_FEE`, `VERIFICATION_RETRY_COOLDOWN_HOURS`, `VERIFICATION_VALIDITY_DAYS` (0 = never expires), `KYC_SELFIE_MATCH_THRESHOLD`, `KYC_REQUEST_TIMEOUT_SECONDS`, `STAGED_SELFIE_RETENTION_DAYS`, `RUNNER_AREA_MIN_KM`, `RUNNER_AREA_MAX_KM`. The scheduler (`npm run start:scheduler`) expires verifications and deletes staged selfies.
 
 ## Errands and marketplace
@@ -206,7 +205,7 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Never the errand payment.** Money between requester and runner never touches this code (INV-008). Only Runner Pro, boosts and the verification fee are sold here.
 - **A payment is believed only after the gateway confirms it.** `PaymentSettlementService.settle(reference)` asks `verifyTransaction`; webhook, "check my payment" and reconciliation all end there, and it is idempotent. Grants are entitlements (`entitlements` table); ask `OfferLimitService.isPro` or read the table, never infer from an order.
 - **Prices** come from `price_versions`; an order keeps the version it was made at. Prices are VAT-inclusive at `VAT_RATE`.
-- **Providers.** `PAYMENTS_PROVIDER=fake` in development and test (`FakePaymentProvider.markPaid(reference)` stands in for the customer paying). `real` needs `PAYSTACK_SECRET_KEY`; point Paystack's webhook at `/api/v1/webhooks/paystack`.
+- **Providers.** Under test `FakePaymentProvider.markPaid(reference)` stands in for the customer paying. The real adapter needs `PAYSTACK_SECRET_KEY`; point Paystack's webhook at `/api/v1/webhooks/paystack`.
 - **Scheduler.** `SubscriptionSweeper` (renewals, expiry), `BoostExpirySweeper`, `ReconciliationSweeper` (daily).
 
 
@@ -216,7 +215,7 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Proof for a sensitive change.** Changing the password or the contact asks for the current password. A Google-only account has none: it sends a fresh `googleIdToken` for the linked Google account instead. Changing the password ends every other session.
 - **Contact change** is two steps: the code goes to the NEW value, and nothing changes until it is confirmed. A value held by another account answers `IDENTIFIER_TAKEN`.
 - **Quiet hours** are kept on every preference row of the user (Lagos time) and hold back marketplace push only. `null` for both times goes back to the 22:00 to 06:00 default.
-- **Google sign-in.** The ID token is verified by `IGoogleIdentityProvider` and never stored. A linked account signs in; a verified email that matches an account links to it; otherwise the first sign-in needs `consents` (without them: 409 `GOOGLE_SIGNUP_REQUIRED` with the email and name). Fake provider in tests: `FakeGoogleIdentityProvider.token(subject, email, name)`. Real: `GOOGLE_AUTH_PROVIDER=real` and `GOOGLE_CLIENT_ID`; with no client id the route answers 503 and nothing else is affected.
+- **Google sign-in.** The ID token is verified by `IGoogleIdentityProvider` and never stored. A linked account signs in; a verified email that matches an account links to it; otherwise the first sign-in needs `consents` (without them: 409 `GOOGLE_SIGNUP_REQUIRED` with the email and name). Fake provider in tests: `FakeGoogleIdentityProvider.token(subject, email, name)`. Needs `GOOGLE_CLIENT_ID`; with no client id the route answers 503 and nothing else is affected.
 
 ## Verification details
 
@@ -260,3 +259,6 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Security checks (run in the integration suite).** `route-walker.int-spec.ts` (every route has an authentication decision, admin routes name a permission, credential-taking public routes are rate limited, every protected route answers 401 without credentials), `authorization-matrix.http.int-spec.ts` (Backend PRD 9.4 row by row), `pii-in-logs.spec.ts` (no personal value in a log line, no `console`). `npm audit --omit=dev` reported no vulnerabilities.
 - **Performance.** Opt-in because it seeds a lot: `RUN_PERF=1 npx vitest run --config ./vitest.config.int.ts src/perf src/marketplace/feed.performance`. On Windows with Docker Desktop, put `127.0.0.1` rather than `localhost` in `DATABASE_URL` and `REDIS_URL`.
 - **Critical flows.** `src/e2e/critical-flows.int-spec.ts` runs register to rating and account deletion through the HTTP API and lists the suite that proves each other flow of Backend PRD 34.2.
+
+- **SMS.** One-time codes are sent through Termii (`SMS_API_KEY`, `SMS_SENDER_ID`, optional `SMS_BASE_URL`, `SMS_CHANNEL` of `generic` or `dnd`); email codes go through the SMTP settings. A sender id must be approved by Termii before messages are delivered. **With `SMS_API_KEY` empty (development only) the code is written to the backend log** (`LogOtpProvider`, search for `one-time code for`); production refuses to start without the keys.
+- **Development helper (only under `NODE_ENV=test` stand-ins, never in production).** `DevToolsModule` serves `GET /api/v1/dev/last-otp?destination=` for the fake SMS/email code (end-to-end suites). Absent in production; answers 404 when the real SMS vendor is in use. `TRUST_PROXY_HOPS` (default 1 in production, 0 otherwise) makes `req.ip` the real client behind a proxy.

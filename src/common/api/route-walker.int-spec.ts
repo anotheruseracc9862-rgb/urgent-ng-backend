@@ -42,6 +42,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'GET /shared/{token}': 'read-only trusted-contact link (the unguessable token is the credential)',
   'POST /shared/{token}/concern': 'trusted-contact concern (the unguessable token is the credential)',
   'POST /webhooks/paystack': 'payment webhook (verified by signature)',
+  'GET /dev/last-otp': 'development only: last code sent by the fake SMS provider',
   'POST /admin/auth/login': 'admin sign-in',
   'POST /admin/auth/mfa/enrol': 'admin MFA set-up (the pending login token is the credential)',
   'POST /admin/auth/mfa/verify': 'admin MFA check (the pending login token is the credential)',
@@ -132,8 +133,8 @@ describe('Route walker (P12-04)', () => {
   });
 
   it('puts a named rate limit on every public route that takes a credential, a code or a token', () => {
-    // Read-only public lists stay on the global limit.
-    const OPEN_READS = (key: string) => /^GET \/(health|reference|billing\/products\/public)/.test(key);
+    // Read-only public lists stay on the global limit; the development helpers are absent in production.
+    const OPEN_READS = (key: string) => /^(GET \/(health|reference|billing\/products\/public)|\w+ \/dev\/)/.test(key);
     const unlimited = Object.keys(PUBLIC_ROUTES)
       .filter((key) => !OPEN_READS(key))
       .filter((key) => routes.find((r) => r.key === key)?.limit === undefined);

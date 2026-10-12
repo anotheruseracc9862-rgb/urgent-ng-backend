@@ -51,6 +51,7 @@ import { BillingModule } from './billing/billing.module.js';
 import { BoostsModule } from './boosts/boosts.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { RetentionModule } from './retention/retention.module.js';
+import { DevToolsModule } from './dev-tools/dev-tools.module.js';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -132,6 +133,8 @@ const isTest = process.env.NODE_ENV === 'test';
     BillingModule,
     AnalyticsModule,
     RetentionModule,
+    // Helpers for the fake providers; never present in production.
+    ...(process.env.NODE_ENV === 'production' ? [] : [DevToolsModule]),
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

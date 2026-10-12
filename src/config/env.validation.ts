@@ -3,7 +3,6 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
-  IsOptional,
   IsString,
   Matches,
   Max,
@@ -13,41 +12,24 @@ import {
   validateSync,
 } from 'class-validator';
 
-export const PROVIDER_MODES = ['fake', 'real'] as const;
-export type ProviderMode = (typeof PROVIDER_MODES)[number];
+export type ProviderMode = 'fake' | 'real';
 
 const isProduction = (env: EnvironmentVariables): boolean =>
   env.NODE_ENV === 'production';
 
-const usesRealKyc = (env: EnvironmentVariables): boolean =>
-  env.KYC_PROVIDER === 'real';
+// The automated tests (NODE_ENV=test) run on in-process stand-ins and need no vendor keys; every
+// other environment uses the vendors and needs their keys.
+const usesVendors = (env: EnvironmentVariables): boolean => env.NODE_ENV !== 'test';
+const usesRealKyc = usesVendors;
+const usesRealEmail = usesVendors;
+const usesRealPush = usesVendors;
+const usesRealStorage = usesVendors;
 
-const usesRealEmail = (env: EnvironmentVariables): boolean =>
-  env.EMAIL_PROVIDER === 'real';
-
-const usesRealPush = (env: EnvironmentVariables): boolean =>
-  env.PUSH_PROVIDER === 'real';
-
-const usesRealStorage = (env: EnvironmentVariables): boolean =>
-  env.STORAGE_PROVIDER === 'real';
-
-const PROVIDER_VARS = [
-  'KYC_PROVIDER',
-  'MAPS_PROVIDER',
-  'SMS_PROVIDER',
-  'EMAIL_PROVIDER',
-  'PUSH_PROVIDER',
-  'STORAGE_PROVIDER',
-  'PAYMENTS_PROVIDER',
-] as const;
-
-/**
- * A vendor runs "real" in production and "fake" everywhere else. A `*_PROVIDER` variable is
- * only needed to override that in development (for example `STORAGE_PROVIDER=real` to try
- * the live bucket). Production never accepts "fake".
- */
-export const resolveProviderMode = (value: unknown, nodeEnv: unknown): string =>
-  value ? String(value) : nodeEnv === 'production' ? 'real' : 'fake';
+// Outside production an empty SMS key means "no SMS vendor yet": codes are logged (LogOtpProvider).
+const needsSmsKeys = (env: EnvironmentVariables): boolean => isProduction(env);
+const usesRealMaps = usesVendors;
+const usesRealPayments = usesVendors;
+const usesRealGoogle = usesVendors;
 
 /**
  * Environment contract. Validated once at boot (fail fast) so a misconfigured
@@ -105,11 +87,6 @@ export class EnvironmentVariables {
   })
   HMAC_SECRET?: string;
 
-  // Provider modes: "fake" (default) uses in-process fakes, "real" calls the vendor.
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  KYC_PROVIDER: ProviderMode = 'fake';
-
   // Dojah credentials are only required when the KYC provider is "real".
   @ValidateIf(usesRealKyc)
   @IsString()
@@ -126,17 +103,28 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DOJAH_BASE_URL?: string;
 
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  MAPS_PROVIDER: ProviderMode = 'fake';
+  // A server key with the Geocoding and Distance Matrix APIs enabled.
+  @ValidateIf(usesRealMaps)
+  @IsString()
+  @IsNotEmpty()
+  MAPS_API_KEY?: string;
 
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  SMS_PROVIDER: ProviderMode = 'fake';
+  @ValidateIf(usesRealGoogle)
+  @IsString()
+  @IsNotEmpty()
+  GOOGLE_CLIENT_ID?: string;
 
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  EMAIL_PROVIDER: ProviderMode = 'fake';
+  // Termii: the API key and the registered sender id. Email codes go through the SMTP settings.
+  // Required in production; empty elsewhere means the code is written to the backend log.
+  @ValidateIf(needsSmsKeys)
+  @IsString()
+  @IsNotEmpty()
+  SMS_API_KEY?: string;
+
+  @ValidateIf(needsSmsKeys)
+  @IsString()
+  @IsNotEmpty()
+  SMS_SENDER_ID?: string;
 
   // SMTP settings (any SMTP service: Resend, Mailgun...) are only required when the email provider is "real".
   @ValidateIf(usesRealEmail)
@@ -166,19 +154,11 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   SMTP_PASS?: string;
 
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  PUSH_PROVIDER: ProviderMode = 'fake';
-
   // The Firebase service account (JSON, or the same JSON base64-encoded), only when push is "real".
   @ValidateIf(usesRealPush)
   @IsString()
   @IsNotEmpty()
   FIREBASE_CREDENTIALS?: string;
-
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  STORAGE_PROVIDER: ProviderMode = 'fake';
 
   // S3 settings are only required when the storage provider is "real".
   @ValidateIf(usesRealStorage)
@@ -201,35 +181,21 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   AWS_SECRET_ACCESS_KEY?: string;
 
-  @IsOptional()
-  @IsIn(PROVIDER_MODES)
-  PAYMENTS_PROVIDER: ProviderMode = 'fake';
+  @ValidateIf(usesRealPayments)
+  @IsString()
+  @IsNotEmpty()
+  PAYSTACK_SECRET_KEY?: string;
 }
 
 export function validateEnv(
   raw: Record<string, unknown>,
 ): Record<string, unknown> {
-  const withModes: Record<string, unknown> = { ...raw };
-  for (const name of PROVIDER_VARS) {
-    withModes[name] = resolveProviderMode(raw[name], raw.NODE_ENV);
-  }
-  const parsed = plainToInstance(EnvironmentVariables, withModes);
+  const parsed = plainToInstance(EnvironmentVariables, raw);
   const errors = validateSync(parsed, { whitelist: false });
-  const fakeInProduction =
-    raw.NODE_ENV === 'production'
-      ? PROVIDER_VARS.filter((name) => withModes[name] === 'fake').map(
-          (name) => `  - ${name}: must not be "fake" in production`,
-        )
-      : [];
-  if (errors.length > 0 || fakeInProduction.length > 0) {
-    const lines = [
-      ...errors.flatMap((error) =>
-        Object.values(error.constraints ?? {}).map(
-          (message) => `  - ${error.property}: ${message}`,
-        ),
-      ),
-      ...fakeInProduction,
-    ];
+  if (errors.length > 0) {
+    const lines = errors.flatMap((error) =>
+      Object.values(error.constraints ?? {}).map((message) => `  - ${error.property}: ${message}`),
+    );
     throw new Error(`Invalid environment configuration:\n${lines.join('\n')}`);
   }
   return raw;

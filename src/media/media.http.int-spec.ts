@@ -69,8 +69,69 @@ describe('Media (Phase 3)', () => {
     await app.close();
   });
 
+  describe('PUT /media/:id/content', () => {
+    const requestUpload = async (user: User, sizeBytes: number, mimeType = 'image/png') =>
+      (
+        await as(user)
+          .post('/media/uploads')
+          .set('Idempotency-Key', randomUUID())
+          .send({ purpose: 'PROFILE_PHOTO', mimeType, sizeBytes })
+          .expect(201)
+      ).body.data as { media: { id: string }; upload: { url: string; headers: Record<string, string> } };
+    const put = (user: { accessToken: string }, id: string, bytes: Buffer, type = 'image/png') =>
+      request(app.getHttpServer()).put(`${API}/media/${id}/content`).set('Authorization', `Bearer ${user.accessToken}`).set('Content-Type', type).send(bytes);
+
+    it('stores the bytes through the API so confirm and processing work, with no bucket access from the browser', async () => {
+      const user = await signedInUser(app);
+      const bytes = await makeImage('png');
+      const { media, upload } = await requestUpload(user, bytes.length);
+      expect(upload.url).toBe(`/api/v1/media/${media.id}/content`);
+
+      await request(app.getHttpServer())
+        .put(upload.url)
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .set(upload.headers)
+        .send(bytes)
+        .expect(204);
+      const stored = await row(media.id);
+      expect(Buffer.compare(await storage().getObject(stored.storageKey), bytes)).toBe(0);
+
+      await as(user).post(`/media/${media.id}/confirm`).expect(200);
+      expect((await row(media.id)).status).toBe('PROCESSING');
+    });
+
+    it('refuses a different type, a body larger or smaller than declared, and nothing is stored', async () => {
+      const user = await signedInUser(app);
+      const { media } = await requestUpload(user, 10);
+      const key = (await row(media.id)).storageKey;
+
+      expect((await put(user, media.id, Buffer.alloc(10, 1), 'image/jpeg')).body.error.details.reason).toBe('TYPE_MISMATCH');
+      expect((await put(user, media.id, Buffer.alloc(11, 1))).status).toBe(400);
+      expect((await put(user, media.id, Buffer.alloc(9, 1))).body.error.details.reason).toBe('SIZE_MISMATCH');
+      expect((await storage().headObject(key)).exists).toBe(false);
+      await put(user, media.id, Buffer.alloc(10, 1)).expect(204);
+      expect((await storage().headObject(key)).exists).toBe(true);
+    });
+
+    it('is the owner only, and refuses once the upload was confirmed', async () => {
+      const owner = await signedInUser(app);
+      const other = await signedInUser(app);
+      const bytes = await makeImage('png');
+      const { media } = await requestUpload(owner, bytes.length);
+
+      // Someone else's file is answered like a missing one (MEDIA_INVALID, as for confirm and GET).
+      expect((await put(other, media.id, bytes)).status).toBe(400);
+      await request(app.getHttpServer()).put(`${API}/media/${media.id}/content`).set('Content-Type', 'image/png').send(bytes).expect(401);
+      await put(owner, media.id, bytes).expect(204);
+      await as(owner).post(`/media/${media.id}/confirm`).expect(200);
+      const again = await put(owner, media.id, bytes);
+      expect(again.status).toBe(409);
+      expect(again.body.error.code).toBe('RESOURCE_CONFLICT');
+    });
+  });
+
   describe('POST /media/uploads', () => {
-    it('creates a PENDING row and a presigned upload for exactly that file', async () => {
+    it('creates a PENDING row and an upload route on the API for exactly that file', async () => {
       const user = await signedInUser(app);
 
       const res = await as(user)
@@ -80,16 +141,17 @@ describe('Media (Phase 3)', () => {
         .expect(201);
 
       expect(res.body.data.media).toMatchObject({ purpose: 'ERRAND_PHOTO', status: 'PENDING', mimeType: 'image/png', sizeBytes: 12345 });
-      expect(res.body.data.upload).toMatchObject({ method: 'PUT', headers: { 'Content-Type': 'image/png' } });
+      expect(res.body.data.upload).toMatchObject({
+        method: 'PUT',
+        url: `/api/v1/media/${res.body.data.media.id}/content`,
+        headers: { 'Content-Type': 'image/png' },
+      });
       expect(JSON.stringify(res.body)).not.toContain('storageKey');
       const stored = await row(res.body.data.media.id);
       expect(stored.storageKey).toContain(user.userId);
       expect(stored.storageKey).toContain('errand_photo');
-      expect(storage().getCalls('createPresignedUpload')[0].args[0]).toMatchObject({
-        contentType: 'image/png',
-        maxBytes: 12345,
-        expiresInSeconds: 900,
-      });
+      // No presigned URL: the bucket is never given to the browser.
+      expect(storage().getCalls('createPresignedUpload')).toHaveLength(0);
     });
 
     it('needs an Idempotency-Key and replays the first answer for a repeated key', async () => {
@@ -157,13 +219,6 @@ describe('Media (Phase 3)', () => {
       const res = await send().expect(429);
 
       expect(res.body.error.code).toBe('RATE_LIMITED');
-    });
-
-    it('the signature enforces the declared size (fake storage mirrors S3)', async () => {
-      const user = await signedInUser(app);
-      const { storageKey } = await requestAndUpload(app, user.accessToken, Buffer.alloc(100, 1), { mimeType: 'image/png' });
-
-      expect(() => storage().simulateClientUpload(storageKey, Buffer.alloc(101), 'image/png')).toThrow('size limit');
     });
   });
 

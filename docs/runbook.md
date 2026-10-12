@@ -82,12 +82,12 @@ The seed is safe to run again: it only adds what is missing. After upgrading to 
 
 ## Live provider checklist (before the first real launch)
 
-Run each with the vendor's sandbox keys and `*_PROVIDER=real`; the fakes cannot prove these:
+Run each with the vendor's sandbox keys; the test stand-ins cannot prove these:
 
 - Paystack: initialise, pay, webhook signature, refund, verify by reference.
 - KYC (Dojah): selfie match and ID lookup, with the timeout in `KYC_REQUEST_TIMEOUT_SECONDS`.
 - SMS (Termii) and email (Mailgun/SMTP): one-time code and receipt delivery.
 - Push (FCM): token registration and a push to a real device.
 - Google sign-in: a real ID token against `GOOGLE_CLIENT_ID` (checked 2026-10-12 with a real account).
-- Google Maps: `MAPS_PROVIDER=real` with a server `MAPS_API_KEY`; one geocode, one reverse geocode (the area name must come back for a Lagos point) and one distance call.
-- Storage (S3): presigned upload, thumbnail, signed download, delete.
+- Google Maps: a server `MAPS_API_KEY`; one geocode, one reverse geocode (the area name must come back for a Lagos point) and one distance call.
+- Storage (S3): upload through `PUT /media/{id}/content`, confirm, thumbnail, signed download, delete. The bucket stays private and needs no CORS.

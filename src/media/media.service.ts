@@ -97,12 +97,9 @@ export class MediaService {
 
     const id = randomUUID();
     const storageKey = mediaKeys.original(ownerId, input.purpose, id, ALLOWED_IMAGE_TYPES[input.mimeType]);
-    const signed = await this.storage.createPresignedUpload({
-      key: storageKey,
-      contentType: input.mimeType,
-      maxBytes: input.sizeBytes,
-      expiresInSeconds: await this.config.get('MEDIA_UPLOAD_URL_SECONDS'),
-    });
+    // The file goes to the API (PUT /media/{id}/content), which writes it to storage: the browser
+    // never talks to the bucket, so the bucket needs no CORS and no public address.
+    const expiresAt = new Date(Date.now() + (await this.config.get('MEDIA_UPLOAD_URL_SECONDS')) * 1000);
 
     const media = await this.prisma.client.media.create({
       data: {
@@ -117,8 +114,58 @@ export class MediaService {
 
     return {
       media: toMediaView(media),
-      upload: { url: signed.url, method: signed.method, headers: signed.headers, expiresAt: signed.expiresAt },
+      upload: {
+        url: `/api/v1/media/${id}/content`,
+        method: 'PUT',
+        headers: { 'Content-Type': input.mimeType },
+        expiresAt,
+      },
     };
+  }
+
+  /**
+   * Step 2: receive the bytes and store them. The size and type must be exactly what was declared
+   * in step 1, and the body is read only up to that size, so a large body is never buffered.
+   * Safe to repeat while the upload is still PENDING (the object is replaced).
+   */
+  async uploadContent(
+    ownerId: string,
+    mediaId: string,
+    contentType: string,
+    body: AsyncIterable<Buffer | Uint8Array | string>,
+  ): Promise<void> {
+    const media = await this.findOwned(ownerId, mediaId);
+    if (media.status !== 'PENDING') {
+      throw DomainException.of(RESOURCE_CONFLICT, { message: 'This file was already confirmed.', details: { reason: 'NOT_PENDING' } });
+    }
+    const type = contentType.split(';')[0].trim().toLowerCase();
+    if (type !== media.mimeType) {
+      throw DomainException.of(MEDIA_INVALID, {
+        message: 'The file type does not match what was declared.',
+        details: { reason: 'TYPE_MISMATCH', declared: media.mimeType },
+      });
+    }
+    const declared = Number(media.sizeBytes);
+    const chunks: Buffer[] = [];
+    let received = 0;
+    for await (const chunk of body) {
+      const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk);
+      received += buffer.length;
+      if (received > declared) {
+        throw DomainException.of(MEDIA_INVALID, {
+          message: 'The file is larger than declared.',
+          details: { reason: REJECTION.TOO_LARGE, maxBytes: declared },
+        });
+      }
+      chunks.push(buffer);
+    }
+    if (received !== declared) {
+      throw DomainException.of(MEDIA_INVALID, {
+        message: 'The file is smaller than declared.',
+        details: { reason: 'SIZE_MISMATCH', declared, received },
+      });
+    }
+    await this.storage.putObject(media.storageKey, Buffer.concat(chunks), media.mimeType);
   }
 
   /**

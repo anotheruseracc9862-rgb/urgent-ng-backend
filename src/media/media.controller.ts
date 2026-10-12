@@ -1,4 +1,4 @@
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -11,7 +11,10 @@ import {
   Post,
   Put,
   Query,
+  Req,
+  UnprocessableEntityException,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiEnveloped, ApiErrors, ApiConsumerAuth, ApiAdminAuth } from '../common/api/api-docs.js';
 import { Idempotent } from '../common/idempotency/idempotent.decorator.js';
 import { ConsumerAuth } from '../auth/decorators/consumer-auth.decorator.js';
@@ -41,7 +44,7 @@ export class MediaController {
     private readonly access: MediaAccessService,
   ) {}
 
-  /** Step 1: ask for a presigned URL. Needs an `Idempotency-Key` so a retried request reuses the first answer. */
+  /** Step 1: declare the file (type and size) and get the upload route. Needs an `Idempotency-Key` so a retried request reuses the first answer. */
   @Post('uploads')
   @Idempotent({ operation: 'media-upload-request' })
   @ConsumerAuth()
@@ -50,6 +53,24 @@ export class MediaController {
   @ApiErrors(400, 429)
   requestUpload(@CurrentUser() user: AuthenticatedUser, @Body() dto: RequestUploadDto) {
     return this.media.requestUpload(user.userId, dto);
+  }
+
+  /**
+   * Step 2: send the file bytes here (`PUT`, body is the raw image, `Content-Type` is the declared
+   * type, exact declared length). The backend stores it; the browser never contacts the bucket.
+   */
+  @Put(':id/content')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ConsumerAuth()
+  @ApiConsumerAuth()
+  @ApiBody({ description: 'The raw image bytes.', schema: { type: 'string', format: 'binary' }, required: true })
+  @ApiConsumes('image/jpeg', 'image/png', 'image/webp')
+  @ApiEnveloped(null, { status: 204 })
+  @ApiErrors(400, 404, 409)
+  async uploadContent(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Req() req: Request): Promise<void> {
+    const contentType = String(req.headers['content-type'] ?? '');
+    if (!contentType) throw new UnprocessableEntityException('Content-Type is required.');
+    await this.media.uploadContent(user.userId, id, contentType, req);
   }
 
   /** Step 3: after the PUT, confirm. Safe to repeat. Poll `GET /media/:id` until `status` is READY or REJECTED. */
