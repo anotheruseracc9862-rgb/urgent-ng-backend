@@ -77,6 +77,7 @@ export const ERROR_CATALOGUE: Record<ErrorCode, ErrorCatalogueEntry> = {
 
   [Codes.SUBSCRIPTION_NOT_ACTIVE]: { status: HttpStatus.FORBIDDEN, message: 'An active subscription is required.' },
   [Codes.BOOST_NOT_ELIGIBLE]: { status: HttpStatus.CONFLICT, message: 'This errand cannot be boosted.' },
+  [Codes.PAYMENT_PROVIDER_UNAVAILABLE]: { status: HttpStatus.SERVICE_UNAVAILABLE, message: 'The payment service is not available right now. Try again in a moment.' },
   [Codes.MEDIA_INVALID]: { status: HttpStatus.BAD_REQUEST, message: 'The file is not valid.' },
   [Codes.MEDIA_NOT_READY]: { status: HttpStatus.CONFLICT, message: 'The file is still being processed.' },
 };

@@ -217,7 +217,7 @@ export class OrderService {
       RETURNING id::text
     `;
     const orderId = rows[0].id;
-    const existing = await this.prisma.payment.findFirst({ where: { orderId }, orderBy: { createdAt: 'desc' } });
+    const existing = await this.prisma.payment.findFirst({ where: { orderId }, orderBy: { id: 'desc' } });
     if (existing) {
       return { orderId, paymentId: existing.id, reference: existing.providerReference, amountKobo: amount, email: gatewayEmail(user) };
     }
@@ -249,7 +249,8 @@ export class OrderService {
       return;
     }
     // VERIFICATION_FEE
-    const fee = await this.config.get('VERIFICATION_FEE');
+    const price = await this.pricing.getCurrentPriceByCode(PRODUCT_CODE_BY_ORDER_TYPE.VERIFICATION_FEE);
+    const fee = price ? Number(price.amountKobo) : await this.config.get('VERIFICATION_FEE');
     if (fee <= 0) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'Verification is free right now. Nothing to pay.', details: { reason: 'NO_FEE' } });
     }
@@ -296,6 +297,7 @@ export class OrderService {
   }
 
   private latestPayment(orderId: string): Promise<Payment | null> {
-    return this.prisma.payment.findFirst({ where: { orderId }, orderBy: { createdAt: 'desc' } });
+    // By id, not created_at: ids are time-ordered by the database clock, whichever client wrote the row.
+    return this.prisma.payment.findFirst({ where: { orderId }, orderBy: { id: 'desc' } });
   }
 }

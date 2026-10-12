@@ -45,6 +45,9 @@ import { BadgesModule } from './badges/badges.module.js';
 import { LocationsModule } from './locations/locations.module.js';
 import { TrustedContactModule } from './trusted-contact/trusted-contact.module.js';
 import { RiskModule } from './risk/risk.module.js';
+import { BillingModule } from './billing/billing.module.js';
+import { BoostsModule } from './boosts/boosts.module.js';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test';
@@ -118,6 +121,9 @@ const isTest = process.env.NODE_ENV === 'test';
     LocationsModule,
     TrustedContactModule,
     RiskModule,
+    BoostsModule,
+    SubscriptionsModule,
+    BillingModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

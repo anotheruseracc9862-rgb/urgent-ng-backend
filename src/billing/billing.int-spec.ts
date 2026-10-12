@@ -64,6 +64,11 @@ describe('Platform billing (P10)', () => {
         VALUES (${row[0].id}::uuid, ${p.kobo}, 'NGN', now() - interval '1 day')`;
     }
   }
+  /** A new current price for a product, as an admin would set it. */
+  const setPrice = async (code: string, kobo: number) => {
+    const product = await prisma.$queryRaw<Array<{ id: string }>>`SELECT id::text FROM commercial_products WHERE code = ${code}`;
+    await prisma.$executeRaw`INSERT INTO price_versions (product_id, amount_kobo, currency, effective_from) VALUES (${product[0].id}::uuid, ${kobo}, 'NGN', now())`;
+  };
   const setConfig = (key: string, value: unknown) =>
     prisma.$executeRawUnsafe(
       `INSERT INTO config_values (key, value_json, version, effective_from, updated_at) VALUES ($1, $2::jsonb, 1, now() - interval '1 minute', now())`,
@@ -123,13 +128,14 @@ describe('Platform billing (P10)', () => {
       const runner = await readyRunner(app);
       const key = randomUUID();
 
-      const [a, b] = await Promise.all([buyPro(runner, false, key), buyPro(runner, false, key)]);
+      // In parallel, one runs and the other is told the first is in flight; nothing is created twice.
+      await Promise.all([buyPro(runner, false, key), buyPro(runner, false, key)]);
+      const first = await buyPro(runner, false, key).expect(201);
+      const again = await buyPro(runner, false, key).expect(201);
 
-      expect(a.body.data.id).toBe(b.body.data.id);
+      expect(again.body.data.id).toBe(first.body.data.id);
       expect(await prisma.order.count()).toBe(1);
       expect(await prisma.payment.count()).toBe(1);
-      const again = await buyPro(runner, false, key).expect(201);
-      expect(again.body.data.id).toBe(a.body.data.id);
     });
 
     it('keeps an order on the price it was made at when the price changes', async () => {
@@ -160,15 +166,16 @@ describe('Platform billing (P10)', () => {
     it('answers 503 when the gateway is down, and the same key tries again', async () => {
       const runner = await readyRunner(app);
       const key = randomUUID();
-      gateway().scriptOutcomes('initializeTransaction', [undefined]);
       // A scripted outcome of undefined makes the fake return nothing: that is a failed checkout.
+      gateway().scriptOutcomes('initializeTransaction', [undefined]);
+
       const failed = await buyPro(runner, false, key);
-      expect([201, 503]).toContain(failed.status);
-      if (failed.status === 503) {
-        expect(failed.body.error.code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
-        const retried = await buyPro(runner, false, key).expect(201);
-        expect(retried.body.data.payment.authorizationUrl).toContain('fake-paystack.local');
-      }
+
+      expect(failed.status).toBe(503);
+      expect(failed.body.error.code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
+      const retried = await buyPro(runner, false, key).expect(201);
+      expect(retried.body.data.payment.authorizationUrl).toContain('fake-paystack.local');
+      expect(await prisma.order.count()).toBe(1);
     });
 
     it('can be switched off, and reading still works', async () => {
@@ -308,7 +315,7 @@ describe('Platform billing (P10)', () => {
       await pay((await buyPro(runner).expect(201)).body.data);
       expect(await isPro(runner.userId)).toBe(true);
 
-      await prisma.$executeRaw`UPDATE entitlements SET valid_until = now() - interval '1 second' WHERE user_id = ${runner.userId}::uuid`;
+      await prisma.$executeRaw`UPDATE entitlements SET valid_from = now() - interval '2 days', valid_until = now() - interval '1 second' WHERE user_id = ${runner.userId}::uuid`;
 
       expect(await isPro(runner.userId)).toBe(false);
       const view = (await get(runner, '/subscriptions/pro').expect(200)).body.data;
@@ -366,7 +373,7 @@ describe('Platform billing (P10)', () => {
       await prisma.$executeRaw`
         UPDATE subscriptions SET current_period_start = now() - interval '31 days', current_period_end = now() - interval '1 minute'
         WHERE user_id = ${runner.userId}::uuid`;
-      await prisma.$executeRaw`UPDATE entitlements SET valid_until = now() - interval '1 minute' WHERE user_id = ${runner.userId}::uuid`;
+      await prisma.$executeRaw`UPDATE entitlements SET valid_from = now() - interval '2 days', valid_until = now() - interval '1 minute' WHERE user_id = ${runner.userId}::uuid`;
       gateway().scriptOutcomes('chargeAuthorization', [{ status: 'failed', reference: 'x', amountKobo: 0 }]);
 
       await app.get(ProRenewalService).renewDue();
@@ -379,7 +386,7 @@ describe('Platform billing (P10)', () => {
       expect(await app.get(ProSubscriptionService).expireDue()).toBe(0);
 
       await prisma.$executeRaw`UPDATE subscriptions SET grace_ends_at = now() - interval '1 minute' WHERE user_id = ${runner.userId}::uuid`;
-      await prisma.$executeRaw`UPDATE entitlements SET valid_until = now() - interval '1 minute' WHERE user_id = ${runner.userId}::uuid`;
+      await prisma.$executeRaw`UPDATE entitlements SET valid_from = valid_from - interval '10 days', valid_until = valid_until - interval '10 days' WHERE user_id = ${runner.userId}::uuid`;
       expect(await app.get(ProSubscriptionService).expireDue()).toBe(1);
 
       expect((await prisma.subscription.findFirstOrThrow({ where: { userId: runner.userId } })).status).toBe('EXPIRED');
@@ -407,7 +414,7 @@ describe('Platform billing (P10)', () => {
     it('expiry never touches an offer that was already submitted', async () => {
       const s = await offerScene(app, categoryId);
       await pay((await buyPro(s.runner).expect(201)).body.data);
-      await prisma.$executeRaw`UPDATE entitlements SET valid_until = now() - interval '1 second' WHERE user_id = ${s.runner.userId}::uuid`;
+      await prisma.$executeRaw`UPDATE entitlements SET valid_from = now() - interval '2 days', valid_until = now() - interval '1 second' WHERE user_id = ${s.runner.userId}::uuid`;
 
       const offer = await prisma.offer.findUniqueOrThrow({ where: { id: s.offerId } });
 
@@ -467,7 +474,7 @@ describe('Platform billing (P10)', () => {
       expect(second.body.error.code).toBe('BOOST_NOT_ELIGIBLE');
       const s = await acceptedScene(app, categoryId);
       const closed = await buyBoost(s.requester, s.errandId);
-      expect(closed.status).toBe('409'.length === 3 ? 409 : 409);
+      expect(closed.status).toBe(409);
       expect(closed.body.error.code).toBe('BOOST_NOT_ELIGIBLE');
     });
 
@@ -517,7 +524,7 @@ describe('Platform billing (P10)', () => {
 
   describe('verification fee (Backend PRD 10.2)', () => {
     it('is skipped at zero, and with a fee blocks the first attempt until paid, granting the attempts once', async () => {
-      await setConfig('VERIFICATION_FEE', 50_000);
+      await setPrice('VERIFICATION_FEE', 50_000);
       const runner = await signedInUser(app);
       const overview = (await get(runner, '/verification').expect(200)).body.data;
       expect(overview).toMatchObject({ feeRequired: true, canStart: false, attemptsRemaining: 0 });
@@ -611,7 +618,7 @@ describe('Platform billing (P10)', () => {
     });
 
     it('refunds a verification fee when every attempt ended in a provider fault', async () => {
-      await setConfig('VERIFICATION_FEE', 50_000);
+      await setPrice('VERIFICATION_FEE', 50_000);
       const runner = await signedInUser(app);
       const order = (await post(runner, '/billing/orders', { type: 'VERIFICATION_FEE' }).expect(201)).body.data;
       await pay(order);

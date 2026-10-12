@@ -21,6 +21,10 @@ import { EnforcementExpirySweeper } from './enforcement-expiry.sweeper.js';
 import { BadgeRecomputeSweeper } from './badge-recompute.sweeper.js';
 import { LocationRetentionSweeper } from './location-retention.sweeper.js';
 import { TrustedLinkExpirySweeper } from './trusted-link-expiry.sweeper.js';
+import { BoostExpirySweeper, ReconciliationSweeper, SubscriptionSweeper } from './billing.sweepers.js';
+import { BillingModule } from '../billing/billing.module.js';
+import { BoostsModule } from '../boosts/boosts.module.js';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module.js';
 import { TrustedContactModule } from '../trusted-contact/trusted-contact.module.js';
 import { LocationsModule } from '../locations/locations.module.js';
 import { BadgesModule } from '../badges/badges.module.js';
@@ -36,8 +40,8 @@ import { SweeperRegistry } from './sweeper.registry.js';
  * Only the scheduler process starts them.
  */
 @Module({
-  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule, NotificationsModule, RatingsModule, ReliabilityModule, EnforcementModule, BadgesModule, LocationsModule, TrustedContactModule],
-  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, ReminderSweeper, RatingRevealSweeper, NoShowSweeper, EnforcementExpirySweeper, BadgeRecomputeSweeper, LocationRetentionSweeper, TrustedLinkExpirySweeper, SweeperRegistry],
+  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule, NotificationsModule, RatingsModule, ReliabilityModule, EnforcementModule, BadgesModule, LocationsModule, TrustedContactModule, BillingModule, BoostsModule, SubscriptionsModule],
+  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, ReminderSweeper, RatingRevealSweeper, NoShowSweeper, EnforcementExpirySweeper, BadgeRecomputeSweeper, LocationRetentionSweeper, TrustedLinkExpirySweeper, BoostExpirySweeper, SubscriptionSweeper, ReconciliationSweeper, SweeperRegistry],
   exports: [SweeperRegistry],
 })
 export class SchedulerModule {}

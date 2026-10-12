@@ -122,6 +122,12 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   // Subscription events
   'subscription.activated': QUEUE_NAMES.BILLING,
   'subscription.expired': QUEUE_NAMES.BILLING,
+  'subscription.cancelled': QUEUE_NAMES.BILLING,
+  'subscription.payment_failed': QUEUE_NAMES.BILLING,
+
+  // Order, payment and refund events
+  'order.paid': QUEUE_NAMES.BILLING,
+  'refund.completed': QUEUE_NAMES.BILLING,
 
   // Boost events
   'boost.activated': QUEUE_NAMES.MARKETPLACE,

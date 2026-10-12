@@ -94,6 +94,21 @@ export class NearbyMatchingService {
     return { matched: runners.length, immediate: immediate.length, delayed: later.length };
   }
 
+  /**
+   * The second wave for a boosted errand (Backend PRD 12.5, 22.5): everyone eligible nearby, up to
+   * `NEARBY_BOOST_WAVE_SIZE`, Pro or not, now. A runner who was in the first wave is not told
+   * again: the notification's dedupe key is the same, so the repeat is a no-op.
+   */
+  async onBoosted(errandId: string, occurredAt: Date): Promise<number> {
+    if (!(await this.isOpen(errandId))) return 0;
+    const size = await this.config.get('NEARBY_BOOST_WAVE_SIZE');
+    const runners = await this.eligibleRunners(errandId, size);
+    for (const runnerId of runners) {
+      await this.notify(errandId, runnerId, occurredAt);
+    }
+    return runners.length;
+  }
+
   /** The delayed part of the wave. Re-checks that the errand is still open. */
   async onDelayed(errandId: string, runnerIds: string[], occurredAt: Date): Promise<number> {
     if (!(await this.isOpen(errandId))) {

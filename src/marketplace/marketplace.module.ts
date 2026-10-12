@@ -9,7 +9,9 @@ import { MarketplaceFeedService } from './marketplace-feed.service.js';
 import { SavedErrandsService } from './saved-errands.service.js';
 import { FeedRateLimiter } from './feed-rate-limiter.js';
 import { MarketplaceMediaAccess } from './marketplace-media.access.js';
-import { FEED_BOOST_SOURCE, NoBoostSource } from './feed-boost.hook.js';
+import { FEED_BOOST_SOURCE } from './feed-boost.hook.js';
+import { BoostsModule } from '../boosts/boosts.module.js';
+import { BoostService } from '../boosts/boost.service.js';
 import { NearbyMatchingHandler } from './nearby-matching.handler.js';
 import { NearbyMatchingService } from './nearby-matching.service.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
@@ -20,7 +22,7 @@ import { DatabaseModule } from '../database/database.module.js';
 
 /** Marketplace discovery (Backend PRD section 12): feed, map, detail and saved errands. */
 @Module({
-  imports: [AuthModule, RiskModule, MediaModule, RunnerModule, CommonModule, NotificationsModule, EntitlementsModule, QueueModule, ConfigStoreModule, DatabaseModule],
+  imports: [AuthModule, RiskModule, BoostsModule, MediaModule, RunnerModule, CommonModule, NotificationsModule, EntitlementsModule, QueueModule, ConfigStoreModule, DatabaseModule],
   controllers: [MarketplaceController, SavedErrandsController],
   providers: [
     MarketplaceFeedService,
@@ -29,7 +31,7 @@ import { DatabaseModule } from '../database/database.module.js';
     MarketplaceMediaAccess,
     NearbyMatchingService,
     NearbyMatchingHandler,
-    { provide: FEED_BOOST_SOURCE, useClass: NoBoostSource },
+    { provide: FEED_BOOST_SOURCE, useExisting: BoostService },
   ],
   exports: [MarketplaceFeedService, SavedErrandsService, FEED_BOOST_SOURCE],
 })

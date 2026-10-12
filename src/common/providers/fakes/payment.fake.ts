@@ -32,6 +32,7 @@ interface FakeTransaction {
 @Injectable()
 export class FakePaymentProvider extends BaseFake implements IPaymentProvider {
   private transactions = new Map<string, FakeTransaction>();
+  private refundCount = 0;
 
   async initializeTransaction(
     input: InitializeTransactionInput,
@@ -112,7 +113,8 @@ export class FakePaymentProvider extends BaseFake implements IPaymentProvider {
       return this.getNextOutcome<RefundResult>('refund')!;
     }
 
-    return { providerRefundRef: `fake-refund-${input.reference}`, status: 'processed' };
+    this.refundCount += 1;
+    return { providerRefundRef: `fake-refund-${input.reference}-${this.refundCount}`, status: 'processed' };
   }
 
   verifyWebhookSignature(rawBody: string | Buffer, signature: string): boolean {
@@ -143,5 +145,6 @@ export class FakePaymentProvider extends BaseFake implements IPaymentProvider {
   override reset(): void {
     super.reset();
     this.transactions.clear();
+    this.refundCount = 0;
   }
 }

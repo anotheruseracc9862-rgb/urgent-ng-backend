@@ -198,6 +198,9 @@ describe('Nearby-errand matching (P8-04)', () => {
       await prisma.$executeRaw`UPDATE outbox_events SET occurred_at = date_trunc('day', now()) + interval '22 hours 30 minutes'`;
 
       await dispatchOutbox(app, { eventType: 'errand.published' });
+      // The delayed part is a new event stamped with the real time; put it at the same quiet hour,
+      // or the test would only pass at night.
+      await prisma.$executeRaw`UPDATE outbox_events SET occurred_at = date_trunc('day', now()) + interval '22 hours 30 minutes' WHERE status = 'PENDING'`;
       await dispatchOutbox(app, { eventType: 'errand.nearby_delayed' });
 
       expect(await nearbyFor(near)).toHaveLength(1);

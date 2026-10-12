@@ -20,6 +20,7 @@ import { DojahKycProvider } from './dojah-kyc.provider.js';
 import { S3StorageProvider, type S3Settings } from './s3-storage.provider.js';
 import { SmtpEmailProvider, type SmtpSettings } from './smtp-email.provider.js';
 import { FcmPushProvider, parseServiceAccount } from './fcm-push.provider.js';
+import { PaystackPaymentProvider, type PaystackSettings } from './paystack-payment.provider.js';
 import {
   FakeOtpProvider,
   FakeKycProvider,
@@ -46,6 +47,14 @@ function createDojahProvider(config: ConfigService): DojahKycProvider {
     throw new Error('KYC_PROVIDER=real is set but DOJAH_APP_ID, DOJAH_SECRET_KEY and DOJAH_BASE_URL are not all set');
   }
   return new DojahKycProvider(settings);
+}
+
+function createPaystackProvider(config: ConfigService): PaystackPaymentProvider {
+  const settings = config.get<PaystackSettings>('paystack');
+  if (!settings?.secretKey) {
+    throw new Error('PAYMENTS_PROVIDER=real is set but PAYSTACK_SECRET_KEY is not set');
+  }
+  return new PaystackPaymentProvider(settings);
 }
 
 function createSmtpProvider(config: ConfigService): SmtpEmailProvider {
@@ -114,7 +123,7 @@ export class ProvidersModule {
         providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM', createFcmProvider),
         providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP', createSmtpProvider),
-        providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack'),
+        providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack', createPaystackProvider),
       ],
       exports: [
         OTP_PROVIDER,

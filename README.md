@@ -200,3 +200,12 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Raise one** with `RiskFlagService.raiseQuietly({ signal, userId?, errandId?, subjectKey?, details })` from a code path that must not fail because of it. One open flag exists per signal and subject; a repeat raises `occurrences`. Keep `details` free of phone numbers, emails, addresses, message text and coordinates.
 - **Review.** `RiskFlagService.list` and `review` are the queue; the admin API for them comes with the admin console. Thresholds are `RISK_*` config keys.
 
+## Billing (Urgent.ng's own products)
+
+- **Routes.** `GET /billing/products`, `POST /billing/orders` (Runner Pro, verification fee), `POST /boosts`, `GET /billing/orders[/:id]`, `POST /billing/orders/:id/verify`, `GET /subscriptions/pro`, `POST /subscriptions/pro/cancel`, and the gateway's `POST /webhooks/paystack`. Writes take an `Idempotency-Key`.
+- **Never the errand payment.** Money between requester and runner never touches this code (INV-008). Only Runner Pro, boosts and the verification fee are sold here.
+- **A payment is believed only after the gateway confirms it.** `PaymentSettlementService.settle(reference)` asks `verifyTransaction`; webhook, "check my payment" and reconciliation all end there, and it is idempotent. Grants are entitlements (`entitlements` table); ask `OfferLimitService.isPro` or read the table, never infer from an order.
+- **Prices** come from `price_versions`; an order keeps the version it was made at. Prices are VAT-inclusive at `VAT_RATE`.
+- **Providers.** `PAYMENTS_PROVIDER=fake` in development and test (`FakePaymentProvider.markPaid(reference)` stands in for the customer paying). `real` needs `PAYSTACK_SECRET_KEY`; point Paystack's webhook at `/api/v1/webhooks/paystack`.
+- **Scheduler.** `SubscriptionSweeper` (renewals, expiry), `BoostExpirySweeper`, `ReconciliationSweeper` (daily).
+

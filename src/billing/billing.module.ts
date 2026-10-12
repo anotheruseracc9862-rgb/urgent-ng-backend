@@ -17,6 +17,7 @@ import { ProRenewalService } from './pro-renewal.service.js';
 import { ReconciliationService } from './reconciliation.service.js';
 import { RefundService } from './refund.service.js';
 import { WebhookService } from './webhook.service.js';
+import { VerificationFeeRefundHandler } from './verification-fee-refund.handler.js';
 
 /**
  * Urgent.ng's own purchases (Backend PRD 22): orders, payments, webhooks, refunds, renewals and
@@ -38,7 +39,7 @@ import { WebhookService } from './webhook.service.js';
     RiskModule,
   ],
   controllers: [BillingController, BoostPurchaseController, ProSubscriptionController, WebhookController],
-  providers: [OrderService, PaymentSettlementService, WebhookService, RefundService, ProRenewalService, ReconciliationService],
+  providers: [OrderService, PaymentSettlementService, WebhookService, RefundService, ProRenewalService, ReconciliationService, VerificationFeeRefundHandler],
   exports: [OrderService, PaymentSettlementService, RefundService, ProRenewalService, ReconciliationService],
 })
 export class BillingModule {}

@@ -3,7 +3,8 @@ import { CommonModule } from '../common/common.module.js';
 import { ConfigStoreModule } from '../config/config-store.module.js';
 import { DatabaseModule } from '../database/database.module.js';
 import { EntitlementService } from './entitlement.service.js';
-import { OfferLimitService } from './offer-limit.service.js';
+import { OFFER_LIMIT_POLICY, OfferLimitService } from './offer-limit.service.js';
+import { ProEntitlementPolicy } from './pro-entitlement.policy.js';
 
 /**
  * Runner entitlement logic for the offer-limit rules in Backend PRD section 13.6.
@@ -12,7 +13,7 @@ import { OfferLimitService } from './offer-limit.service.js';
  */
 @Module({
   imports: [CommonModule, ConfigStoreModule, DatabaseModule],
-  providers: [OfferLimitService, EntitlementService],
+  providers: [ProEntitlementPolicy, { provide: OFFER_LIMIT_POLICY, useExisting: ProEntitlementPolicy }, OfferLimitService, EntitlementService],
   exports: [OfferLimitService, EntitlementService],
 })
 export class EntitlementsModule {}

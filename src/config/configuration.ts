@@ -25,6 +25,12 @@ export interface AppConfig {
     secretKey: string;
     baseUrl: string;
   };
+  paystack: {
+    secretKey: string;
+    webhookSecret: string;
+    baseUrl: string;
+    callbackUrl: string;
+  };
   firebase: {
     credentials: string;
   };
@@ -96,6 +102,12 @@ export default (): AppConfig => {
     appId: process.env.DOJAH_APP_ID ?? '',
     secretKey: process.env.DOJAH_SECRET_KEY ?? '',
     baseUrl: process.env.DOJAH_BASE_URL ?? '',
+  },
+  paystack: {
+    secretKey: process.env.PAYSTACK_SECRET_KEY ?? '',
+    webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET ?? '',
+    baseUrl: process.env.PAYSTACK_BASE_URL ?? 'https://api.paystack.co',
+    callbackUrl: process.env.PAYSTACK_CALLBACK_URL ?? '',
   },
   firebase: {
     credentials: process.env.FIREBASE_CREDENTIALS ?? '',

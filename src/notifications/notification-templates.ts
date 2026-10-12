@@ -177,6 +177,12 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     title: 'Your trusted contact is worried',
     body: 'The person you shared "{errandTitle}" with raised a safety concern. Open the errand to check in.',
   },
+  'billing.receipt': {
+    category: 'TRANSACTIONAL',
+    title: 'Your Urgent.ng receipt',
+    body: '{product}: {amount}, including VAT of {vat}. Reference {reference}.',
+    email: true,
+  },
   'rating.received': { category: 'MARKETPLACE', title: 'You have a new rating', body: 'Your rating for "{errandTitle}" is now visible.' },
   'rating.reminder': { category: 'MARKETPLACE', title: 'How did it go?', body: 'Rate your experience with "{errandTitle}".' },
 

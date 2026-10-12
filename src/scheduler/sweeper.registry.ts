@@ -14,6 +14,7 @@ import { EnforcementExpirySweeper } from './enforcement-expiry.sweeper.js';
 import { BadgeRecomputeSweeper } from './badge-recompute.sweeper.js';
 import { LocationRetentionSweeper } from './location-retention.sweeper.js';
 import { TrustedLinkExpirySweeper } from './trusted-link-expiry.sweeper.js';
+import { BoostExpirySweeper, ReconciliationSweeper, SubscriptionSweeper } from './billing.sweepers.js';
 import { IdempotencyCleanupSweeper } from './idempotency-cleanup.sweeper.js';
 
 /**
@@ -40,8 +41,11 @@ export class SweeperRegistry implements OnModuleDestroy {
     badgeRecompute: BadgeRecomputeSweeper,
     locationRetention: LocationRetentionSweeper,
     trustedLinkExpiry: TrustedLinkExpirySweeper,
+    boostExpiry: BoostExpirySweeper,
+    subscriptions: SubscriptionSweeper,
+    reconciliation: ReconciliationSweeper,
   ) {
-    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry, reminders, ratingReveal, noShows, enforcementExpiry, badgeRecompute, locationRetention, trustedLinkExpiry];
+    this.all = [idempotencyCleanup, accountDeletion, mediaCleanup, verification, errandExpiry, assignmentAcceptance, autoCompletion, changeRequestExpiry, reminders, ratingReveal, noShows, enforcementExpiry, badgeRecompute, locationRetention, trustedLinkExpiry, boostExpiry, subscriptions, reconciliation];
   }
 
   startAll(): void {

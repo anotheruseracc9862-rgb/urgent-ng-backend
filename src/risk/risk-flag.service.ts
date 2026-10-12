@@ -17,6 +17,7 @@ export const RISK_SIGNALS = [
   'RATING_ANOMALY',
   'SELF_DEALING',
   'LOCATION_ANOMALY',
+  'PAYMENT_ANOMALY',
 ] as const;
 
 export type RiskSignal = (typeof RISK_SIGNALS)[number];

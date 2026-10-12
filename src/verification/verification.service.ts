@@ -6,6 +6,7 @@ import { BusinessConfigService } from '../config/business-config.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
 import { MediaService } from '../media/media.service.js';
+import { PricingService } from '../config/pricing.service.js';
 import { KYC_PROVIDER, type IKycProvider, type KycVerifyResult } from '../common/providers/kyc.provider.js';
 import { STORAGE_PROVIDER, type IStorageProvider } from '../common/providers/storage.provider.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
@@ -64,18 +65,29 @@ export class VerificationService {
     private readonly outbox: OutboxService,
     private readonly media: MediaService,
     private readonly status: VerificationStatusService,
+    private readonly pricing: PricingService,
     @Inject(KYC_PROVIDER) private readonly kyc: IKycProvider,
     @Inject(STORAGE_PROVIDER) private readonly storage: IStorageProvider,
   ) {}
+
+  /**
+   * The fee in kobo. The price version of the VERIFICATION_FEE product is the source of truth
+   * (Backend PRD 22.1); the `VERIFICATION_FEE` config value is only the answer where no product
+   * price has been set up.
+   */
+  async verificationFee(): Promise<number> {
+    const price = await this.pricing.getCurrentPriceByCode('VERIFICATION_FEE');
+    return price ? Number(price.amountKobo) : this.config.get('VERIFICATION_FEE');
+  }
 
   async overview(userId: string): Promise<VerificationOverview> {
     const [latest, verified, user, fee] = await Promise.all([
       this.status.latest(userId),
       this.status.isVerified(userId),
       this.prisma.client.user.findUnique({ where: { id: userId }, select: { phoneVerifiedAt: true } }),
-      this.config.get('VERIFICATION_FEE'),
+      this.verificationFee(),
     ]);
-    const allowance = await this.allowance(this.prisma, userId);
+    const allowance = fee > 0 ? await this.paidAllowance(this.prisma, userId) : await this.allowance(this.prisma, userId);
     const pending = latest?.status === 'PENDING' || latest?.status === 'REVIEW_REQUIRED';
     const phoneVerified = Boolean(user?.phoneVerifiedAt);
 
@@ -90,10 +102,11 @@ export class VerificationService {
       expiresAt: verifiedAttempt?.expiresAt ?? null,
       phoneVerified,
       latestAttempt: latest ? toAttemptView(latest) : null,
-      attemptsRemaining: fee > 0 ? 0 : allowance.remaining,
+      attemptsRemaining: allowance.remaining,
       nextAttemptAt: allowance.nextAttemptAt,
-      feeRequired: fee > 0,
-      canStart: phoneVerified && !verified && !pending && fee === 0 && allowance.remaining > 0,
+      // A fee is asked for only until the runner has paid for attempts that are not used up.
+      feeRequired: fee > 0 && allowance.remaining === 0,
+      canStart: phoneVerified && !verified && !pending && allowance.remaining > 0,
     };
   }
 
@@ -128,6 +141,32 @@ export class VerificationService {
     return this.complete(attemptId, userId, result, input.nin, ctx);
   }
 
+  /**
+   * Attempts left on the paid allowance (Backend PRD 10.2, 22.3). Each paid fee grants
+   * `VERIFICATION_ATTEMPTS_PER_FEE` attempts through a VERIFICATION_ATTEMPT_ALLOWANCE entitlement;
+   * an attempt that counts against the allowance (a provider fault does not) uses one up. Only
+   * used when a fee is charged: at a fee of zero the sliding retry window applies instead.
+   */
+  async paidAllowance(client: Prisma.TransactionClient | PrismaService, userId: string): Promise<Allowance> {
+    const rows = await client.$queryRaw<Array<{ granted: number; used: number }>>`
+      SELECT COALESCE(SUM(e.quantity), 0)::int AS granted,
+             (
+               SELECT count(*)::int FROM verification_attempts a
+               WHERE a.user_id = ${userId}::uuid AND a.deleted_at IS NULL AND a.counts_against_allowance
+                 AND a.started_at >= (
+                   SELECT MIN(g.valid_from) FROM entitlements g
+                   WHERE g.user_id = ${userId}::uuid AND g.type = 'VERIFICATION_ATTEMPT_ALLOWANCE'::"EntitlementType" AND g.revoked_at IS NULL
+                 )
+             ) AS used
+      FROM entitlements e
+      WHERE e.user_id = ${userId}::uuid AND e.type = 'VERIFICATION_ATTEMPT_ALLOWANCE'::"EntitlementType" AND e.revoked_at IS NULL
+        AND (e.valid_until IS NULL OR e.valid_until > now())
+    `;
+    const granted = rows[0]?.granted ?? 0;
+    const used = granted === 0 ? 0 : Math.min(granted, rows[0]?.used ?? 0);
+    return { limit: granted, used, remaining: Math.max(0, granted - used), nextAttemptAt: null };
+  }
+
   /** Attempts left in the current window (Backend PRD 10.2 retries). */
   async allowance(client: Prisma.TransactionClient | PrismaService, userId: string): Promise<Allowance> {
     const [limit, cooldownHours] = await Promise.all([
@@ -157,7 +196,7 @@ export class VerificationService {
 
   /** Create the PENDING row. One attempt in flight per user, enforced by a lock and by the database. */
   private async open(userId: string, selfieMediaId: string): Promise<string> {
-    const fee = await this.config.get('VERIFICATION_FEE');
+    const fee = await this.verificationFee();
     const provider = this.appConfig.get<string>('providers.kyc') === 'real' ? 'dojah' : 'fake';
 
     return this.prisma.$transaction(async (tx) => {
@@ -178,10 +217,13 @@ export class VerificationService {
         throw DomainException.of(VERIFICATION_PENDING);
       }
       if (fee > 0) {
-        // The paid path (an Order granting VERIFICATION_ATTEMPT_ALLOWANCE) arrives with billing.
-        throw DomainException.of(VERIFICATION_FEE_REQUIRED);
+        // With a fee, attempts come from a paid allowance (an order that was settled grants it once).
+        const paid = await this.paidAllowance(tx, userId);
+        if (paid.remaining === 0) {
+          throw DomainException.of(VERIFICATION_FEE_REQUIRED);
+        }
       }
-      const allowance = await this.allowance(tx, userId);
+      const allowance = fee > 0 ? { remaining: 1, nextAttemptAt: null } : await this.allowance(tx, userId);
       if (allowance.remaining === 0) {
         throw DomainException.of(RATE_LIMITED, {
           message: 'Too many failed verification attempts. Try again later.',

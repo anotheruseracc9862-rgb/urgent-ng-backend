@@ -86,6 +86,7 @@ export interface BusinessConfig {
   RUNNER_PRO_PRICE: number;
   RUNNER_PRO_PERIOD_DAYS: number;
   RUNNER_PRO_GRACE_DAYS: number;
+  VERIFICATION_REFUND_AFTER_PROVIDER_FAULTS: number;
   PRIORITY_BOOST_PRICE: number;
   PRIORITY_BOOST_MAX_HOURS: number;
   REFUND_FOUR_EYES_THRESHOLD: number;
@@ -239,6 +240,7 @@ export const DEFAULTS: BusinessConfig = {
   RUNNER_PRO_PRICE: 500000, // ₦5,000 in kobo
   RUNNER_PRO_PERIOD_DAYS: 30,
   RUNNER_PRO_GRACE_DAYS: 3,
+  VERIFICATION_REFUND_AFTER_PROVIDER_FAULTS: 2, // provider faults with no counted attempt before a paid fee is returned
   PRIORITY_BOOST_PRICE: 100000, // ₦1,000 in kobo
   PRIORITY_BOOST_MAX_HOURS: 24,
   REFUND_FOUR_EYES_THRESHOLD: 2000000, // ₦20,000 in kobo
