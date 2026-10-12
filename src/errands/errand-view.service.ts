@@ -35,6 +35,8 @@ export interface RunnerErrandView {
   dropoffContact: { name: string | null; phone: string | null } | null;
   photos: Array<{ mediaId: string; position: number }>;
   expiresAt: Date | null;
+  /** When a delivered errand completes by itself; null when none is running (or a report or dispute holds it). */
+  autoCompleteAt: Date | null;
   accessLevel: 'APPROXIMATE' | 'EXACT';
 }
 
@@ -96,6 +98,7 @@ export class ErrandViewService {
       dropoffContact: contacts.dropoff,
       photos,
       expiresAt: errand.expiresAt,
+      autoCompleteAt: errand.autoCompleteAt,
       accessLevel: exact ? 'EXACT' : 'APPROXIMATE',
     };
   }
@@ -133,6 +136,7 @@ export class ErrandViewService {
       offerCount: errand.offerCount,
       publishedAt: errand.publishedAt,
       expiresAt: errand.expiresAt,
+      autoCompleteAt: errand.autoCompleteAt,
       extended: errand.extendedAt !== null,
       cancelledAt: errand.cancelledAt,
       cancellationReason: errand.cancellationReason,

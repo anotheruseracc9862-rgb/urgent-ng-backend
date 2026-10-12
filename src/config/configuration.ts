@@ -50,6 +50,9 @@ export interface AppConfig {
   google: {
     clientId: string;
   };
+  maps: {
+    apiKey: string;
+  };
   providers: {
     google: ProviderMode;
     kyc: ProviderMode;
@@ -131,6 +134,9 @@ export default (): AppConfig => {
   },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+  },
+  maps: {
+    apiKey: process.env.MAPS_API_KEY ?? '',
   },
   providers: {
     google: mode(process.env.GOOGLE_AUTH_PROVIDER),

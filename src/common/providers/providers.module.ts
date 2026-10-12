@@ -18,6 +18,7 @@ import {
   GOOGLE_IDENTITY_PROVIDER,
   FakeGoogleIdentityProvider,
 } from './index.js';
+import { GoogleMapsProvider } from './google-maps.provider.js';
 import { GoogleIdentityProvider } from './google-identity-real.provider.js';
 import { ProviderError } from './provider.error.js';
 import type { IGoogleIdentityProvider } from './google-identity.provider.js';
@@ -67,6 +68,14 @@ function createGoogleProvider(config: ConfigService): IGoogleIdentityProvider {
     };
   }
   return new GoogleIdentityProvider({ clientId });
+}
+
+function createMapsProvider(config: ConfigService): GoogleMapsProvider {
+  const apiKey = config.get<string>('maps.apiKey');
+  if (!apiKey) {
+    throw new Error('MAPS_PROVIDER=real is set but MAPS_API_KEY is not set');
+  }
+  return new GoogleMapsProvider({ apiKey });
 }
 
 function createPaystackProvider(config: ConfigService): PaystackPaymentProvider {
@@ -140,7 +149,7 @@ export class ProvidersModule {
         providerFactory(OTP_PROVIDER, 'sms', () => new FakeOtpProvider(), 'SMS (Termii)'),
         providerFactory(KYC_PROVIDER, 'kyc', () => new FakeKycProvider(), 'Dojah', createDojahProvider),
         providerFactory(STORAGE_PROVIDER, 'storage', () => new FakeStorageProvider(), 'AWS S3', createS3Provider),
-        providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps'),
+        providerFactory(MAPS_PROVIDER, 'maps', () => new FakeMapsProvider(), 'Google Maps', createMapsProvider),
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM', createFcmProvider),
         providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP', createSmtpProvider),
         providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack', createPaystackProvider),

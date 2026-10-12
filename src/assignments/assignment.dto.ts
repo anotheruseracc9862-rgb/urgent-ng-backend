@@ -87,6 +87,9 @@ export class AssignedErrandDto {
   @ApiProperty({ type: Date, nullable: true })
   expiresAt!: Date | null;
 
+  @ApiProperty({ type: Date, nullable: true, description: 'When a delivered errand completes by itself. Null when none is running, or a report or dispute holds it.' })
+  autoCompleteAt!: Date | null;
+
   @ApiProperty({ enum: ['APPROXIMATE', 'EXACT'] })
   accessLevel!: 'APPROXIMATE' | 'EXACT';
 }

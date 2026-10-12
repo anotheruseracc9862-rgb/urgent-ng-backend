@@ -337,6 +337,9 @@ export class ErrandDto {
   publishedAt!: Date | null;
   @ApiProperty({ nullable: true, type: Date })
   expiresAt!: Date | null;
+  /** When a delivered errand completes by itself. Null when none is running, or a report or dispute holds it. */
+  @ApiProperty({ nullable: true, type: Date })
+  autoCompleteAt!: Date | null;
   /** True once the requester has used the one allowed extension. */
   extended!: boolean;
   @ApiProperty({ nullable: true, type: Date })
