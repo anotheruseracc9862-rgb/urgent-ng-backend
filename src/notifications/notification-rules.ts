@@ -69,6 +69,8 @@ export class NotificationRules {
       case 'execution.picked_up':
       case 'execution.delivered':
         return this.toRequester(p, event.eventType, `assignment:${str(p, 'assignmentId')}:${event.eventType}`, { runnerNameOf: 'runnerId' });
+      case 'execution.arrived':
+        return this.toRequester(p, 'execution.arrived', `assignment:${str(p, 'assignmentId')}:arrived`, { runnerNameOf: 'runnerId' });
       case 'execution.delay_notified':
         return this.toRequester(p, 'execution.delayed', `assignment:${str(p, 'assignmentId')}:delay:${num(p, 'notice') ?? event.eventId}`, {
           runnerNameOf: 'runnerId',
@@ -121,6 +123,9 @@ export class NotificationRules {
         return this.changeRequest(event);
       case 'payment_agreement.updated':
         return this.paymentAgreement(event);
+      case 'account.password_changed':
+      case 'account.contact_changed':
+        return this.accountSecurity(event);
       case 'verification.completed':
       case 'verification.failed':
       case 'verification.expired':
@@ -500,6 +505,14 @@ export class NotificationRules {
         data: this.ids(p),
         dedupeKey: `agreement:${assignmentId}:${event.eventId}`,
       },
+    ];
+  }
+
+  private accountSecurity(event: DomainEvent): NotificationIntent[] {
+    const userId = str(event.payload, 'userId');
+    if (!userId) return [];
+    return [
+      { userId, template: event.eventType, vars: {}, data: {}, dedupeKey: `account:${event.eventType}:${event.eventId}` },
     ];
   }
 

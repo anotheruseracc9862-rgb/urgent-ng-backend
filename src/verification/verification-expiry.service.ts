@@ -128,6 +128,18 @@ export class VerificationExpiryService {
         await this.media.softDelete(media);
       }
       await this.prisma.$executeRaw`UPDATE verification_attempts SET selfie_media_id = NULL, updated_at = now() WHERE id = ${row.id}::uuid`;
+      // The ID document photo is staged the same way: kept for review, then deleted with the selfie.
+      const docs = await this.prisma.$queryRaw<Array<{ media_id: string }>>`
+        SELECT id_document_media_id AS media_id FROM verification_submissions
+        WHERE attempt_id = ${row.id}::uuid AND id_document_media_id IS NOT NULL
+      `;
+      for (const doc of docs) {
+        const docMedia = await this.prisma.client.media.findUnique({ where: { id: doc.media_id } });
+        if (docMedia) {
+          await this.media.softDelete(docMedia);
+        }
+        await this.prisma.$executeRaw`UPDATE verification_submissions SET id_document_media_id = NULL WHERE attempt_id = ${row.id}::uuid`;
+      }
       deleted += 1;
     }
     return deleted;

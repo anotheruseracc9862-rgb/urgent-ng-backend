@@ -15,7 +15,12 @@ import {
   PUSH_PROVIDER,
   EMAIL_PROVIDER,
   PAYMENT_PROVIDER,
+  GOOGLE_IDENTITY_PROVIDER,
+  FakeGoogleIdentityProvider,
 } from './index.js';
+import { GoogleIdentityProvider } from './google-identity-real.provider.js';
+import { ProviderError } from './provider.error.js';
+import type { IGoogleIdentityProvider } from './google-identity.provider.js';
 import { DojahKycProvider } from './dojah-kyc.provider.js';
 import { S3StorageProvider, type S3Settings } from './s3-storage.provider.js';
 import { SmtpEmailProvider, type SmtpSettings } from './smtp-email.provider.js';
@@ -47,6 +52,21 @@ function createDojahProvider(config: ConfigService): DojahKycProvider {
     throw new Error('KYC_PROVIDER=real is set but DOJAH_APP_ID, DOJAH_SECRET_KEY and DOJAH_BASE_URL are not all set');
   }
   return new DojahKycProvider(settings);
+}
+
+/**
+ * Google sign-in is optional. Without a client id the real provider is "not configured": it refuses
+ * every call with a provider error, so the sign-in route answers 503 and the rest of the app boots.
+ */
+function createGoogleProvider(config: ConfigService): IGoogleIdentityProvider {
+  const clientId = config.get<string>('google.clientId');
+  if (!clientId) {
+    return {
+      verifyIdToken: () =>
+        Promise.reject(new ProviderError('google', 'GOOGLE_CLIENT_ID is not set.', { retryable: false })),
+    };
+  }
+  return new GoogleIdentityProvider({ clientId });
 }
 
 function createPaystackProvider(config: ConfigService): PaystackPaymentProvider {
@@ -124,6 +144,7 @@ export class ProvidersModule {
         providerFactory(PUSH_PROVIDER, 'push', () => new FakePushProvider(), 'Firebase FCM', createFcmProvider),
         providerFactory(EMAIL_PROVIDER, 'email', () => new FakeEmailProvider(), 'SMTP', createSmtpProvider),
         providerFactory(PAYMENT_PROVIDER, 'payments', () => new FakePaymentProvider(), 'Paystack', createPaystackProvider),
+        providerFactory(GOOGLE_IDENTITY_PROVIDER, 'google', () => new FakeGoogleIdentityProvider(), 'Google', createGoogleProvider),
       ],
       exports: [
         OTP_PROVIDER,
@@ -133,6 +154,7 @@ export class ProvidersModule {
         PUSH_PROVIDER,
         EMAIL_PROVIDER,
         PAYMENT_PROVIDER,
+        GOOGLE_IDENTITY_PROVIDER,
       ],
     };
   }

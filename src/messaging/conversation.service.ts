@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { BlockService } from '../auth/block.service.js';
@@ -7,7 +7,15 @@ import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
-import type { ConversationDto } from './messaging.dto.js';
+import type { ConversationDto, ConversationFilter } from './messaging.dto.js';
+
+/** Errand statuses behind each tab of the conversation list. ALL has none. */
+const FILTER_STATUSES: Record<ConversationFilter, string[] | undefined> = {
+  ALL: undefined,
+  ACTIVE: ['RUNNER_SELECTED', 'ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED', 'DISPUTED'],
+  OFFERS: ['OPEN'],
+  CLOSED: ['COMPLETED', 'CANCELLED', 'EXPIRED'],
+};
 
 export type ReadOnlyReason = 'BLOCKED' | 'ERRAND_ENDED' | 'NO_ACTIVE_OFFER' | 'COMPLETION_WINDOW_ENDED';
 
@@ -123,9 +131,17 @@ export class ConversationService {
     return { canSend: false, readOnlyReason: row.completed_any ? 'COMPLETION_WINDOW_ENDED' : 'NO_ACTIVE_OFFER' };
   }
 
-  async list(userId: string, options: { cursor?: string; limit?: number }): Promise<Paginated<ConversationDto>> {
+  async list(
+    userId: string,
+    options: { filter?: ConversationFilter; q?: string; cursor?: string; limit?: number },
+  ): Promise<Paginated<ConversationDto>> {
     const limit = options.limit ?? 20;
     const cursor = options.cursor ? this.cursors.decode(options.cursor) : undefined;
+    const statuses = options.filter ? FILTER_STATUSES[options.filter] : undefined;
+    const statusClause = statuses ? Prisma.sql`AND e.status::text = ANY(${statuses}::text[])` : Prisma.empty;
+    const term = options.q?.trim();
+    const like = term ? `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%` : null;
+    const searchClause = like ? Prisma.sql`AND (e.title ILIKE ${like} OR o.first_name ILIKE ${like} OR o.name ILIKE ${like})` : Prisma.empty;
     const rows = await this.prisma.$queryRaw<
       Array<{
         id: string;
@@ -156,6 +172,8 @@ export class ConversationService {
       JOIN users o ON o.id = CASE WHEN c.requester_id = ${userId}::uuid THEN c.runner_id ELSE c.requester_id END
       LEFT JOIN profiles pr ON pr.user_id = o.id AND pr.deleted_at IS NULL
       WHERE c.deleted_at IS NULL AND (c.requester_id = ${userId}::uuid OR c.runner_id = ${userId}::uuid)
+        ${statusClause}
+        ${searchClause}
         AND (${cursor ? cursor.createdAt : null}::timestamptz IS NULL
              OR COALESCE(c.last_message_at, c.created_at) < ${cursor ? cursor.createdAt : null}::timestamptz
              OR (COALESCE(c.last_message_at, c.created_at) = ${cursor ? cursor.createdAt : null}::timestamptz AND c.id < ${cursor ? cursor.id : null}::uuid))

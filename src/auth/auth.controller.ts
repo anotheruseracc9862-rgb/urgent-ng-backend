@@ -11,12 +11,14 @@ import { RegistrationService } from './registration.service.js';
 import { LoginService } from './login.service.js';
 import { SessionService } from './session.service.js';
 import { PasswordResetService } from './password-reset.service.js';
+import { GoogleAuthService } from './google-auth.service.js';
 import { ReqCtx } from './decorators/request-context.decorator.js';
 import type { RequestContext } from './auth-audit.service.js';
 import { REFRESH_COOKIE, clearAuthCookies, setAuthCookies, wantsBodyTokens } from './auth.cookies.js';
 import { singleIdentifier } from './identifier.js';
 import {
   ForgotPasswordDto,
+  GoogleSignInDto,
   LoginDto,
   RefreshDto,
   RegisterDto,
@@ -40,6 +42,7 @@ export class AuthController {
     private readonly login: LoginService,
     private readonly sessions: SessionService,
     private readonly passwordReset: PasswordResetService,
+    private readonly googleAuth: GoogleAuthService,
   ) {}
 
   @Post('register')
@@ -55,6 +58,7 @@ export class AuthController {
         email: dto.email,
         password: dto.password,
         consents: dto.consents,
+        homeArea: dto.homeArea,
       },
       ctx,
     );
@@ -107,6 +111,38 @@ export class AuthController {
     }
     setAuthCookies(res, tokens);
     return { userId: result.userId, status: result.status, expiresIn: tokens.expiresIn };
+  }
+
+  /**
+   * Sign in with Google. Answers like `/auth/login`. The first time, send `consents` too: without
+   * them the answer is 409 `GOOGLE_SIGNUP_REQUIRED` with the email and name Google gave.
+   */
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ApiEnveloped(R.GoogleLoginResultDto)
+  @ApiErrors(400, 401, 403, 409, 429, 503)
+  async googleSignIn(
+    @Body() dto: GoogleSignInDto,
+    @Headers('x-client') client: string | undefined,
+    @ReqCtx() ctx: RequestContext,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.googleAuth.signIn(dto, ctx);
+    const { tokens } = result;
+
+    if (wantsBodyTokens(client)) {
+      return {
+        userId: result.userId,
+        status: result.status,
+        isNewAccount: result.isNewAccount,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresIn: tokens.expiresIn,
+      };
+    }
+    setAuthCookies(res, tokens);
+    return { userId: result.userId, status: result.status, isNewAccount: result.isNewAccount, expiresIn: tokens.expiresIn };
   }
 
   /** Rotates the refresh token. Reusing an already-rotated token ends that login. */

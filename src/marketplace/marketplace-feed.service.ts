@@ -12,9 +12,12 @@ import { FEED_BOOST_SOURCE, type FeedBoostSource } from './feed-boost.hook.js';
 import { FeedRateLimiter } from './feed-rate-limiter.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
 import { RiskFlagService } from '../risk/risk-flag.service.js';
-import type { FeedItemDto, FeedQueryDto, MapPointDto, MapQueryDto, MarketplaceErrandDto, MarketplaceFilterDto } from './marketplace.dto.js';
+import type { FeedItemDto, FeedQueryDto, FeedSort, MapPointDto, MapQueryDto, MarketplaceErrandDto, MarketplaceFilterDto } from './marketplace.dto.js';
 
 /** What a feed row looks like straight from the database. */
+/** The `recommended` sort groups errands into rings of this width around the runner's area centre. */
+const RING_METRES = 2000;
+
 export interface FeedRow {
   id: string;
   title: string;
@@ -157,7 +160,7 @@ export class MarketplaceFeedService {
       {
         hasNextPage,
         ...(hasNextPage && last
-          ? { nextCursor: this.cursors.encode({ sort: sort === 'nearest' ? (last.dist_m ?? 0) : last.published_at.toISOString(), createdAt: last.published_at, id: last.id }) }
+          ? { nextCursor: this.cursors.encode({ sort: this.cursorValue(sort, last), createdAt: last.published_at, id: last.id }) }
           : {}),
       },
     );
@@ -279,7 +282,7 @@ export class MarketplaceFeedService {
   private async query(
     userId: string,
     query: FeedQueryDto,
-    options: { only?: string[]; exclude?: string[]; limit: number; sort: 'nearest' | 'newest'; cursor?: CursorData },
+    options: { only?: string[]; exclude?: string[]; limit: number; sort: FeedSort; cursor?: CursorData },
   ): Promise<FeedRow[]> {
     return this.prisma.$queryRaw<FeedRow[]>(await this.feedSql(userId, query, options));
   }
@@ -288,12 +291,16 @@ export class MarketplaceFeedService {
   async feedSql(
     userId: string,
     query: FeedQueryDto,
-    options: { only?: string[]; exclude?: string[]; limit: number; sort: 'nearest' | 'newest'; cursor?: CursorData },
+    options: { only?: string[]; exclude?: string[]; limit: number; sort: FeedSort; cursor?: CursorData },
   ): Promise<Prisma.Sql> {
     const order =
       options.sort === 'newest'
         ? Prisma.sql`page.published_at DESC, page.id DESC`
-        : Prisma.sql`page.dist_m ASC, page.published_at DESC, page.id DESC`;
+        : options.sort === 'budget_desc'
+          ? Prisma.sql`page.budget DESC, page.published_at DESC, page.id DESC`
+          : options.sort === 'recommended'
+            ? Prisma.sql`page.dist_ring ASC, page.published_at DESC, page.id DESC`
+            : Prisma.sql`page.dist_m ASC, page.published_at DESC, page.id DESC`;
 
     // Two steps keep the query cheap in a busy area: first pick the ids of the page using only the
     // columns the filters and the sort need, then fetch the details of those few rows.
@@ -315,16 +322,28 @@ export class MarketplaceFeedService {
   private async rankedSql(
     userId: string,
     query: MarketplaceFilterDto,
-    options: { only?: string[]; exclude?: string[]; limit: number; sort: 'nearest' | 'newest'; cursor?: CursorData },
+    options: { only?: string[]; exclude?: string[]; limit: number; sort: FeedSort; cursor?: CursorData },
   ): Promise<Prisma.Sql> {
     const filters = await this.filters(userId, query, options);
     const { cursor, sort } = options;
+    const tie = (c: CursorData) => Prisma.sql`(published_at, id) < (${c.createdAt}::timestamptz, ${c.id}::text)`;
     const keyset = !cursor
       ? Prisma.sql`TRUE`
       : sort === 'newest'
-        ? Prisma.sql`(published_at, id) < (${cursor.createdAt}::timestamptz, ${cursor.id}::text)`
-        : Prisma.sql`(dist_m > ${Number(cursor.sort)}::int OR (dist_m = ${Number(cursor.sort)}::int AND (published_at, id) < (${cursor.createdAt}::timestamptz, ${cursor.id}::text)))`;
-    const order = sort === 'newest' ? Prisma.sql`published_at DESC, id DESC` : Prisma.sql`dist_m ASC, published_at DESC, id DESC`;
+        ? tie(cursor)
+        : sort === 'budget_desc'
+          ? Prisma.sql`(budget < ${Number(cursor.sort)}::bigint OR (budget = ${Number(cursor.sort)}::bigint AND ${tie(cursor)}))`
+          : sort === 'recommended'
+            ? Prisma.sql`(dist_ring > ${Number(cursor.sort)}::int OR (dist_ring = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`
+            : Prisma.sql`(dist_m > ${Number(cursor.sort)}::int OR (dist_m = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`;
+    const order =
+      sort === 'newest'
+        ? Prisma.sql`published_at DESC, id DESC`
+        : sort === 'budget_desc'
+          ? Prisma.sql`budget DESC, published_at DESC, id DESC`
+          : sort === 'recommended'
+            ? Prisma.sql`dist_ring ASC, published_at DESC, id DESC`
+            : Prisma.sql`dist_m ASC, published_at DESC, id DESC`;
     const locations = query.q?.trim()
       ? Prisma.sql`
           LEFT JOIN errand_locations pl ON pl.errand_id = e.id AND pl.type = 'ERRAND_PICKUP'::"LocationType" AND pl.deleted_at IS NULL
@@ -332,8 +351,10 @@ export class MarketplaceFeedService {
       : Prisma.empty;
 
     return Prisma.sql`
-      SELECT ranked.id, ranked.published_at, ranked.dist_m FROM (
-        SELECT e.id::text AS id, e.published_at, round(ST_Distance(e.feed_point, me.area_center))::int AS dist_m
+      SELECT ranked.id, ranked.published_at, ranked.dist_m, ranked.budget, ranked.dist_ring FROM (
+        SELECT e.id::text AS id, e.published_at, round(ST_Distance(e.feed_point, me.area_center))::int AS dist_m,
+               COALESCE(e.suggested_budget_minor, 0)::bigint AS budget,
+               floor(ST_Distance(e.feed_point, me.area_center) / ${RING_METRES})::int AS dist_ring
         FROM errands e
         JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
         JOIN categories c ON c.id = e.category_id
@@ -346,9 +367,23 @@ export class MarketplaceFeedService {
     `;
   }
 
-  private decode(raw: string, sort: 'nearest' | 'newest'): CursorData {
+  /** The value the next page continues from, per sort order. */
+  private cursorValue(sort: FeedSort, last: FeedRow): number | string {
+    switch (sort) {
+      case 'newest':
+        return last.published_at.toISOString();
+      case 'budget_desc':
+        return Number(last.suggested_budget_minor ?? 0);
+      case 'recommended':
+        return Math.floor((last.dist_m ?? 0) / RING_METRES);
+      default:
+        return last.dist_m ?? 0;
+    }
+  }
+
+  private decode(raw: string, sort: FeedSort): CursorData {
     const cursor = this.cursors.decode(raw);
-    const wrongKind = sort === 'nearest' ? typeof cursor.sort !== 'number' : typeof cursor.sort !== 'string';
+    const wrongKind = sort === 'newest' ? typeof cursor.sort !== 'string' : typeof cursor.sort !== 'number';
     if (wrongKind) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'This cursor belongs to a different sort order.', details: { field: 'cursor' } });
     }

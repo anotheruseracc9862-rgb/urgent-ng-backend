@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDate, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
 
 const STATUSES = ['PENDING_ACCEPTANCE', 'ACCEPTED', 'DECLINED', 'TIMED_OUT', 'CANCELLED', 'COMPLETED'] as const;
@@ -12,6 +13,82 @@ export class RunnerAssignmentsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn([...STATUSES, 'ACTIVE', 'PAST'])
   status?: (typeof STATUSES)[number] | 'ACTIVE' | 'PAST';
+
+  @ApiPropertyOptional({ description: 'Search the errand title or the requester name.', maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  q?: string;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time', description: 'Only assignments selected on or after this.' })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  from?: Date;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time', description: 'Only assignments selected before this.' })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  to?: Date;
+}
+
+/** The filters of the history export (no paging: the file holds every match, up to a limit). */
+export class RunnerHistoryExportQueryDto {
+  @ApiPropertyOptional({ enum: [...STATUSES, 'ACTIVE', 'PAST'] })
+  @IsOptional()
+  @IsIn([...STATUSES, 'ACTIVE', 'PAST'])
+  status?: (typeof STATUSES)[number] | 'ACTIVE' | 'PAST';
+
+  @ApiPropertyOptional({ maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  q?: string;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  from?: Date;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  to?: Date;
+}
+
+export class HistorySummaryQueryDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 24, default: 12, description: 'How many months back, counting this one.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  months?: number = 12;
+}
+
+export class HistoryMonthDto {
+  @ApiProperty({ example: '2026-10', description: 'Month in Lagos time.' })
+  month!: string;
+  @ApiProperty({ description: 'Assignments completed that were selected in this month.' })
+  completed!: number;
+  @ApiProperty({ description: 'Cancelled after selection.' })
+  cancelled!: number;
+  @ApiProperty({ description: 'Declined or timed out before the runner accepted.' })
+  notAccepted!: number;
+  @ApiProperty({ description: 'The sum of the agreed amounts of completed assignments, in kobo. A record, not a payout.' })
+  agreedTotalMinor!: number;
+}
+
+export class HistorySummaryDto {
+  @ApiProperty({ type: HistoryMonthDto, isArray: true })
+  months!: HistoryMonthDto[];
+  @ApiProperty({ description: 'Completed assignments in the whole period.' })
+  completed!: number;
+  @ApiProperty({ description: 'Every assignment in the period that was selected.' })
+  total!: number;
 }
 
 export class RunnerAssignmentSummaryDto {

@@ -12,6 +12,8 @@ import { UserStatsService } from './user-stats.service.js';
 import type {
   AssignmentRatingsDto,
   EditRatingDto,
+  MyRatingDto,
+  MyRatingsQueryDto,
   ProfileRatingDto,
   RatingDto,
   RatingListQueryDto,
@@ -292,6 +294,7 @@ export class RatingService {
         status: 'PUBLISHED',
         revealedAt: { not: null },
         deletedAt: null,
+        ...this.starFilter(query),
         ...(cursor
           ? { OR: [{ createdAt: { lt: cursor.createdAt as Date } }, { createdAt: cursor.createdAt as Date, id: { lt: cursor.id } }] }
           : {}),
@@ -320,6 +323,78 @@ export class RatingService {
           : {}),
       },
     );
+  }
+
+  /**
+   * The signed-in user's reviews page: ratings received (published and revealed only) or given
+   * (including ones the other side cannot see yet), newest first, optionally by overall stars.
+   */
+  async listMine(userId: string, query: MyRatingsQueryDto): Promise<Paginated<MyRatingDto>> {
+    const given = query.direction === 'GIVEN';
+    const limit = query.limit ?? 20;
+    const cursor = query.cursor ? this.cursors.decode(query.cursor) : undefined;
+    const rows = await this.prisma.rating.findMany({
+      where: {
+        ...(given ? { raterId: userId } : { rateeId: userId, status: 'PUBLISHED', revealedAt: { not: null } }),
+        deletedAt: null,
+        ...this.starFilter(query),
+        ...(cursor
+          ? { OR: [{ createdAt: { lt: cursor.createdAt as Date } }, { createdAt: cursor.createdAt as Date, id: { lt: cursor.id } }] }
+          : {}),
+      },
+      include: {
+        scores: true,
+        rater: { select: { firstName: true, lastName: true } },
+        ratee: { select: { firstName: true, lastName: true } },
+        assignment: { select: { errand: { select: { title: true } } } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+    const hasNextPage = rows.length > limit;
+    const page = hasNextPage ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+    return new Paginated(
+      page.map((row) => {
+        const other = given ? row.ratee : row.rater;
+        return {
+          id: row.id,
+          assignmentId: row.assignmentId,
+          errandTitle: row.assignment.errand.title,
+          direction: row.direction,
+          scores: toScoresView(row.scores),
+          review: row.review,
+          revealed: row.revealedAt !== null,
+          counterpartFirstName: other.firstName,
+          counterpartLastInitial: other.lastName.charAt(0).toUpperCase(),
+          createdAt: row.createdAt,
+        };
+      }),
+      {
+        hasNextPage,
+        ...(hasNextPage && last
+          ? { nextCursor: this.cursors.encode({ sort: last.createdAt.toISOString(), createdAt: last.createdAt, id: last.id }) }
+          : {}),
+      },
+    );
+  }
+
+  /** `minStars` and `maxStars` bound the overall score. */
+  private starFilter(query: { minStars?: number; maxStars?: number }): Prisma.RatingWhereInput {
+    if (query.minStars === undefined && query.maxStars === undefined) {
+      return {};
+    }
+    return {
+      scores: {
+        some: {
+          dimension: 'OVERALL',
+          score: {
+            ...(query.minStars !== undefined ? { gte: query.minStars } : {}),
+            ...(query.maxStars !== undefined ? { lte: query.maxStars } : {}),
+          },
+        },
+      },
+    };
   }
 
   // ---- Reveal at the end of the window (scheduler) ----

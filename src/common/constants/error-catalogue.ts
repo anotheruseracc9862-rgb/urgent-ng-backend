@@ -26,6 +26,8 @@ export const ERROR_CATALOGUE: Record<ErrorCode, ErrorCatalogueEntry> = {
   [Codes.OTP_RATE_LIMITED]: { status: HttpStatus.TOO_MANY_REQUESTS, message: 'Too many codes requested. Try again later.' },
   [Codes.USER_BLOCKED]: { status: HttpStatus.FORBIDDEN, message: 'This action is not available between these users.' },
   [Codes.FEATURE_DISABLED]: { status: HttpStatus.SERVICE_UNAVAILABLE, message: 'This feature is temporarily unavailable.' },
+  [Codes.GOOGLE_SIGNUP_REQUIRED]: { status: HttpStatus.CONFLICT, message: 'There is no account for this Google user yet. Accept the policies to create one.' },
+  [Codes.SIGN_IN_PROVIDER_UNAVAILABLE]: { status: HttpStatus.SERVICE_UNAVAILABLE, message: 'Google sign-in is not available right now. Use your phone or email instead.' },
   [Codes.INVALID_CREDENTIALS]: { status: HttpStatus.UNAUTHORIZED, message: 'The phone, email or password is not correct.' },
   [Codes.ACCOUNT_LOCKED]: { status: HttpStatus.TOO_MANY_REQUESTS, message: 'Too many failed attempts. Try again later.' },
   [Codes.IDENTIFIER_TAKEN]: { status: HttpStatus.CONFLICT, message: 'This phone number or email is already registered.' },

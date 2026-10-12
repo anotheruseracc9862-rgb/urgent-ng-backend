@@ -18,6 +18,8 @@ export interface MeView {
   status: string;
   startMode: StartMode | null;
   photoMediaId: string | null;
+  bio: string | null;
+  homeArea: string | null;
   deletionScheduledAt: Date | null;
   createdAt: Date;
 }
@@ -27,6 +29,7 @@ export interface PublicProfileView {
   firstName: string;
   lastInitial: string;
   photoMediaId: string | null;
+  bio: string | null;
   memberSince: Date;
   /** Earned badges, strongest first. Runner badges are hidden while the runner is not verified. */
   badges: string[];
@@ -66,7 +69,7 @@ export class ProfileService {
         startMode: true,
         deletionScheduledAt: true,
         createdAt: true,
-        profile: { select: { photoMediaId: true } },
+        profile: { select: { photoMediaId: true, bio: true, homeArea: true } },
       },
     });
     if (!user) {
@@ -84,13 +87,21 @@ export class ProfileService {
       status: user.status,
       startMode: user.startMode,
       photoMediaId: user.profile?.photoMediaId ?? null,
+      bio: user.profile?.bio ?? null,
+      homeArea: user.profile?.homeArea ?? null,
       deletionScheduledAt: user.deletionScheduledAt,
       createdAt: user.createdAt,
     };
   }
 
-  /** `name` replaces first and last name together; `startMode` is a preference only (Backend PRD 9.1). */
-  async updateMe(userId: string, changes: { name?: string; startMode?: StartMode }): Promise<MeView> {
+  /**
+   * `name` replaces first and last name together; `startMode` is a preference only (Backend PRD 9.1).
+   * `bio` and `homeArea` live on the profile; `null` clears them.
+   */
+  async updateMe(
+    userId: string,
+    changes: { name?: string; startMode?: StartMode; bio?: string | null; homeArea?: string | null },
+  ): Promise<MeView> {
     const data: { name?: string; firstName?: string; lastName?: string; startMode?: StartMode } = {};
     if (changes.name !== undefined) {
       const [firstName, ...rest] = changes.name.trim().split(/\s+/);
@@ -108,6 +119,21 @@ export class ProfileService {
         throw DomainException.of(RESOURCE_NOT_FOUND);
       }
     }
+
+    const profile: { bio?: string | null; homeArea?: string | null } = {};
+    if (changes.bio !== undefined) {
+      profile.bio = changes.bio === null ? null : changes.bio.trim() || null;
+    }
+    if (changes.homeArea !== undefined) {
+      profile.homeArea = changes.homeArea === null ? null : changes.homeArea.trim() || null;
+    }
+    if (Object.keys(profile).length > 0) {
+      await this.prisma.client.profile.upsert({
+        where: { userId },
+        create: { userId, ...profile },
+        update: profile,
+      });
+    }
     return this.getMe(userId);
   }
 
@@ -119,7 +145,7 @@ export class ProfileService {
         firstName: true,
         lastName: true,
         createdAt: true,
-        profile: { select: { photoMediaId: true } },
+        profile: { select: { photoMediaId: true, bio: true } },
       },
     });
     if (!user) {
@@ -151,6 +177,7 @@ export class ProfileService {
       firstName: user.firstName,
       lastInitial: user.lastName.charAt(0).toUpperCase(),
       photoMediaId: user.profile?.photoMediaId ?? null,
+      bio: user.profile?.bio ?? null,
       memberSince: user.createdAt,
       badges: sortForDisplay(badgeRows.map((r) => r.badge)),
       stats: {

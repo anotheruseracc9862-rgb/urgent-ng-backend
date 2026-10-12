@@ -38,7 +38,27 @@ export class MarkReadDto {
 
 export class MessageListQueryDto extends PaginationQueryDto {}
 
-export class ConversationListQueryDto extends PaginationQueryDto {}
+/** Tabs of the conversation list, by the state of the errand the conversation belongs to. */
+export const CONVERSATION_FILTERS = ['ALL', 'ACTIVE', 'OFFERS', 'CLOSED'] as const;
+export type ConversationFilter = (typeof CONVERSATION_FILTERS)[number];
+
+export class ConversationListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    enum: CONVERSATION_FILTERS,
+    default: 'ALL',
+    description:
+      'ACTIVE: a runner is selected through delivery or the errand is disputed. OFFERS: the errand is still open. CLOSED: completed, cancelled or expired.',
+  })
+  @IsOptional()
+  @IsIn(CONVERSATION_FILTERS as unknown as string[])
+  filter?: ConversationFilter;
+
+  @ApiPropertyOptional({ description: 'Search the errand title or the name of the other person.', maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  q?: string;
+}
 
 export class MessageDto {
   @ApiProperty()

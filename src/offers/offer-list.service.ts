@@ -93,8 +93,33 @@ export class OfferListService {
       });
     }
 
+    if (sort === 'recommended') {
+      return recommended(entries);
+    }
     return entries.sort((a, b) => compare(a, b, sort)).map((entry) => entry.item);
   }
+}
+
+/**
+ * The recommended order: a score from rating (50%), price (30%) and estimated time (20%), each scaled
+ * between the best and the worst offer on this errand. An unrated runner counts as 3.5 of 5. Ties
+ * fall back to the common tie-break, so the order is stable.
+ */
+function recommended(entries: Array<Entry & { isPro: boolean }>): OfferListItemDto[] {
+  if (entries.length === 0) return [];
+  const span = (values: number[]) => ({ min: Math.min(...values), max: Math.max(...values) });
+  const scale = (value: number, { min, max }: { min: number; max: number }) => (max === min ? 1 : (value - min) / (max - min));
+  const prices = span(entries.map((e) => e.item.amountMinor));
+  const etas = span(entries.map((e) => e.item.durationMinutes));
+  const score = (e: Entry) =>
+    0.5 * ((e.item.runnerRating ?? 3.5) / 5) + 0.3 * (1 - scale(e.item.amountMinor, prices)) + 0.2 * (1 - scale(e.item.durationMinutes, etas));
+  return [...entries]
+    .sort((a, b) => {
+      const diff = score(b) - score(a);
+      if (Math.abs(diff) > 1e-9) return diff;
+      return compare(a, b, 'price_asc');
+    })
+    .map((entry) => entry.item);
 }
 
 function primary(a: Entry, b: Entry, sort: OfferSort): number {

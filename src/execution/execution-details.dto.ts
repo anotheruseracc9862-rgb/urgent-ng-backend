@@ -1,8 +1,26 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { CheckpointInputDto } from './execution.dto.js';
 
 const PROBLEM_TYPES = ['ITEM_NOT_READY', 'RECIPIENT_UNREACHABLE', 'WRONG_ADDRESS', 'ITEM_PROBLEM', 'OTHER'] as const;
 const DELAY_REASONS = ['TRAFFIC', 'ITEM_NOT_READY', 'QUEUE', 'TRANSPORT', 'PERSONAL', 'OTHER'] as const;
+
+/** "I arrived at pickup": an optional confirmation. It never changes the errand status. */
+export class ArrivedDto {
+  @ApiPropertyOptional({ type: CheckpointInputDto, description: 'Where the runner is. Stored privately, like the pickup checkpoint.' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CheckpointInputDto)
+  checkpoint?: CheckpointInputDto;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  note?: string;
+}
 
 export class ReportProblemDto {
   @ApiProperty({ enum: PROBLEM_TYPES })

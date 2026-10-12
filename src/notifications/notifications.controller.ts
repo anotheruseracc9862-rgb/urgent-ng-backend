@@ -4,7 +4,7 @@ import { ApiEnveloped, ApiErrors, ApiConsumerAuth } from '../common/api/api-docs
 import { ConsumerAuth } from '../auth/decorators/consumer-auth.decorator.js';
 import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { NotificationQueryService } from './notification-query.service.js';
-import { NotificationDto, NotificationListQueryDto, UnreadCountDto } from './notification.dto.js';
+import { NotificationDto, NotificationListQueryDto, UnreadCountDto, UnreadCountQueryDto } from './notification.dto.js';
 
 /** The in-app notification list (Backend PRD 19, 30.8). */
 @ApiTags('Notifications')
@@ -25,8 +25,8 @@ export class NotificationsController {
   @ConsumerAuth({ allow: ['DEACTIVATED', 'SUSPENDED'] })
   @ApiConsumerAuth()
   @ApiEnveloped(UnreadCountDto)
-  async unread(@CurrentUser() user: AuthenticatedUser): Promise<UnreadCountDto> {
-    return { count: await this.notifications.unreadCount(user.userId) };
+  async unread(@CurrentUser() user: AuthenticatedUser, @Query() query: UnreadCountQueryDto): Promise<UnreadCountDto> {
+    return { count: await this.notifications.unreadCount(user.userId, query.category) };
   }
 
   @Post('read-all')

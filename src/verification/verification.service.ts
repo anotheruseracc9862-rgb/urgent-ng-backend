@@ -16,6 +16,7 @@ import {
   RATE_LIMITED,
   RESOURCE_CONFLICT,
   RESOURCE_NOT_FOUND,
+  VALIDATION_ERROR,
   VERIFICATION_FEE_REQUIRED,
   VERIFICATION_PENDING,
 } from '../common/constants/error-codes.js';
@@ -23,6 +24,16 @@ import type { RequestContext } from '../auth/auth-audit.service.js';
 import { toAttemptView, VerificationStatusService, type AttemptView } from './verification-status.service.js';
 import { isIdentityConflict } from './unique-violation.js';
 import { displayStatus, type DisplayStatus } from './verification.state.js';
+import type { GuarantorDto, IdDocumentDto, IdentityDetailsDto, VerificationSubmissionDto } from './verification.dto.js';
+
+const MINIMUM_AGE_YEARS = 18;
+
+/** What the runner told us beside the NIN and the selfie, checked and ready to store. */
+interface SubmissionDetails {
+  identity?: IdentityDetailsDto;
+  idDocument?: { type: IdDocumentDto['type']; mediaId: string | null };
+  guarantor?: GuarantorDto;
+}
 
 export interface VerificationOverview {
   status: string;
@@ -124,10 +135,13 @@ export class VerificationService {
    */
   async startAttempt(
     userId: string,
-    input: { nin: string; selfieMediaId: string },
+    input: { nin: string; selfieMediaId: string; identity?: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
     ctx: RequestContext = {},
   ): Promise<AttemptView> {
-    const user = await this.prisma.client.user.findUnique({ where: { id: userId }, select: { phoneVerifiedAt: true } });
+    const user = await this.prisma.client.user.findUnique({
+      where: { id: userId },
+      select: { phoneVerifiedAt: true, phoneE164: true },
+    });
     if (!user?.phoneVerifiedAt) {
       throw DomainException.of(FORBIDDEN, {
         message: 'Verify your phone number before identity verification.',
@@ -135,7 +149,8 @@ export class VerificationService {
       });
     }
     const selfie = await this.media.requireReadyOwned(userId, input.selfieMediaId, 'VERIFICATION_INPUT');
-    const attemptId = await this.open(userId, selfie.id);
+    const details = await this.checkDetails(userId, user.phoneE164, selfie.id, input);
+    const attemptId = await this.open(userId, selfie.id, details);
 
     const result = await this.callProvider(selfie.storageKey, input.nin);
     return this.complete(attemptId, userId, result, input.nin, ctx);
@@ -194,8 +209,83 @@ export class VerificationService {
     };
   }
 
+  /**
+   * What an admin sees when a manual review is needed: the details, the ID document reference and
+   * the guarantor (Backend PRD 10.2, demo runner verification). Personal data: only admin routes
+   * with a verification permission may return it.
+   */
+  async getSubmission(attemptId: string): Promise<VerificationSubmissionDto | null> {
+    const row = await this.prisma.client.verificationSubmission.findUnique({ where: { attemptId } });
+    if (!row) {
+      return null;
+    }
+    return {
+      attemptId: row.attemptId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      dateOfBirth: row.dateOfBirth ? row.dateOfBirth.toISOString().slice(0, 10) : null,
+      addressLine: row.addressLine,
+      lga: row.lga,
+      idDocumentType: row.idDocumentType,
+      idDocumentMediaId: row.idDocumentMediaId,
+      guarantorName: row.guarantorName,
+      guarantorRelationship: row.guarantorRelation,
+      guarantorPhone: row.guarantorPhone,
+      submittedAt: row.createdAt,
+    };
+  }
+
+  /** Validate the optional details. A date of birth under 18 or a guarantor who is the runner is refused. */
+  private async checkDetails(
+    userId: string,
+    ownPhone: string | null,
+    selfieMediaId: string,
+    input: { identity?: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
+  ): Promise<SubmissionDetails> {
+    const details: SubmissionDetails = {};
+
+    if (input.identity) {
+      const born = new Date(`${input.identity.dateOfBirth}T00:00:00.000Z`);
+      const now = new Date();
+      const cutoff = new Date(Date.UTC(now.getUTCFullYear() - MINIMUM_AGE_YEARS, now.getUTCMonth(), now.getUTCDate()));
+      if (Number.isNaN(born.getTime()) || born.getTime() > cutoff.getTime()) {
+        throw DomainException.of(VALIDATION_ERROR, {
+          message: `You must be at least ${MINIMUM_AGE_YEARS} years old to run errands.`,
+          details: { field: 'identity.dateOfBirth' },
+        });
+      }
+      details.identity = input.identity;
+    }
+
+    if (input.idDocument) {
+      let mediaId: string | null = null;
+      if (input.idDocument.mediaId) {
+        if (input.idDocument.mediaId === selfieMediaId) {
+          throw DomainException.of(VALIDATION_ERROR, {
+            message: 'The ID document photo must be a different upload from the selfie.',
+            details: { field: 'idDocument.mediaId' },
+          });
+        }
+        const media = await this.media.requireReadyOwned(userId, input.idDocument.mediaId, 'VERIFICATION_INPUT');
+        mediaId = media.id;
+      }
+      details.idDocument = { type: input.idDocument.type, mediaId };
+    }
+
+    if (input.guarantor) {
+      if (ownPhone && input.guarantor.phone === ownPhone) {
+        throw DomainException.of(VALIDATION_ERROR, {
+          message: 'The guarantor needs a phone number of their own.',
+          details: { field: 'guarantor.phone' },
+        });
+      }
+      details.guarantor = input.guarantor;
+    }
+    return details;
+  }
+
   /** Create the PENDING row. One attempt in flight per user, enforced by a lock and by the database. */
-  private async open(userId: string, selfieMediaId: string): Promise<string> {
+  private async open(userId: string, selfieMediaId: string, details: SubmissionDetails = {}): Promise<string> {
     const fee = await this.verificationFee();
     const provider = this.appConfig.get<string>('providers.kyc') === 'real' ? 'dojah' : 'fake';
 
@@ -237,7 +327,26 @@ export class VerificationService {
                 ${selfieMediaId}::uuid, now(), now())
         RETURNING id
       `;
-      return rows[0].id;
+      const attemptId = rows[0].id;
+      if (details.identity || details.idDocument || details.guarantor) {
+        await tx.verificationSubmission.create({
+          data: {
+            attemptId,
+            userId,
+            firstName: details.identity?.firstName.trim() ?? null,
+            lastName: details.identity?.lastName.trim() ?? null,
+            dateOfBirth: details.identity ? new Date(`${details.identity.dateOfBirth}T00:00:00.000Z`) : null,
+            addressLine: details.identity?.addressLine.trim() ?? null,
+            lga: details.identity?.lga.trim() ?? null,
+            idDocumentType: details.idDocument?.type ?? null,
+            idDocumentMediaId: details.idDocument?.mediaId ?? null,
+            guarantorName: details.guarantor?.fullName.trim() ?? null,
+            guarantorRelation: details.guarantor?.relationship ?? null,
+            guarantorPhone: details.guarantor?.phone ?? null,
+          },
+        });
+      }
+      return attemptId;
     });
   }
 

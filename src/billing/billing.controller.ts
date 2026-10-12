@@ -38,6 +38,13 @@ export class BillingController {
     private readonly settlement: PaymentSettlementService,
   ) {}
 
+  /** The same catalogue without signing in, for the public pricing page. Prices only; nothing about a user. */
+  @Get('billing/products/public')
+  @ApiEnveloped(ProductDto, { isArray: true })
+  publicProducts() {
+    return this.orders.products();
+  }
+
   @Get('billing/products')
   @ConsumerAuth({ allow: ['DEACTIVATED', 'SUSPENDED'] })
   @ApiConsumerAuth()

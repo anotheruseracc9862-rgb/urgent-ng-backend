@@ -480,6 +480,8 @@ enum ModerationStatus {
 enum CheckpointType {
   PICKUP
   DELIVERY
+  // Demo-gap: the runner confirms they are at the pickup point. No errand status change.
+  ARRIVED
 }
 
 enum ExecutionEventType {
@@ -496,6 +498,7 @@ enum ExecutionEventType {
   CHANGE_REQUESTED
   CHANGE_ACCEPTED
   NO_SHOW_REPORTED
+  ARRIVED
 }
 
 enum TrustedShareStatus {
@@ -730,6 +733,7 @@ model User {
   phoneE164           String?    @unique(map: "users_phone_unique") @map("phone_e164")
   phoneVerifiedAt     DateTime?  @map("phone_verified_at") @db.Timestamptz(3)
   passwordHash        String     @map("password_hash")
+  googleSubject       String?    @unique(map: "users_google_subject_unique") @map("google_subject")
   status              UserStatus @default(ACTIVE)
   startMode           StartMode? @map("start_mode")
   failedLoginCount    Int        @default(0) @map("failed_login_count")
@@ -787,6 +791,7 @@ model Profile {
   photo        Media?    @relation("ProfilePhoto", fields: [photoMediaId], references: [id], onDelete: SetNull)
   homePoint    String?   @map("home_point") @db.VarChar
   homeArea     String?   @map("home_area")
+  bio          String?   @db.VarChar(300)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
@@ -1149,6 +1154,43 @@ model VerificationAttempt {
 
   @@index([userId, createdAt], map: "verification_attempts_user_created_idx")
   @@map("verification_attempts")
+}
+
+// Demo-gap: what the runner told us at verification (identity details, the ID document and a
+// guarantor). Personal data: scrubbed on anonymisation, shown to admins on manual review.
+// One submission per attempt. Foreign keys are in the migration.
+enum IdDocumentType {
+  NIN_SLIP
+  VOTERS_CARD
+  DRIVERS_LICENCE
+  INTERNATIONAL_PASSPORT
+}
+
+enum GuarantorRelationship {
+  FAMILY
+  FRIEND
+  EMPLOYER
+  NEIGHBOUR
+}
+
+model VerificationSubmission {
+  attemptId           String          @id @map("attempt_id") @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  firstName           String?         @map("first_name")
+  lastName            String?         @map("last_name")
+  dateOfBirth         DateTime?       @map("date_of_birth") @db.Date
+  addressLine         String?         @map("address_line")
+  lga                 String?
+  idDocumentType      IdDocumentType? @map("id_document_type")
+  idDocumentMediaId   String?         @map("id_document_media_id") @db.Uuid
+  guarantorName       String?         @map("guarantor_name")
+  guarantorRelation   GuarantorRelationship? @map("guarantor_relationship")
+  guarantorPhone      String?         @map("guarantor_phone_e164")
+  anonymisedAt        DateTime?       @map("anonymised_at") @db.Timestamptz(3)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId], map: "verification_submissions_user_idx")
+  @@map("verification_submissions")
 }
 
 // P5-01: Errands (Backend PRD 11 and A.5). Status-dependent rules are CHECK constraints in the

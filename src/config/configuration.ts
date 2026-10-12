@@ -47,7 +47,11 @@ export interface AppConfig {
     secretAccessKey: string;
     bucket: string;
   };
+  google: {
+    clientId: string;
+  };
   providers: {
+    google: ProviderMode;
     kyc: ProviderMode;
     maps: ProviderMode;
     sms: ProviderMode;
@@ -125,7 +129,11 @@ export default (): AppConfig => {
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? '',
     bucket: process.env.AWS_S3_BUCKET ?? '',
   },
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+  },
   providers: {
+    google: mode(process.env.GOOGLE_AUTH_PROVIDER),
     kyc: mode(process.env.KYC_PROVIDER),
     maps: mode(process.env.MAPS_PROVIDER),
     sms: mode(process.env.SMS_PROVIDER),

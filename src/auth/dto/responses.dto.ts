@@ -50,6 +50,11 @@ export class LoginResultDto {
   refreshToken?: string;
 }
 
+export class GoogleLoginResultDto extends LoginResultDto {
+  @ApiProperty({ description: 'True when this sign-in created the account.' })
+  isNewAccount!: boolean;
+}
+
 export class RefreshResultDto {
   expiresIn!: number;
   @ApiPropertyOptional({ description: 'Mobile only (X-Client: mobile).' })
@@ -75,6 +80,10 @@ export class MeDto {
   startMode!: StartMode | null;
   @ApiProperty({ nullable: true })
   photoMediaId!: string | null;
+  @ApiProperty({ nullable: true, description: 'A short line about the user.' })
+  bio!: string | null;
+  @ApiProperty({ nullable: true, description: 'Where the user is based.' })
+  homeArea!: string | null;
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   deletionScheduledAt!: Date | null;
   @ApiProperty({ type: String, format: 'date-time' })
@@ -104,12 +113,35 @@ export class PublicProfileDto {
   lastInitial!: string;
   @ApiProperty({ nullable: true })
   photoMediaId!: string | null;
+  @ApiProperty({ nullable: true })
+  bio!: string | null;
   @ApiProperty({ type: String, format: 'date-time' })
   memberSince!: Date;
   @ApiProperty({ type: String, isArray: true, description: 'Earned badges, strongest first.' })
   badges!: string[];
   @ApiProperty({ type: PublicStatsDto })
   stats!: PublicStatsDto;
+}
+
+export class ContactChangeSentDto {
+  @ApiProperty({ description: 'The new value, masked, that the code was sent to.' })
+  sentTo!: string;
+}
+
+export class ContactChangedDto {
+  @ApiProperty({ enum: ['phone', 'email'] })
+  kind!: 'phone' | 'email';
+  @ApiProperty({ description: 'The new value, masked.' })
+  value!: string;
+}
+
+export class QuietHoursViewDto {
+  @ApiProperty({ example: '22:00', description: 'HH:mm, Lagos time.' })
+  start!: string;
+  @ApiProperty({ example: '06:00' })
+  end!: string;
+  @ApiProperty({ description: 'True when the user set none and the platform default applies.' })
+  isDefault!: boolean;
 }
 
 export class AccountChangeDto {

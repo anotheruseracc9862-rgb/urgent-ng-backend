@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsIn, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
 
 export const RATING_DIMENSIONS = ['OVERALL', 'RELIABILITY', 'COMMUNICATION', 'TIMELINESS', 'PAYMENT_CONDUCT'] as const;
@@ -81,7 +81,36 @@ export class EditRatingDto {
   review?: string;
 }
 
-export class RatingListQueryDto extends PaginationQueryDto {}
+export class RatingListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 5, description: 'Only ratings whose overall score is at least this.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  minStars?: number;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 5, description: 'Only ratings whose overall score is at most this. 3 gives "3 stars and below".' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  maxStars?: number;
+}
+
+export const MY_RATING_DIRECTIONS = ['RECEIVED', 'GIVEN'] as const;
+
+export class MyRatingsQueryDto extends RatingListQueryDto {
+  @ApiPropertyOptional({
+    enum: MY_RATING_DIRECTIONS,
+    default: 'RECEIVED',
+    description: 'RECEIVED: ratings others gave you (published only). GIVEN: ratings you gave, including ones not revealed yet.',
+  })
+  @IsOptional()
+  @IsIn(MY_RATING_DIRECTIONS as unknown as string[])
+  direction?: (typeof MY_RATING_DIRECTIONS)[number];
+}
 
 export class RatingScoresViewDto {
   @ApiProperty({ nullable: true, type: Number })
@@ -149,6 +178,30 @@ export class ProfileRatingDto {
   raterFirstName!: string;
   @ApiProperty()
   raterLastInitial!: string;
+  @ApiProperty({ type: Date })
+  createdAt!: Date;
+}
+
+/** One rating on the signed-in user's reviews page, received or given. */
+export class MyRatingDto {
+  @ApiProperty()
+  id!: string;
+  @ApiProperty()
+  assignmentId!: string;
+  @ApiProperty()
+  errandTitle!: string;
+  @ApiProperty({ enum: ['REQUESTER_TO_RUNNER', 'RUNNER_TO_REQUESTER'] })
+  direction!: string;
+  @ApiProperty({ type: RatingScoresViewDto })
+  scores!: RatingScoresViewDto;
+  @ApiProperty({ nullable: true, type: String })
+  review!: string | null;
+  @ApiProperty({ description: 'True once the rating is visible to the other side.' })
+  revealed!: boolean;
+  @ApiProperty({ description: 'The other person: the rater for a received rating, the ratee for a given one.' })
+  counterpartFirstName!: string;
+  @ApiProperty()
+  counterpartLastInitial!: string;
   @ApiProperty({ type: Date })
   createdAt!: Date;
 }

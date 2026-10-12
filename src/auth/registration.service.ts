@@ -22,6 +22,7 @@ export interface RegisterInput {
   email?: string;
   password: string;
   consents: Array<{ type: ConsentType; version: string }>;
+  homeArea?: string;
 }
 
 export interface RegisterResult {
@@ -194,7 +195,7 @@ export class RegistrationService {
           },
           select: { id: true },
         });
-        await tx.profile.create({ data: { userId: user.id } });
+        await tx.profile.create({ data: { userId: user.id, homeArea: input.homeArea?.trim() || null } });
 
         for (const consent of input.consents) {
           await tx.$executeRaw`

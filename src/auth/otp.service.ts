@@ -33,6 +33,7 @@ import { maskIdentifier, type Identifier } from './identifier.js';
 export enum OtpPurpose {
   REGISTRATION = 'REGISTRATION',
   PASSWORD_RESET = 'PASSWORD_RESET',
+  CONTACT_CHANGE = 'CONTACT_CHANGE',
 }
 
 /**

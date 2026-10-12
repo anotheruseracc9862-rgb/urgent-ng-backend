@@ -10,4 +10,5 @@ export * from './maps.provider.js';
 export * from './push.provider.js';
 export * from './email.provider.js';
 export * from './payment.provider.js';
+export * from './google-identity.provider.js';
 export * from './fakes/index.js';

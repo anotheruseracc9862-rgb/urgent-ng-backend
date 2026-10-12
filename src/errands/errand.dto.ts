@@ -380,6 +380,10 @@ export class ErrandSummaryDto {
 export const MINE_TABS = ['DRAFT', 'OPEN', 'ACTIVE', 'PAST'] as const;
 export type MineTab = (typeof MINE_TABS)[number];
 
+/** Sort orders of the requester's list: newest first, what needs a reply first, or the largest budget. */
+export const MINE_SORTS = ['RECENT', 'NEEDS_ATTENTION', 'HIGHEST_AMOUNT'] as const;
+export type MineSort = (typeof MINE_SORTS)[number];
+
 export class MineQueryDto {
   @ApiPropertyOptional({
     enum: MINE_TABS,
@@ -388,6 +392,17 @@ export class MineQueryDto {
   @IsOptional()
   @IsEnum(MINE_TABS)
   tab?: MineTab;
+
+  @ApiPropertyOptional({ enum: MINE_SORTS, default: 'RECENT', description: 'NEEDS_ATTENTION puts delivered errands, selected runners and errands with offers first.' })
+  @IsOptional()
+  @IsEnum(MINE_SORTS)
+  sort?: MineSort;
+
+  @ApiPropertyOptional({ description: 'Search the title, the description and the name of the selected runner.', maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  q?: string;
 
   @ApiPropertyOptional({ description: 'Opaque cursor for pagination' })
   @IsOptional()

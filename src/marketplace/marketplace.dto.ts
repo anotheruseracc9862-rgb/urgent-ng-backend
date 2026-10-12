@@ -6,7 +6,11 @@ import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
 import { LatLngDto } from '../runner/runner.dto.js';
 import { ErrandPhotoDto } from '../errands/errand.dto.js';
 
-export const FEED_SORTS = ['nearest', 'newest'] as const;
+/**
+ * `nearest` (default), `newest`, `recommended` (closest area first, newest within each 2 km ring)
+ * and `budget_desc` (largest suggested budget first).
+ */
+export const FEED_SORTS = ['nearest', 'newest', 'recommended', 'budget_desc'] as const;
 export type FeedSort = (typeof FEED_SORTS)[number];
 
 /** Filters shared by the feed and the map (Backend PRD 12.3). */

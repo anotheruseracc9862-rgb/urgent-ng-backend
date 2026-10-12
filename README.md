@@ -209,3 +209,29 @@ One database login (`DATABASE_URL`) is used everywhere.
 - **Providers.** `PAYMENTS_PROVIDER=fake` in development and test (`FakePaymentProvider.markPaid(reference)` stands in for the customer paying). `real` needs `PAYSTACK_SECRET_KEY`; point Paystack's webhook at `/api/v1/webhooks/paystack`.
 - **Scheduler.** `SubscriptionSweeper` (renewals, expiry), `BoostExpirySweeper`, `ReconciliationSweeper` (daily).
 
+
+## Account security, profile extras and Google sign-in
+
+- **Routes.** `POST /me/password`, `POST /me/contact` and `POST /me/contact/verify` (add or change a phone or email), `GET|PUT /me/quiet-hours`, and `POST /auth/google`. `PATCH /me` also takes `bio` and `homeArea`; `POST /auth/register` takes `homeArea`.
+- **Proof for a sensitive change.** Changing the password or the contact asks for the current password. A Google-only account has none: it sends a fresh `googleIdToken` for the linked Google account instead. Changing the password ends every other session.
+- **Contact change** is two steps: the code goes to the NEW value, and nothing changes until it is confirmed. A value held by another account answers `IDENTIFIER_TAKEN`.
+- **Quiet hours** are kept on every preference row of the user (Lagos time) and hold back marketplace push only. `null` for both times goes back to the 22:00 to 06:00 default.
+- **Google sign-in.** The ID token is verified by `IGoogleIdentityProvider` and never stored. A linked account signs in; a verified email that matches an account links to it; otherwise the first sign-in needs `consents` (without them: 409 `GOOGLE_SIGNUP_REQUIRED` with the email and name). Fake provider in tests: `FakeGoogleIdentityProvider.token(subject, email, name)`. Real: `GOOGLE_AUTH_PROVIDER=real` and `GOOGLE_CLIENT_ID`; with no client id the route answers 503 and nothing else is affected.
+
+## Verification details
+
+- `POST /verification/attempts` also takes `identity` (name, date of birth, address, LGA), `idDocument` (type and an optional photo) and `guarantor`. All are optional for the API and stored in `verification_submissions` for manual review; none of them decides the automatic result. The date of birth must be 18 or more years ago.
+- `VerificationService.getSubmission(attemptId)` is what the admin review screen reads. The ID photo is deleted with the selfie after `STAGED_SELFIE_RETENTION_DAYS`; the details are scrubbed when the account is anonymised.
+
+## Execution: arrived at pickup
+
+- `POST /assignments/:id/arrived` is an optional, once-only confirmation after `start` and before `pickup`. It writes an `ARRIVED` execution event (and a private checkpoint if a point is sent), tells the requester, and does not change the errand status.
+
+## Lists the demo screens need
+
+- `GET /errands/mine` takes `q` (title, description, runner name) and `sort` (`RECENT`, `NEEDS_ATTENTION`, `HIGHEST_AMOUNT`).
+- `GET /marketplace/errands` sorts also by `budget_desc` and `recommended` (nearest 2 km ring first, newest within it). `GET /errands/:id/offers?sort=recommended` blends rating, price and time.
+- `GET /notifications` and `/notifications/unread-count` take `category`. `GET /conversations` takes `filter` (`ALL`, `ACTIVE`, `OFFERS`, `CLOSED`) and `q`.
+- `GET /me/ratings?direction=RECEIVED|GIVEN&minStars&maxStars` is the reviews page. `GET /users/:id/ratings` takes the star filters too.
+- `GET /runner/assignments` takes `q`, `from` and `to`; `GET /runner/assignments/summary?months=` gives counts per month; `GET /runner/assignments/export.csv` is the history as a file.
+- `GET /me/summary` has the dashboard figures and the latest activity. `GET /billing/products/public` is the price list without signing in.

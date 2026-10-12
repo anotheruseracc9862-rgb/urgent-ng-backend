@@ -73,6 +73,7 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     title: 'Delivered',
     body: '"{errandTitle}" was delivered. Please confirm completion.',
   },
+  'execution.arrived': { category: 'TRANSACTIONAL', title: 'Runner arrived', body: '{runnerName} arrived at the pickup point for "{errandTitle}".' },
   'execution.delayed': {
     category: 'TRANSACTIONAL',
     title: 'Running late',
@@ -201,6 +202,20 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     category: 'MARKETPLACE',
     title: 'Payment terms confirmed',
     body: 'Both of you confirmed the payment terms for "{errandTitle}".',
+  },
+
+  // Account security
+  'account.password_changed': {
+    category: 'TRANSACTIONAL',
+    title: 'Your password was changed',
+    body: 'If this was not you, reset your password now and contact support.',
+    email: true,
+  },
+  'account.contact_changed': {
+    category: 'TRANSACTIONAL',
+    title: 'Your contact details changed',
+    body: 'The phone number or email on your account was changed. If this was not you, contact support.',
+    email: true,
   },
 
   // Verification (account service notices)

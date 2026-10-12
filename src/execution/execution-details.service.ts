@@ -7,7 +7,7 @@ import { OutboxService } from '../queue/outbox.service.js';
 import { MediaService } from '../media/media.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { ASSIGNMENT_INVALID_STATE, MEDIA_INVALID, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
-import type { DelayNoticeDto, ExecutionEventDto, ProblemDto, ReceiptDto, ReportProblemDto } from './execution-details.dto.js';
+import type { ArrivedDto, DelayNoticeDto, ExecutionEventDto, ProblemDto, ReceiptDto, ReportProblemDto } from './execution-details.dto.js';
 
 /** Errand statuses in which the runner still has work to do. */
 const WORKING: readonly string[] = ['ACCEPTED', 'IN_PROGRESS', 'PICKED_UP'];
@@ -62,6 +62,41 @@ export class ExecutionDetailsService {
         extra: { problemId: problem.id, type: input.type, openProblems: open },
       });
       return this.toProblem(problem, open >= SUGGEST_DISPUTE_AT);
+    });
+  }
+
+  /**
+   * "I arrived at pickup": the runner tells the requester they are at the pickup point. Allowed
+   * once, after the errand started and before pickup. The errand status does not change, so the
+   * state machine and the cancellation matrix are untouched.
+   */
+  async arrived(runnerId: string, assignmentId: string, input: ArrivedDto): Promise<ExecutionEventDto> {
+    await this.requireRunner(runnerId, assignmentId);
+    return this.prisma.$transaction(async (tx) => {
+      const a = await this.lockWorking(tx, assignmentId, runnerId, ['IN_PROGRESS']);
+      const already = await tx.executionEvent.count({ where: { assignmentId, type: 'ARRIVED' } });
+      if (already > 0) {
+        throw DomainException.of(ASSIGNMENT_INVALID_STATE, { message: 'You already marked yourself as arrived.' });
+      }
+      if (input.checkpoint) {
+        const c = input.checkpoint;
+        const now = await this.dbNow(tx);
+        const capturedAt = c.capturedAt ?? now;
+        if (capturedAt.getTime() > now.getTime() + 5 * 60_000) {
+          throw DomainException.of(VALIDATION_ERROR, { message: 'The capture time is in the future.', details: { field: 'checkpoint.capturedAt' } });
+        }
+        await tx.$executeRaw`
+          INSERT INTO checkpoints (assignment_id, type, point, captured_at, note)
+          VALUES (${assignmentId}::uuid, 'ARRIVED'::"CheckpointType",
+                  ST_SetSRID(ST_MakePoint(${c.lng}::float8, ${c.lat}::float8), 4326)::geography,
+                  ${capturedAt}::timestamptz, ${input.note ?? null})
+        `;
+      }
+      return this.record(tx, a, 'ARRIVED', runnerId, {
+        note: input.note,
+        outbox: 'execution.arrived',
+        extra: { hasLocation: Boolean(input.checkpoint) },
+      });
     });
   }
 

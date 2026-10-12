@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import { NotificationCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
 
@@ -9,6 +10,21 @@ export class NotificationListQueryDto extends PaginationQueryDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   unread?: boolean;
+
+  @ApiPropertyOptional({
+    enum: NotificationCategory,
+    description: 'Only one category: MARKETPLACE (offers and errands), TRANSACTIONAL (progress and account), MESSAGING, SAFETY.',
+  })
+  @IsOptional()
+  @IsEnum(NotificationCategory)
+  category?: NotificationCategory;
+}
+
+export class UnreadCountQueryDto {
+  @ApiPropertyOptional({ enum: NotificationCategory })
+  @IsOptional()
+  @IsEnum(NotificationCategory)
+  category?: NotificationCategory;
 }
 
 export class NotificationDto {

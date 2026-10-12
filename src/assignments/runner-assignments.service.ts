@@ -3,7 +3,16 @@ import type { AssignmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
-import type { RunnerAssignmentSummaryDto, RunnerAssignmentsQueryDto } from './runner-assignments.dto.js';
+import type {
+  HistorySummaryDto,
+  RunnerAssignmentSummaryDto,
+  RunnerAssignmentsQueryDto,
+  RunnerHistoryExportQueryDto,
+} from './runner-assignments.dto.js';
+
+const EXPORT_LIMIT = 5000;
+
+type Filters = Pick<RunnerAssignmentsQueryDto, 'status' | 'q' | 'from' | 'to'>;
 
 const GROUPS: Record<'ACTIVE' | 'PAST', AssignmentStatus[]> = {
   ACTIVE: ['PENDING_ACCEPTANCE', 'ACCEPTED'],
@@ -18,14 +27,11 @@ export class RunnerAssignmentsService {
     private readonly cursors: CursorService,
   ) {}
 
-  async list(runnerId: string, options: Pick<RunnerAssignmentsQueryDto, 'status' | 'cursor' | 'limit'>): Promise<Paginated<RunnerAssignmentSummaryDto>> {
+  async list(runnerId: string, options: Filters & Pick<RunnerAssignmentsQueryDto, 'cursor' | 'limit'>): Promise<Paginated<RunnerAssignmentSummaryDto>> {
     const limit = options.limit ?? 20;
     const cursor = options.cursor ? this.cursors.decode(options.cursor) : undefined;
-    const statuses =
-      options.status === 'ACTIVE' || options.status === 'PAST' ? GROUPS[options.status] : options.status ? [options.status as AssignmentStatus] : undefined;
     const where: Prisma.AssignmentWhereInput = {
-      runnerId,
-      ...(statuses ? { status: { in: statuses } } : {}),
+      ...this.filterWhere(runnerId, options),
       ...(cursor
         ? {
             OR: [
@@ -67,4 +73,113 @@ export class RunnerAssignmentsService {
       },
     );
   }
+
+  /**
+   * Counts per month for the history chart, in Lagos time, for the last `months` months including
+   * this one. Months with nothing in them are present with zeros, so a chart has no gaps.
+   */
+  async summary(runnerId: string, months = 12): Promise<HistorySummaryDto> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ month: string; completed: number; cancelled: number; not_accepted: number; agreed_total: bigint }>
+    >`
+      WITH span AS (
+        SELECT to_char(m, 'YYYY-MM') AS month, m AS start_at
+        FROM generate_series(
+          date_trunc('month', (now() AT TIME ZONE 'Africa/Lagos')) - make_interval(months => ${months - 1}::int),
+          date_trunc('month', (now() AT TIME ZONE 'Africa/Lagos')),
+          interval '1 month'
+        ) AS m
+      )
+      SELECT s.month,
+             count(a.id) FILTER (WHERE a.status = 'COMPLETED'::"AssignmentStatus")::int AS completed,
+             count(a.id) FILTER (WHERE a.status = 'CANCELLED'::"AssignmentStatus")::int AS cancelled,
+             count(a.id) FILTER (WHERE a.status IN ('DECLINED'::"AssignmentStatus", 'TIMED_OUT'::"AssignmentStatus"))::int AS not_accepted,
+             COALESCE(sum(a.agreed_amount_minor) FILTER (WHERE a.status = 'COMPLETED'::"AssignmentStatus"), 0)::bigint AS agreed_total
+      FROM span s
+      LEFT JOIN assignments a
+        ON a.runner_id = ${runnerId}::uuid AND a.deleted_at IS NULL
+       AND to_char(a.selected_at AT TIME ZONE 'Africa/Lagos', 'YYYY-MM') = s.month
+      GROUP BY s.month
+      ORDER BY s.month
+    `;
+    const out = rows.map((r) => ({
+      month: r.month,
+      completed: r.completed,
+      cancelled: r.cancelled,
+      notAccepted: r.not_accepted,
+      agreedTotalMinor: Number(r.agreed_total),
+    }));
+    const completed = out.reduce((n, m) => n + m.completed, 0);
+    const total = out.reduce((n, m) => n + m.completed + m.cancelled + m.notAccepted, 0);
+    return { months: out, completed, total };
+  }
+
+  /**
+   * The history as CSV, newest first, with the same filters as the list. Cells that a spreadsheet
+   * could read as a formula are prefixed, so exported text never runs as one.
+   */
+  async exportCsv(runnerId: string, options: RunnerHistoryExportQueryDto): Promise<string> {
+    const rows = await this.prisma.client.assignment.findMany({
+      where: this.filterWhere(runnerId, options),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: EXPORT_LIMIT,
+      include: {
+        errand: { select: { title: true, status: true } },
+        requester: { select: { firstName: true, lastName: true } },
+        ratings: {
+          where: { direction: 'REQUESTER_TO_RUNNER', status: 'PUBLISHED', revealedAt: { not: null }, deletedAt: null },
+          select: { scores: { where: { dimension: 'OVERALL' }, select: { score: true } } },
+        },
+      },
+    });
+    const header = ['Errand', 'Requester', 'Selected on', 'Status', 'Rating', 'Agreed amount (NGN)'];
+    const lines = [header.map(csvCell).join(',')];
+    for (const row of rows) {
+      const rating = row.ratings[0]?.scores[0]?.score;
+      lines.push(
+        [
+          row.errand.title,
+          `${row.requester.firstName} ${row.requester.lastName.charAt(0)}.`,
+          row.selectedAt.toISOString().slice(0, 10),
+          row.status,
+          rating === undefined ? '' : String(rating),
+          (Number(row.agreedAmountMinor) / 100).toFixed(2),
+        ]
+          .map(csvCell)
+          .join(','),
+      );
+    }
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  private filterWhere(runnerId: string, filters: Filters): Prisma.AssignmentWhereInput {
+    const statuses =
+      filters.status === 'ACTIVE' || filters.status === 'PAST'
+        ? GROUPS[filters.status]
+        : filters.status
+          ? [filters.status as AssignmentStatus]
+          : undefined;
+    const term = filters.q?.trim();
+    return {
+      runnerId,
+      ...(statuses ? { status: { in: statuses } } : {}),
+      ...(filters.from || filters.to
+        ? { selectedAt: { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lt: filters.to } : {}) } }
+        : {}),
+      ...(term
+        ? {
+            OR: [
+              { errand: { title: { contains: term, mode: 'insensitive' as const } } },
+              { requester: { firstName: { contains: term, mode: 'insensitive' as const } } },
+            ],
+          }
+        : {}),
+    };
+  }
+}
+
+/** One CSV cell: quoted, with quotes doubled, and a leading quote against formula injection. */
+function csvCell(value: string): string {
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${safe.replace(/"/g, '""')}"`;
 }

@@ -20,6 +20,9 @@ import { AccountService, DELETION_BLOCKERS, type DeletionBlocker } from './accou
 import { BlockService } from './block.service.js';
 import { DeviceService } from './device.service.js';
 import { NotificationPreferenceService } from './notification-preference.service.js';
+import { AccountSecurityService } from './account-security.service.js';
+import { GoogleAuthService } from './google-auth.service.js';
+import { QueueModule } from '../queue/queue.module.js';
 import { ConsumerAuthGuard } from './guards/consumer-auth.guard.js';
 import { AccountStatusGuard } from './guards/account-status.guard.js';
 import { SuspensionPolicyGuard } from './guards/suspension-policy.guard.js';
@@ -35,7 +38,7 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
  * Signing keys are passed per call (SessionService), so this module needs no default secret.
  */
 @Module({
-  imports: [AuditModule, RiskModule, JwtModule.register({})],
+  imports: [AuditModule, RiskModule, QueueModule, JwtModule.register({})],
   controllers: [AuthController, MeController, UsersController],
   providers: [
     AuthAuditService,
@@ -56,6 +59,8 @@ import { PolicyAcceptanceGuard } from './guards/policy-acceptance.guard.js';
     BlockService,
     DeviceService,
     NotificationPreferenceService,
+    AccountSecurityService,
+    GoogleAuthService,
     ConsumerAuthGuard,
     AccountStatusGuard,
     SuspensionPolicyGuard,

@@ -26,6 +26,7 @@ import { AdminModule } from './admin/admin.module.js';
 import { MediaModule } from './media/media.module.js';
 import { VerificationModule } from './verification/verification.module.js';
 import { RunnerModule } from './runner/runner.module.js';
+import { DashboardModule } from './dashboard/dashboard.module.js';
 import { ReferenceDataModule } from './reference-data/reference-data.module.js';
 import { ErrandsModule } from './errands/errands.module.js';
 import { EntitlementsModule } from './entitlements/entitlements.module.js';
@@ -103,6 +104,7 @@ const isTest = process.env.NODE_ENV === 'test';
     MediaModule,
     VerificationModule,
     RunnerModule,
+    DashboardModule,
     ErrandsModule,
     EntitlementsModule,
     OffersModule,

@@ -5,7 +5,16 @@ import { ConsumerAuth } from '../auth/decorators/consumer-auth.decorator.js';
 import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { Idempotent } from '../common/idempotency/idempotent.decorator.js';
 import { RatingService } from './rating.service.js';
-import { AssignmentRatingsDto, EditRatingDto, ProfileRatingDto, RatingDto, RatingListQueryDto, SubmitRatingDto } from './ratings.dto.js';
+import {
+  AssignmentRatingsDto,
+  EditRatingDto,
+  MyRatingDto,
+  MyRatingsQueryDto,
+  ProfileRatingDto,
+  RatingDto,
+  RatingListQueryDto,
+  SubmitRatingDto,
+} from './ratings.dto.js';
 
 /**
  * Ratings (Backend PRD 20, 30.7). Only the two parties of a completed assignment rate each other.
@@ -42,6 +51,16 @@ export class RatingsController {
   @ApiErrors(400, 403, 404)
   edit(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EditRatingDto) {
     return this.ratings.edit(user.userId, id, dto);
+  }
+
+  /** The reviews page: ratings you received, or the ones you gave. */
+  @Get('me/ratings')
+  @ConsumerAuth({ allow: ['DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] })
+  @ApiConsumerAuth()
+  @ApiEnveloped(MyRatingDto, { isArray: true })
+  @ApiErrors(400)
+  mine(@CurrentUser() user: AuthenticatedUser, @Query() query: MyRatingsQueryDto) {
+    return this.ratings.listMine(user.userId, query);
   }
 
   @Get('users/:id/ratings')

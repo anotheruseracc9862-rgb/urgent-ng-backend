@@ -5,13 +5,25 @@ import { ConsumerAuth, RequireNoRestriction } from '../auth/decorators/consumer-
 import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { Idempotent } from '../common/idempotency/idempotent.decorator.js';
 import { ExecutionDetailsService } from './execution-details.service.js';
-import { DelayNoticeDto, ExecutionEventDto, ProblemDto, ReceiptDto, ReportProblemDto } from './execution-details.dto.js';
+import { ArrivedDto, DelayNoticeDto, ExecutionEventDto, ProblemDto, ReceiptDto, ReportProblemDto } from './execution-details.dto.js';
 
 /** Problems, delay notices, receipts and the timeline (Backend PRD 15.4, 15.5, 30.6). */
 @ApiTags('Execution')
 @Controller('assignments/:id')
 export class ExecutionDetailsController {
   constructor(private readonly details: ExecutionDetailsService) {}
+
+  /** "I arrived at pickup". Optional, once, between start and pickup. No status change. */
+  @Post('arrived')
+  @Idempotent({ operation: 'execution-arrived' })
+  @ConsumerAuth({ allow: ['DEACTIVATED'], continueWhenSuspended: true })
+  @RequireNoRestriction('RUNNING')
+  @ApiConsumerAuth()
+  @ApiEnveloped(ExecutionEventDto, { status: 201 })
+  @ApiErrors(400, 404, 409)
+  arrived(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ArrivedDto) {
+    return this.details.arrived(user.userId, id, dto);
+  }
 
   @Post('problems')
   @Idempotent({ operation: 'execution-problem' })

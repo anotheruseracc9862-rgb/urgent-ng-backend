@@ -191,11 +191,20 @@ export class AccountService {
           UPDATE users SET
             name = 'Deleted User', first_name = 'Deleted', last_name = 'User',
             email = NULL, email_verified_at = NULL, phone_e164 = NULL, phone_verified_at = NULL,
-            password_hash = ${unusable}, anonymised_at = now()
+            password_hash = ${unusable}, google_subject = NULL, anonymised_at = now()
           WHERE id = ${id}::uuid AND status = 'DELETED'::"UserStatus" AND anonymised_at IS NULL
         `;
         if (rows === 0) return false;
-        await tx.$executeRaw`UPDATE profiles SET photo_media_id = NULL, home_point = NULL, home_area = NULL WHERE user_id = ${id}::uuid`;
+        await tx.$executeRaw`UPDATE profiles SET photo_media_id = NULL, home_point = NULL, home_area = NULL, bio = NULL WHERE user_id = ${id}::uuid`;
+        // What the runner told us at verification: identity details, ID document and guarantor.
+        await tx.$executeRaw`
+          UPDATE verification_submissions SET
+            first_name = NULL, last_name = NULL, date_of_birth = NULL, address_line = NULL, lga = NULL,
+            id_document_type = NULL, id_document_media_id = NULL,
+            guarantor_name = NULL, guarantor_relationship = NULL, guarantor_phone_e164 = NULL,
+            anonymised_at = now()
+          WHERE user_id = ${id}::uuid AND anonymised_at IS NULL
+        `;
         await tx.$executeRaw`UPDATE consent_records SET ip_address = NULL, user_agent = NULL WHERE user_id = ${id}::uuid`;
         await tx.$executeRaw`UPDATE auth_sessions SET ip = NULL, user_agent = NULL WHERE user_id = ${id}::uuid`;
         return true;

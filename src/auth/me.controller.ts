@@ -23,11 +23,17 @@ import { AccountService } from './account.service.js';
 import { SessionService } from './session.service.js';
 import { NotificationPreferenceService } from './notification-preference.service.js';
 import { ConsentService } from './consent.service.js';
+import { AccountSecurityService } from './account-security.service.js';
+import { RateLimit } from '../common/decorators/rate-limit.decorator.js';
 import { DeviceService } from './device.service.js';
 import { BlockService } from './block.service.js';
 import {
   AcceptConsentDto,
   AccountReasonDto,
+  ChangePasswordDto,
+  ContactChangeRequestDto,
+  ContactChangeVerifyDto,
+  QuietHoursDto,
   RegisterDeviceDto,
   UpdateMeDto,
   UpdatePreferencesDto,
@@ -51,6 +57,7 @@ export class MeController {
     private readonly consents: ConsentService,
     private readonly devices: DeviceService,
     private readonly blocks: BlockService,
+    private readonly security: AccountSecurityService,
   ) {}
 
   @Get()
@@ -68,6 +75,48 @@ export class MeController {
   @ApiErrors(400)
   updateMe(@CurrentUser() user: AuthenticatedUser, @Body() dto: UpdateMeDto) {
     return this.profile.updateMe(user.userId, dto);
+  }
+
+  /** Change the password. Asks for the current one; every other session ends. */
+  @Post('password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit('auth')
+  @ConsumerAuth()
+  @ApiConsumerAuth()
+  @ApiEnveloped(null, { status: 204 })
+  @ApiErrors(400, 401, 429)
+  async changePassword(@CurrentUser() user: AuthenticatedUser, @Body() dto: ChangePasswordDto, @ReqCtx() ctx: RequestContext) {
+    await this.security.changePassword(
+      user.userId,
+      user.sessionId,
+      { currentPassword: dto.currentPassword, googleIdToken: dto.googleIdToken },
+      dto.newPassword,
+      ctx,
+    );
+  }
+
+  /** Add or change the phone number or email: sends a code to the new value. */
+  @Post('contact')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ConsumerAuth()
+  @ApiConsumerAuth()
+  @ApiEnveloped(R.ContactChangeSentDto)
+  @ApiErrors(400, 401, 409, 429)
+  requestContact(@CurrentUser() user: AuthenticatedUser, @Body() dto: ContactChangeRequestDto, @ReqCtx() ctx: RequestContext) {
+    return this.security.requestContactChange(user.userId, dto, ctx);
+  }
+
+  /** Confirm the code for the new phone number or email. */
+  @Post('contact/verify')
+  @HttpCode(HttpStatus.OK)
+  @RateLimit('auth')
+  @ConsumerAuth()
+  @ApiConsumerAuth()
+  @ApiEnveloped(R.ContactChangedDto)
+  @ApiErrors(400, 409, 429)
+  verifyContact(@CurrentUser() user: AuthenticatedUser, @Body() dto: ContactChangeVerifyDto, @ReqCtx() ctx: RequestContext) {
+    return this.security.verifyContact(user.userId, dto, ctx);
   }
 
   @Post('deactivate')
@@ -138,6 +187,24 @@ export class MeController {
   @ApiEnveloped(R.PreferenceEntryViewDto, { isArray: true })
   getPreferences(@CurrentUser() user: AuthenticatedUser) {
     return this.preferences.get(user.userId);
+  }
+
+  @Get('quiet-hours')
+  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ApiConsumerAuth()
+  @ApiEnveloped(R.QuietHoursViewDto)
+  getQuietHours(@CurrentUser() user: AuthenticatedUser) {
+    return this.preferences.getQuietHours(user.userId);
+  }
+
+  /** Set the quiet window (Lagos time), or send both as null for the default. */
+  @Put('quiet-hours')
+  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ApiConsumerAuth()
+  @ApiEnveloped(R.QuietHoursViewDto)
+  @ApiErrors(400)
+  setQuietHours(@CurrentUser() user: AuthenticatedUser, @Body() dto: QuietHoursDto) {
+    return this.preferences.setQuietHours(user.userId, dto.start, dto.end);
   }
 
   @Put('notification-preferences')

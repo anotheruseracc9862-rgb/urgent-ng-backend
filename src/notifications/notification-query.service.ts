@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Notification, Prisma } from '@prisma/client';
+import type { Notification, NotificationCategory, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
@@ -26,12 +26,16 @@ export class NotificationQueryService {
     private readonly cursors: CursorService,
   ) {}
 
-  async list(userId: string, options: { unread?: boolean; cursor?: string; limit?: number }): Promise<Paginated<NotificationDto>> {
+  async list(
+    userId: string,
+    options: { unread?: boolean; category?: NotificationCategory; cursor?: string; limit?: number },
+  ): Promise<Paginated<NotificationDto>> {
     const limit = options.limit ?? 20;
     const cursor = options.cursor ? this.cursors.decode(options.cursor) : undefined;
     const where: Prisma.NotificationWhereInput = {
       userId,
       ...(options.unread ? { readAt: null } : {}),
+      ...(options.category ? { category: options.category } : {}),
       ...(cursor
         ? { OR: [{ createdAt: { lt: cursor.createdAt as Date } }, { createdAt: cursor.createdAt as Date, id: { lt: cursor.id } }] }
         : {}),
@@ -50,8 +54,8 @@ export class NotificationQueryService {
     });
   }
 
-  unreadCount(userId: string): Promise<number> {
-    return this.prisma.client.notification.count({ where: { userId, readAt: null } });
+  unreadCount(userId: string, category?: NotificationCategory): Promise<number> {
+    return this.prisma.client.notification.count({ where: { userId, readAt: null, ...(category ? { category } : {}) } });
   }
 
   async markRead(userId: string, id: string): Promise<NotificationDto> {

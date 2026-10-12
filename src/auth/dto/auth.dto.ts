@@ -54,6 +54,32 @@ export class RegisterDto extends IdentifierDto {
   @ValidateNested({ each: true })
   @Type(() => ConsentInputDto)
   consents!: ConsentInputDto[];
+
+  /** Where the person is based, for example "Lagos - Lekki & Ajah". Optional. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  homeArea?: string;
+}
+
+export class GoogleSignInDto {
+  /** The ID token from Google's sign-in button. Used once, never stored. */
+  @IsString()
+  @MinLength(20)
+  @MaxLength(4096)
+  idToken!: string;
+
+  /** Needed only when no account exists yet for this Google user (the first sign-in). */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConsentInputDto)
+  consents?: ConsentInputDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  homeArea?: string;
 }
 
 export class VerifyOtpDto extends IdentifierDto {

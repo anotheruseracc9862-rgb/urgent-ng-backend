@@ -1,7 +1,11 @@
 import { IsIn, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export const OFFER_SORTS = ['price_asc', 'eta_asc', 'rating_desc', 'distance_asc'] as const;
+/**
+ * `recommended` blends rating, price and estimated time (rating counts most) so the requester sees
+ * the best all-round offers first. The others sort by one thing.
+ */
+export const OFFER_SORTS = ['recommended', 'price_asc', 'eta_asc', 'rating_desc', 'distance_asc'] as const;
 export type OfferSort = (typeof OFFER_SORTS)[number];
 
 export class OfferListQueryDto {

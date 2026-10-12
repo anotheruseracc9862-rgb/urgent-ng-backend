@@ -75,7 +75,7 @@ describe('My account, blocking, devices and consent (HTTP)', () => {
 
       const res = await get(`/users/${b.userId}`, a.accessToken).expect(200);
 
-      expect(Object.keys(res.body.data).sort()).toEqual(['badges', 'firstName', 'id', 'lastInitial', 'memberSince', 'photoMediaId', 'stats']);
+      expect(Object.keys(res.body.data).sort()).toEqual(['badges', 'bio', 'firstName', 'id', 'lastInitial', 'memberSince', 'photoMediaId', 'stats']);
       expect(res.body.data).toMatchObject({
         firstName: 'Chidi',
         lastInitial: 'O',

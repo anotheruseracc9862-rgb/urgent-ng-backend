@@ -29,6 +29,8 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   // User events
   'user.created': QUEUE_NAMES.NOTIFICATIONS,
   'user.deactivated': QUEUE_NAMES.NOTIFICATIONS,
+  'account.password_changed': QUEUE_NAMES.NOTIFICATIONS,
+  'account.contact_changed': QUEUE_NAMES.NOTIFICATIONS,
 
   // Media events
   'media.confirmed': QUEUE_NAMES.MEDIA,
@@ -71,6 +73,7 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'execution.started': QUEUE_NAMES.MARKETPLACE,
   'execution.picked_up': QUEUE_NAMES.MARKETPLACE,
   'execution.delivered': QUEUE_NAMES.AUTO_COMPLETION,
+  'execution.arrived': QUEUE_NAMES.NOTIFICATIONS,
   'execution.delay_notified': QUEUE_NAMES.NOTIFICATIONS,
   'execution.problem_reported': QUEUE_NAMES.NOTIFICATIONS,
   'execution.problem_resolved': QUEUE_NAMES.NOTIFICATIONS,
