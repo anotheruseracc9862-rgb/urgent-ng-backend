@@ -41,3 +41,4 @@ prisma/dev.db-journal
 # Temporary files
 *.tmp
 .cache/
+openapi.check.json

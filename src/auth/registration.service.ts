@@ -1,3 +1,4 @@
+import { OutboxService } from '../queue/outbox.service.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConsentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
@@ -67,6 +68,7 @@ export class RegistrationService {
     private readonly policies: PolicyService,
     private readonly businessConfig: BusinessConfigService,
     private readonly audit: AuthAuditService,
+    private readonly outbox: OutboxService,
   ) {}
 
   async register(input: RegisterInput, ctx: RequestContext = {}): Promise<RegisterResult> {
@@ -196,6 +198,12 @@ export class RegistrationService {
           select: { id: true },
         });
         await tx.profile.create({ data: { userId: user.id, homeArea: input.homeArea?.trim() || null } });
+        await this.outbox.add(tx, {
+          eventType: 'user.created',
+          aggregateType: 'user',
+          aggregateId: user.id,
+          payload: { userId: user.id, method: input.email ? 'EMAIL' : 'PHONE' },
+        });
 
         for (const consent of input.consents) {
           await tx.$executeRaw`

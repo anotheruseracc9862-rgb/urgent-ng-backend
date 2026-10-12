@@ -207,6 +207,26 @@ export class AccountService {
         `;
         await tx.$executeRaw`UPDATE consent_records SET ip_address = NULL, user_agent = NULL WHERE user_id = ${id}::uuid`;
         await tx.$executeRaw`UPDATE auth_sessions SET ip = NULL, user_agent = NULL WHERE user_id = ${id}::uuid`;
+        // What the person typed into their errands: contacts and addresses. The errand rows stay
+        // (the other party's history), but nothing that points at a person or a doorstep.
+        await tx.$executeRaw`
+          UPDATE errand_contacts SET pickup_name = NULL, pickup_phone = NULL, dropoff_name = NULL, dropoff_phone = NULL
+          WHERE errand_id IN (SELECT id FROM errands WHERE requester_id = ${id}::uuid)
+        `;
+        await tx.$executeRaw`
+          UPDATE errand_locations SET address_text = NULL, landmark = NULL, exact_point = approx_point
+          WHERE errand_id IN (SELECT id FROM errands WHERE requester_id = ${id}::uuid)
+        `;
+        await tx.$executeRaw`
+          UPDATE devices SET push_token = 'anonymised:' || id::text, active = false WHERE user_id = ${id}::uuid
+        `;
+        // Transient rows that can hold the person's words or position.
+        await tx.$executeRaw`
+          DELETE FROM notification_deliveries WHERE notification_id IN (SELECT id FROM notifications WHERE user_id = ${id}::uuid)
+        `;
+        await tx.$executeRaw`DELETE FROM notifications WHERE user_id = ${id}::uuid`;
+        await tx.$executeRaw`DELETE FROM idempotency_keys WHERE user_id = ${id}::uuid`;
+        await tx.$executeRaw`DELETE FROM location_records WHERE user_id = ${id}::uuid`;
         return true;
       });
       if (changed) {

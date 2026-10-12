@@ -49,6 +49,8 @@ import { TrustedContactModule } from './trusted-contact/trusted-contact.module.j
 import { RiskModule } from './risk/risk.module.js';
 import { BillingModule } from './billing/billing.module.js';
 import { BoostsModule } from './boosts/boosts.module.js';
+import { AnalyticsModule } from './analytics/analytics.module.js';
+import { RetentionModule } from './retention/retention.module.js';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -128,6 +130,8 @@ const isTest = process.env.NODE_ENV === 'test';
     BoostsModule,
     SubscriptionsModule,
     BillingModule,
+    AnalyticsModule,
+    RetentionModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AppThrottlerGuard },

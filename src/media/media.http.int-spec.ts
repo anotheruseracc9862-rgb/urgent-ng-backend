@@ -529,7 +529,8 @@ describe('Media (Phase 3)', () => {
       const { mediaId } = await uploadAndConfirm(app, user.accessToken, await makeImage('jpeg', { gps: true }));
       const worker = app.get(MediaWorker);
 
-      expect(await app.get(OutboxService).publishPendingEvents((event) => app.get(OutboxPublisher).publish(event))).toBe(1);
+      // Registering wrote `user.created` too (analytics), so more than the one media event is pending.
+      expect(await app.get(OutboxService).publishPendingEvents((event) => app.get(OutboxPublisher).publish(event))).toBeGreaterThanOrEqual(1);
       worker.start();
       try {
         await vi.waitFor(async () => expect((await row(mediaId)).status).toBe('READY'), { timeout: 20_000, interval: 200 });

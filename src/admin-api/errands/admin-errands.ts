@@ -3,7 +3,7 @@ import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { AssignmentStatus, ErrandStatus, Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import { PrismaService } from '../../database/prisma.service.js';
 import { Paginated } from '../../common/pagination/paginated.js';
 import { PaginationQueryDto } from '../../common/pagination/pagination.dto.js';
@@ -51,6 +51,12 @@ export class AdminCancelErrandDto extends AdminActionDto {}
 
 export class AdminExtendErrandDto extends AdminActionDto {
   @ApiProperty({ minimum: 1, maximum: 168 }) @Type(() => Number) @IsInt() @Min(1) @Max(168) hours!: number;
+}
+
+export class AdminLegalHoldDto extends AdminActionDto {
+  @ApiProperty({ description: 'true keeps the errand and its chat out of retention until lifted; false lifts the hold.' })
+  @IsBoolean()
+  hold!: boolean;
 }
 
 export class AdminTransitionDto extends AdminActionDto {
@@ -362,6 +368,13 @@ export class AdminErrandsService {
     }
   }
 
+  /** A legal hold keeps the chat of an errand out of retention (Backend PRD 29). Returns the new state. */
+  async setLegalHold(errandId: string, hold: boolean): Promise<{ errandId: string; legalHold: boolean }> {
+    const changed = await this.prisma.errand.updateMany({ where: { id: errandId, deletedAt: null }, data: { legalHold: hold } });
+    if (changed.count === 0) throw DomainException.of(RESOURCE_NOT_FOUND);
+    return { errandId, legalHold: hold };
+  }
+
   async requesterOf(errandId: string): Promise<string> {
     const e = await this.prisma.errand.findFirst({ where: { id: errandId }, select: { requesterId: true } });
     if (!e) throw DomainException.of(RESOURCE_NOT_FOUND);
@@ -483,6 +496,25 @@ export class AdminErrandsController {
       ctx,
       metadata: { hours: dto.hours },
       execute: () => this.lifecycle.adminExtend(id, dto.hours, admin.adminId),
+    });
+  }
+
+  /** Place or lift a legal hold: while held, the errand's chat is not redacted by retention. */
+  @Post('errands/:id/legal-hold')
+  @HttpCode(200)
+  @AdminAuth('ERRANDS_MODERATE')
+  @ApiEnveloped(AnyObjectDto)
+  @ApiErrors(400, 403, 404)
+  legalHold(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AdminLegalHoldDto, @ReqCtx() ctx: RequestContext) {
+    return this.actions.run({
+      admin,
+      action: dto.hold ? 'errand.legal_hold_set' : 'errand.legal_hold_lifted',
+      entityType: 'errand',
+      entityId: id,
+      reason: { code: dto.reasonCode, text: dto.reasonText },
+      ctx,
+      metadata: { hold: dto.hold },
+      execute: () => this.service.setLegalHold(id, dto.hold),
     });
   }
 

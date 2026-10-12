@@ -293,6 +293,8 @@ export class DisputeService {
           resolvedBy: actor.adminId,
           resolvedAt: new Date(),
           firstResponseAt: dispute.firstResponseAt ?? new Date(),
+          // The case is decided: retention can run for its errand again (Backend PRD 29).
+          retentionHold: false,
         },
       });
 

@@ -23,7 +23,8 @@ async function generate() {
   const document = buildOpenApiDocument(app);
 
   // Write to file
-  const outputPath = join(process.cwd(), 'openapi.json');
+  // OPENAPI_OUT lets the contract check write beside the committed file instead of over it.
+  const outputPath = join(process.cwd(), process.env.OPENAPI_OUT ?? 'openapi.json');
   writeFileSync(outputPath, JSON.stringify(document, null, 2));
 
   console.log(`✓ OpenAPI spec generated: ${outputPath}`);

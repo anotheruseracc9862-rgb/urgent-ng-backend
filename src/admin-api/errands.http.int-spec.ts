@@ -140,6 +140,22 @@ describe('Admin API: errands, offers, assignments (P11-03)', () => {
       await trust.post(`/admin/errands/${errand}/extend`, { ...reason, hours: 2 }).expect(409);
     });
 
+    it('places and lifts a legal hold with a reason, and refuses without permission', async () => {
+      const trust = as(await login('TRUST_AND_SAFETY'));
+      const finance = as(await login('FINANCE'));
+      const requester = await signedInUser(app);
+      const errand = await insertErrand({ requesterId: requester.userId, categoryId: categories.delivery });
+
+      await finance.post(`/admin/errands/${errand}/legal-hold`, { ...reason, hold: true }).expect(403);
+      await trust.post(`/admin/errands/${errand}/legal-hold`, { hold: true }).expect(400);
+      const set = await trust.post(`/admin/errands/${errand}/legal-hold`, { ...reason, hold: true }).expect(200);
+      expect(set.body.data).toEqual({ errandId: errand, legalHold: true });
+      expect((await prisma.errand.findUniqueOrThrow({ where: { id: errand } })).legalHold).toBe(true);
+      await trust.post(`/admin/errands/${errand}/legal-hold`, { ...reason, hold: false }).expect(200);
+      expect((await prisma.errand.findUniqueOrThrow({ where: { id: errand } })).legalHold).toBe(false);
+      expect(await prisma.auditLog.count({ where: { action: { startsWith: 'admin.errand.legal_hold' }, entityId: errand } })).toBe(2);
+    });
+
     it('takes an errand down as content, through the state machine', async () => {
       const trust = as(await login('TRUST_AND_SAFETY'));
       const support = as(await login('SUPPORT_AGENT'));

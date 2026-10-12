@@ -43,6 +43,7 @@ export const EVENT_TO_QUEUE_MAP: Record<string, QueueName> = {
   'verification.attempts_granted': QUEUE_NAMES.NOTIFICATIONS,
 
   // Errand events
+  'errand.created': QUEUE_NAMES.ANALYTICS,
   'errand.published': QUEUE_NAMES.MARKETPLACE,
   'errand.extended': QUEUE_NAMES.MARKETPLACE,
   'errand.cancelled': QUEUE_NAMES.MARKETPLACE,

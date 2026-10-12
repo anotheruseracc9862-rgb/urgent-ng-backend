@@ -34,14 +34,16 @@ import { RatingsModule } from '../ratings/ratings.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { ExecutionModule } from '../execution/execution.module.js';
 import { SweeperRegistry } from './sweeper.registry.js';
+import { DataRetentionSweeper } from './data-retention.sweeper.js';
+import { RetentionModule } from '../retention/retention.module.js';
 
 /**
  * Sweepers (due-row jobs). Register each new sweeper in SweeperRegistry.
  * Only the scheduler process starts them.
  */
 @Module({
-  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule, NotificationsModule, RatingsModule, ReliabilityModule, EnforcementModule, BadgesModule, LocationsModule, TrustedContactModule, BillingModule, BoostsModule, SubscriptionsModule],
-  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, ReminderSweeper, RatingRevealSweeper, NoShowSweeper, EnforcementExpirySweeper, BadgeRecomputeSweeper, LocationRetentionSweeper, TrustedLinkExpirySweeper, BoostExpirySweeper, SubscriptionSweeper, ReconciliationSweeper, SweeperRegistry],
+  imports: [DatabaseModule, IdempotencyModule, AuthModule, MediaModule, VerificationModule, ErrandsModule, AssignmentsModule, ExecutionModule, NotificationsModule, RatingsModule, ReliabilityModule, EnforcementModule, BadgesModule, LocationsModule, TrustedContactModule, BillingModule, BoostsModule, SubscriptionsModule, RetentionModule],
+  providers: [IdempotencyCleanupSweeper, AccountDeletionSweeper, MediaCleanupSweeper, VerificationSweeper, ErrandExpirySweeper, AssignmentAcceptanceSweeper, AutoCompletionSweeper, ChangeRequestExpirySweeper, ReminderSweeper, RatingRevealSweeper, NoShowSweeper, EnforcementExpirySweeper, BadgeRecomputeSweeper, LocationRetentionSweeper, TrustedLinkExpirySweeper, BoostExpirySweeper, SubscriptionSweeper, ReconciliationSweeper, DataRetentionSweeper, SweeperRegistry],
   exports: [SweeperRegistry],
 })
 export class SchedulerModule {}

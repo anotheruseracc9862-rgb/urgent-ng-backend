@@ -128,6 +128,12 @@ export class ErrandService {
         entityType: 'errand',
         entityId: errandId,
       });
+      await this.outbox.add(tx, {
+        eventType: 'errand.created',
+        aggregateType: 'errand',
+        aggregateId: errandId,
+        payload: { errandId, requesterId: userId, categoryId: dto.categoryId },
+      });
     });
     return this.view.owner(this.prisma, errandId);
   }

@@ -1226,6 +1226,8 @@ model Errand {
   cancelledAt                DateTime?                             @map("cancelled_at") @db.Timestamptz(3)
   cancellationReason         ErrandCancellationReason?             @map("cancellation_reason")
   cancellationNote           String?                               @map("cancellation_note")
+  /// A legal hold keeps the errand's chat out of retention until an admin lifts it (Backend PRD 29).
+  legalHold                  Boolean                               @default(false) @map("legal_hold")
   cancelledBy                String?                               @map("cancelled_by") @db.Uuid
   cancelledByType            AuditActorType?                       @map("cancelled_by_type")
   /// Approximate point of the primary location (pickup, else destination). The feed index.
@@ -2274,4 +2276,19 @@ model DataSubjectRequest {
 
   @@index([status, dueAt], map: "data_subject_requests_status_due_idx")
   @@map("data_subject_requests")
+}
+
+/// P12-03: business events for product analytics (Backend PRD 28.2). Transient: removed after
+/// ANALYTICS_RETENTION_MONTHS. Never holds addresses, phone numbers or message text.
+model AnalyticsEvent {
+  id            String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name          String
+  userId        String?  @map("user_id") @db.Uuid
+  properties    Json     @default("{}")
+  sourceEventId String?  @unique(map: "analytics_events_source_event_unique") @map("source_event_id") @db.Uuid
+  occurredAt    DateTime @map("occurred_at") @db.Timestamptz(3)
+
+  @@index([name, occurredAt], map: "analytics_events_name_occurred_idx")
+  @@index([occurredAt], map: "analytics_events_occurred_idx")
+  @@map("analytics_events")
 }

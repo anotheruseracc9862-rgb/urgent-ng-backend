@@ -1,3 +1,4 @@
+import { OutboxService } from '../queue/outbox.service.js';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConsentType, Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
@@ -60,6 +61,7 @@ export class GoogleAuthService {
     private readonly restrictions: RestrictionService,
     private readonly sessions: SessionService,
     private readonly audit: AuthAuditService,
+    private readonly outbox: OutboxService,
   ) {}
 
   async signIn(input: GoogleSignInInput, ctx: RequestContext = {}): Promise<LoginResult & { isNewAccount: boolean }> {
@@ -183,6 +185,12 @@ export class GoogleAuthService {
           select: { id: true },
         });
         await tx.profile.create({ data: { userId: user.id, homeArea: input.homeArea?.trim() || null } });
+        await this.outbox.add(tx, {
+          eventType: 'user.created',
+          aggregateType: 'user',
+          aggregateId: user.id,
+          payload: { userId: user.id, method: 'GOOGLE' },
+        });
         for (const consent of input.consents ?? []) {
           await tx.$executeRaw`
             INSERT INTO consent_records (user_id, consent_type, document_version, accepted_at, ip_address, user_agent)

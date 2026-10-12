@@ -76,6 +76,16 @@ export interface BusinessConfig {
   /** Days a successful verification stays valid. 0 means it does not expire. */
   VERIFICATION_VALIDITY_DAYS: number;
   STAGED_SELFIE_RETENTION_DAYS: number;
+  /** Months after an errand ends that its chat text is redacted, unless a case holds it (Backend PRD 29). */
+  MESSAGE_RETENTION_MONTHS: number;
+  NOTIFICATION_RETENTION_DAYS: number;
+  ANALYTICS_RETENTION_MONTHS: number;
+  /** Days a published outbox event is kept for inspection before it is removed. */
+  OUTBOX_RETENTION_DAYS: number;
+  /** Days an expired or revoked sign-in session row is kept. */
+  SESSION_RETENTION_DAYS: number;
+  /** Days of per-day offer counters kept (only today's count matters for the limit). */
+  OFFER_COUNTER_RETENTION_DAYS: number;
   KYC_SELFIE_MATCH_THRESHOLD: number;
   KYC_REQUEST_TIMEOUT_SECONDS: number;
   IDEMPOTENCY_TTL_HOURS: number;
@@ -232,6 +242,12 @@ export const DEFAULTS: BusinessConfig = {
   VERIFICATION_RETRY_COOLDOWN_HOURS: 24,
   VERIFICATION_VALIDITY_DAYS: 0, // the PRD names no expiry period: verification does not expire until an admin sets one
   STAGED_SELFIE_RETENTION_DAYS: 30,
+  MESSAGE_RETENTION_MONTHS: 12,
+  NOTIFICATION_RETENTION_DAYS: 90,
+  ANALYTICS_RETENTION_MONTHS: 13,
+  OUTBOX_RETENTION_DAYS: 7,
+  SESSION_RETENTION_DAYS: 30,
+  OFFER_COUNTER_RETENTION_DAYS: 7,
   KYC_SELFIE_MATCH_THRESHOLD: 90,
   KYC_REQUEST_TIMEOUT_SECONDS: 30,
   IDEMPOTENCY_TTL_HOURS: 24,

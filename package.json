@@ -28,6 +28,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "admin:create": "tsx src/scripts/admin-create.ts",
     "openapi": "node dist/scripts/generate-openapi.js",
+    "docs": "tsx src/scripts/generate-docs.ts",
+    "contract:check": "npm run build && cross-env OPENAPI_OUT=openapi.check.json node dist/scripts/generate-openapi.js && cross-env OPENAPI_OUT=openapi.check.json tsx src/scripts/check-contract.ts",
     "start:scheduler": "node dist/scheduler/main.js",
     "check": "npm run lint && npm run build && npm test",
     "test:int": "vitest run --config ./vitest.config.int.ts",
