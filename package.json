@@ -26,6 +26,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
+    "seed:api-contract-user": "tsx src/scripts/seed-api-contract-user.ts",
     "admin:create": "tsx src/scripts/admin-create.ts",
     "openapi": "node dist/scripts/generate-openapi.js",
     "docs": "tsx src/scripts/generate-docs.ts",

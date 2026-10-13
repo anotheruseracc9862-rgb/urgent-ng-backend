@@ -57,7 +57,7 @@ export class EnvironmentVariables {
   REDIS_URL: string = 'redis://localhost:6379';
 
   @IsString()
-  CORS_ORIGINS: string = 'http://localhost:3001';
+  CORS_ORIGINS: string = 'http://localhost:4001,http://localhost:4002';
 
   @ValidateIf(isProduction)
   @IsString()

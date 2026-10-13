@@ -93,7 +93,7 @@ export default (): AppConfig => {
       : 'development',
   port: Number.parseInt(process.env.PORT ?? '4000', 10),
   trustProxyHops: Number.parseInt(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'), 10),
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:3001')
+  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:4001,http://localhost:4002')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
@@ -166,4 +166,3 @@ export default (): AppConfig => {
   },
 };
 };
-
