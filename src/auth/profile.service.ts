@@ -5,6 +5,7 @@ import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
+import { NO_PASSWORD_PREFIX } from './google-auth.service.js';
 
 export interface MeView {
   id: string;
@@ -15,6 +16,10 @@ export interface MeView {
   phoneVerified: boolean;
   email: string | null;
   emailVerified: boolean;
+  /** False for an account created with Google that has not set a password: it confirms with Google instead. */
+  hasPassword: boolean;
+  /** True when a Google account is linked to this user. */
+  googleLinked: boolean;
   status: string;
   startMode: StartMode | null;
   photoMediaId: string | null;
@@ -65,6 +70,8 @@ export class ProfileService {
         phoneVerifiedAt: true,
         email: true,
         emailVerifiedAt: true,
+        passwordHash: true,
+        googleSubject: true,
         status: true,
         startMode: true,
         deletionScheduledAt: true,
@@ -84,6 +91,8 @@ export class ProfileService {
       phoneVerified: user.phoneVerifiedAt !== null,
       email: user.email,
       emailVerified: user.emailVerifiedAt !== null,
+      hasPassword: !user.passwordHash.startsWith(NO_PASSWORD_PREFIX),
+      googleLinked: user.googleSubject !== null,
       status: user.status,
       startMode: user.startMode,
       photoMediaId: user.profile?.photoMediaId ?? null,

@@ -74,6 +74,13 @@ export class MeDto {
   @ApiProperty({ nullable: true })
   email!: string | null;
   emailVerified!: boolean;
+  @ApiProperty({
+    description:
+      'False for an account created with Google that has no password yet: sensitive changes are confirmed with a Google ID token instead.',
+  })
+  hasPassword!: boolean;
+  @ApiProperty({ description: 'True when a Google account is linked to this user.' })
+  googleLinked!: boolean;
   @ApiProperty({ enum: UserStatus, enumName: 'UserStatus' })
   status!: UserStatus;
   @ApiProperty({ enum: StartMode, enumName: 'StartMode', nullable: true })

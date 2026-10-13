@@ -48,6 +48,8 @@ describe('My account, blocking, devices and consent (HTTP)', () => {
         phone: user.phone,
         phoneVerified: true,
         emailVerified: false,
+        hasPassword: true,
+        googleLinked: false,
         status: 'ACTIVE',
         startMode: null,
       });
