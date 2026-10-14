@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
 
 export interface CategoryView {
+  id: string;
   key: string;
   name: string;
   requiresPickup: boolean;
@@ -31,6 +32,7 @@ export class ReferenceDataService {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return rows.map((row) => ({
+      id: row.id,
       key: row.key,
       name: row.name,
       requiresPickup: row.requiresPickup,

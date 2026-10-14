@@ -110,6 +110,15 @@ export class ErrandViewService {
       this.contacts.read(client, errandId),
       this.photos.list(client, errandId),
     ]);
+    const assignment = await client.assignment.findFirst({
+      where: {
+        errandId,
+        deletedAt: null,
+        status: { in: ['PENDING_ACCEPTANCE', 'ACCEPTED', 'COMPLETED'] },
+      },
+      orderBy: { selectedAt: 'desc' },
+      select: { id: true, runnerId: true, status: true, agreedAmountMinor: true, acceptedAt: true },
+    });
     const at = (type: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION'): ParticipantLocationView | null => {
       const found = locations.find((location) => location.type === type);
       return found ? this.privacy.toParticipant(found) : null;
@@ -133,6 +142,15 @@ export class ErrandViewService {
       pickupContact: contacts.pickup,
       dropoffContact: contacts.dropoff,
       photos,
+      assignment: assignment
+        ? {
+            id: assignment.id,
+            runnerId: assignment.runnerId,
+            status: assignment.status,
+            agreedAmountMinor: Number(assignment.agreedAmountMinor),
+            acceptedAt: assignment.acceptedAt,
+          }
+        : null,
       offerCount: errand.offerCount,
       publishedAt: errand.publishedAt,
       expiresAt: errand.expiresAt,

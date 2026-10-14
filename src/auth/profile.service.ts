@@ -3,6 +3,7 @@ import type { StartMode } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
+import { withDeleted } from '../database/soft-delete.extension.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
 import { NO_PASSWORD_PREFIX } from './google-auth.service.js';
@@ -147,16 +148,23 @@ export class ProfileService {
   }
 
   async getPublic(userId: string): Promise<PublicProfileView> {
-    const user = await this.prisma.client.user.findFirst({
-      where: { id: userId, status: { in: ['ACTIVE', 'DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] } },
+    const user = await withDeleted(() => this.prisma.client.user.findFirst({
+      where: {
+        id: userId,
+        OR: [
+          { status: { in: ['ACTIVE', 'DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] }, deletedAt: null },
+          { status: 'DELETED' },
+        ],
+      },
       select: {
         id: true,
         firstName: true,
         lastName: true,
+        status: true,
         createdAt: true,
         profile: { select: { photoMediaId: true, bio: true } },
       },
-    });
+    }));
     if (!user) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
     }
@@ -183,12 +191,12 @@ export class ProfileService {
     });
     return {
       id: user.id,
-      firstName: user.firstName,
-      lastInitial: user.lastName.charAt(0).toUpperCase(),
-      photoMediaId: user.profile?.photoMediaId ?? null,
-      bio: user.profile?.bio ?? null,
+      firstName: user.status === 'DELETED' ? 'Deleted' : user.firstName,
+      lastInitial: user.status === 'DELETED' ? 'U' : user.lastName.charAt(0).toUpperCase(),
+      photoMediaId: user.status === 'DELETED' ? null : user.profile?.photoMediaId ?? null,
+      bio: user.status === 'DELETED' ? null : user.profile?.bio ?? null,
       memberSince: user.createdAt,
-      badges: sortForDisplay(badgeRows.map((r) => r.badge)),
+      badges: user.status === 'DELETED' ? [] : sortForDisplay(badgeRows.map((r) => r.badge)),
       stats: {
         completedAsRunner: stats?.completedAsRunner ?? 0,
         completedAsRequester: stats?.completedAsRequester ?? 0,

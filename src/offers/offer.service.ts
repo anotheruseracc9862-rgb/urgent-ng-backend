@@ -194,6 +194,75 @@ export class OfferService {
     }
   }
 
+  async getNegotiation(offerId: string, userId: string): Promise<{
+    id: string;
+    errandId: string;
+    runnerId: string;
+    requesterId: string;
+    amountMinor: number;
+    durationMinutes: number;
+    status: OfferStatus;
+    awaitingParty: AwaitingParty;
+    version: number;
+    needsReconfirmation: boolean;
+    closeReason: OfferCloseReason | null;
+    conversationId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    availabilityConfirmedAt: Date | null;
+    message: string | null;
+    assignmentId: string | null;
+    errandTitle: string;
+    history: Array<{
+      id: string;
+      type: NegotiationMessageType;
+      actorUserId: string;
+      amountMinor: number | null;
+      durationMinutes: number | null;
+      message: string | null;
+      createdAt: Date;
+    }>;
+  }> {
+    const offer = await this.prisma.offer.findFirst({
+      where: { id: offerId, OR: [{ runnerId: userId }, { requesterId: userId }] },
+      include: {
+        errand: { select: { title: true } },
+        negotiationEvents: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+        assignments: { select: { id: true }, take: 1 },
+      },
+    });
+    if (!offer) throw DomainException.of(RESOURCE_NOT_FOUND);
+    return {
+      id: offer.id,
+      errandId: offer.errandId,
+      runnerId: offer.runnerId,
+      requesterId: offer.requesterId,
+      amountMinor: Number(offer.amountMinor),
+      durationMinutes: offer.durationMinutes,
+      status: offer.status,
+      awaitingParty: offer.awaitingParty,
+      version: offer.version,
+      needsReconfirmation: offer.needsReconfirmation,
+      closeReason: offer.closeReason,
+      conversationId: offer.conversationId,
+      createdAt: offer.createdAt,
+      updatedAt: offer.updatedAt,
+      availabilityConfirmedAt: offer.availabilityConfirmedAt,
+      message: offer.message,
+      assignmentId: offer.assignments[0]?.id ?? null,
+      errandTitle: offer.errand.title,
+      history: offer.negotiationEvents.map((event) => ({
+        id: event.id,
+        type: event.messageType,
+        actorUserId: event.actorUserId,
+        amountMinor: event.proposedAmountMinor === null ? null : Number(event.proposedAmountMinor),
+        durationMinutes: event.proposedDurationMinutes,
+        message: event.message,
+        createdAt: event.createdAt,
+      })),
+    };
+  }
+
   // ---- Negotiation ----
 
   /** The runner revises their own offer while it waits on the requester. Not counted against the limit. */

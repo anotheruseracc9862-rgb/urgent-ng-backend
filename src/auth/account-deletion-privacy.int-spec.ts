@@ -105,6 +105,18 @@ describe('Account deletion leaves no personal data behind (P12-01)', () => {
       (await runnerGet('/conversations').expect(200)).body,
       (await runnerGet('/runner/assignments').expect(200)).body,
     ];
+    const publicProfileResponse = await runnerGet(`/users/${requester.userId}`);
+    expect(publicProfileResponse.status, JSON.stringify(publicProfileResponse.body)).toBe(200);
+    const publicProfile = publicProfileResponse.body.data;
+    const publicRatings = (await runnerGet(`/users/${requester.userId}/ratings`).expect(200)).body.data;
+    expect(publicProfile).toMatchObject({
+      firstName: 'Deleted',
+      lastInitial: 'U',
+      photoMediaId: null,
+      bio: null,
+      badges: [],
+    });
+    expect(publicRatings).toHaveLength(1);
     const text = JSON.stringify(seen);
     expect(text).not.toContain('Zebedee');
     expect(text).not.toContain('Quentin');
@@ -112,5 +124,8 @@ describe('Account deletion leaves no personal data behind (P12-01)', () => {
     expect(text).not.toContain('Allen Avenue');
     expect(text).not.toContain('Opposite the bank');
     expect(text).toContain('Deleted');
+    expect(JSON.stringify([publicProfile, publicRatings])).not.toContain('Zebedee');
+    expect(JSON.stringify([publicProfile, publicRatings])).not.toContain('Quentin');
+    expect(JSON.stringify([publicProfile, publicRatings])).not.toContain(EMAIL);
   });
 });

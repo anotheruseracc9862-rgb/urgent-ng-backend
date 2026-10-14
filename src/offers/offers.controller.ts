@@ -7,7 +7,7 @@ import { Idempotent } from '../common/idempotency/idempotent.decorator.js';
 import { RequiresFlag } from '../common/decorators/requires-flag.decorator.js';
 import { OfferService } from './offer.service.js';
 import { OfferListService } from './offer-list.service.js';
-import { CounterOfferDto, OfferDto, OfferVersionDto, SubmitOfferDto } from './offer.dto.js';
+import { CounterOfferDto, OfferDto, OfferNegotiationDto, OfferVersionDto, SubmitOfferDto } from './offer.dto.js';
 import { OfferListItemDto, OfferListQueryDto } from './offer-list.dto.js';
 
 /**
@@ -55,6 +55,15 @@ export class OffersController {
     @Query() query: OfferListQueryDto,
   ): Promise<OfferListItemDto[]> {
     return this.offerList.getOffersForErrand(user.userId, errandId, query.sort);
+  }
+
+  @Get('offers/:id')
+  @ConsumerAuth()
+  @ApiConsumerAuth()
+  @ApiEnveloped(OfferNegotiationDto)
+  @ApiErrors(404)
+  getNegotiation(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.offers.getNegotiation(id, user.userId);
   }
 
   /** The runner revises their own offer while it waits on the requester. */

@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CategoryDto {
+  id!: string;
   /** Stable key, for example `delivery`. */
   key!: string;
   name!: string;

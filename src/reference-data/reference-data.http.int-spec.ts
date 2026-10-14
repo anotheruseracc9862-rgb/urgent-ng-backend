@@ -43,10 +43,15 @@ describe('Public reference data (HTTP)', () => {
 
       const res = await get('/categories').expect(200);
 
-      expect(res.body.data).toEqual([
-        { key: 'delivery', name: 'Delivery', requiresPickup: true, requiresDestination: true, isPopular: false },
-        { key: 'shopping_purchase', name: 'Shopping & Purchase', requiresPickup: false, requiresDestination: true, isPopular: false },
-      ]);
+      expect(res.body.data).toHaveLength(2);
+      expect(res.body.data[0]).toMatchObject({
+        key: 'delivery', name: 'Delivery', requiresPickup: true, requiresDestination: true, isPopular: false,
+      });
+      expect(res.body.data[0].id).toEqual(expect.any(String));
+      expect(res.body.data[1]).toMatchObject({
+        key: 'shopping_purchase', name: 'Shopping & Purchase', requiresPickup: false, requiresDestination: true, isPopular: false,
+      });
+      expect(res.body.data[1].id).toEqual(expect.any(String));
     });
 
     it('hide inactive and soft-deleted categories', async () => {

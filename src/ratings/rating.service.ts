@@ -8,6 +8,7 @@ import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RATING_ALREADY_SUBMITTED, RATING_NOT_ELIGIBLE, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
+import { withDeleted } from '../database/soft-delete.extension.js';
 import { UserStatsService } from './user-stats.service.js';
 import type {
   AssignmentRatingsDto,
@@ -279,10 +280,16 @@ export class RatingService {
 
   /** Published, revealed ratings of a user (Backend PRD 30.1). The rater shows as first name and last initial. */
   async listForUser(targetUserId: string, query: RatingListQueryDto): Promise<Paginated<ProfileRatingDto>> {
-    const target = await this.prisma.user.findFirst({
-      where: { id: targetUserId, deletedAt: null, status: { in: ['ACTIVE', 'DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] } },
+    const target = await withDeleted(() => this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        OR: [
+          { status: { in: ['ACTIVE', 'DEACTIVATED', 'SUSPENDED', 'DELETION_PENDING'] }, deletedAt: null },
+          { status: 'DELETED' },
+        ],
+      },
       select: { id: true },
-    });
+    }));
     if (!target) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
     }

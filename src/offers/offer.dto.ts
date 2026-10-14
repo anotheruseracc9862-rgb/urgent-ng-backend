@@ -110,3 +110,85 @@ export class OfferDto {
   @ApiPropertyOptional()
   message?: string;
 }
+
+export class NegotiationEventDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty({ enum: ['INITIAL_OFFER', 'COUNTER_OFFER', 'ACCEPT', 'REJECT', 'WITHDRAW', 'SYSTEM_EVENT'] })
+  type!: string;
+
+  @ApiProperty()
+  actorUserId!: string;
+
+  @ApiProperty({ nullable: true })
+  amountMinor!: number | null;
+
+  @ApiProperty({ nullable: true })
+  durationMinutes!: number | null;
+
+  @ApiProperty({ nullable: true })
+  message!: string | null;
+
+  @ApiProperty({ type: Date })
+  createdAt!: Date;
+}
+
+export class OfferNegotiationDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  errandId!: string;
+
+  @ApiProperty()
+  runnerId!: string;
+
+  @ApiProperty()
+  requesterId!: string;
+
+  @ApiProperty()
+  amountMinor!: number;
+
+  @ApiProperty()
+  durationMinutes!: number;
+
+  @ApiProperty({ enum: ['ACTIVE', 'WITHDRAWN', 'REJECTED', 'SELECTED', 'EXPIRED', 'CLOSED'] })
+  status!: OfferStatus;
+
+  @ApiProperty({ enum: ['RUNNER', 'REQUESTER', 'NONE'] })
+  awaitingParty!: AwaitingParty;
+
+  @ApiProperty()
+  version!: number;
+
+  @ApiProperty()
+  needsReconfirmation!: boolean;
+
+  @ApiProperty({ nullable: true })
+  closeReason!: string | null;
+
+  @ApiProperty({ nullable: true })
+  conversationId!: string | null;
+
+  @ApiProperty({ type: Date })
+  createdAt!: Date;
+
+  @ApiProperty({ type: Date })
+  updatedAt!: Date;
+
+  @ApiProperty({ type: Date, nullable: true })
+  availabilityConfirmedAt!: Date | null;
+
+  @ApiProperty({ nullable: true })
+  message!: string | null;
+
+  @ApiProperty({ nullable: true })
+  assignmentId!: string | null;
+
+  @ApiProperty()
+  errandTitle!: string;
+
+  @ApiProperty({ type: () => NegotiationEventDto, isArray: true })
+  history!: NegotiationEventDto[];
+}

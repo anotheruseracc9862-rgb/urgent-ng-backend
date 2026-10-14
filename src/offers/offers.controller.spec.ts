@@ -4,6 +4,7 @@ import { OffersController } from './offers.controller.js';
 function makeController() {
   const offers = {
     submitOffer: vi.fn().mockResolvedValue({ id: 'offer-1' }),
+    getNegotiation: vi.fn().mockResolvedValue({ id: 'offer-1', history: [] }),
     edit: vi.fn().mockResolvedValue({}),
     counterOffer: vi.fn().mockResolvedValue({}),
     acceptCounter: vi.fn().mockResolvedValue({}),
@@ -51,6 +52,14 @@ describe('OffersController', () => {
     expect(offers.withdraw).toHaveBeenCalledWith('o', 'user-1');
     expect(offers.rejectOffer).toHaveBeenCalledWith('o', 'user-1', undefined);
     expect(offers.reconfirmOffer).toHaveBeenCalledWith('o', 'user-1', 4);
+  });
+
+  it('returns negotiation history only through the authenticated caller identity', async () => {
+    const { controller, offers } = makeController();
+
+    await controller.getNegotiation(user, 'offer-1');
+
+    expect(offers.getNegotiation).toHaveBeenCalledWith('offer-1', 'user-1');
   });
 
   it('lists offers for the signed-in requester with the chosen sort', async () => {

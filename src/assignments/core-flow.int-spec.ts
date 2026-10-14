@@ -93,6 +93,16 @@ describe('Core flow (P7-10, milestone M3)', () => {
     expect(await errandStatus(errandId)).toBe('RUNNER_SELECTED');
     await assertAgreement();
 
+    const requesterDetail = (await get(requester, `/errands/${errandId}`).expect(200)).body.data;
+    expect(requesterDetail.assignment).toMatchObject({
+      id: assignmentId,
+      runnerId: runner.userId,
+      status: 'PENDING_ACCEPTANCE',
+      agreedAmountMinor: 50_000,
+    });
+    expect(requesterDetail.destination.addressText).toBe('14 Allen Avenue, Ikeja');
+    await get(runner, `/errands/${errandId}`).expect(404);
+
     // Before acceptance the runner sees the area only.
     const pendingView = (await getAssignment(app, runner, assignmentId).expect(200)).body.data;
     expect(pendingView.errand.accessLevel).toBe('APPROXIMATE');

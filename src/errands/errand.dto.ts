@@ -298,6 +298,23 @@ export class ErrandPhotoDto {
   position!: number;
 }
 
+export class ErrandAssignmentSummaryDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  runnerId!: string;
+
+  @ApiProperty({ enum: ['PENDING_ACCEPTANCE', 'ACCEPTED', 'DECLINED', 'TIMED_OUT', 'CANCELLED', 'COMPLETED'] })
+  status!: 'PENDING_ACCEPTANCE' | 'ACCEPTED' | 'DECLINED' | 'TIMED_OUT' | 'CANCELLED' | 'COMPLETED';
+
+  @ApiProperty({ description: 'The agreed runner fee in kobo.' })
+  agreedAmountMinor!: number;
+
+  @ApiProperty({ nullable: true, type: Date })
+  acceptedAt!: Date | null;
+}
+
 /** What the requester sees of their own errand. */
 export class ErrandDto {
   id!: string;
@@ -332,6 +349,8 @@ export class ErrandDto {
   dropoffContact!: ErrandContactViewDto | null;
   @ApiProperty({ type: [ErrandPhotoDto] })
   photos!: ErrandPhotoDto[];
+  @ApiProperty({ type: ErrandAssignmentSummaryDto, nullable: true })
+  assignment!: ErrandAssignmentSummaryDto | null;
   offerCount!: number;
   @ApiProperty({ nullable: true, type: Date })
   publishedAt!: Date | null;
