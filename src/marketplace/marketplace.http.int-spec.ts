@@ -247,6 +247,14 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
       expect(new Set(seen)).toEqual(new Set(all));
     });
 
+    it('tells the first page how many errands match, and only the first page', async () => {
+      for (let i = 0; i < 3; i += 1) await post();
+      const first = await as(runner).get('/marketplace/errands?sort=newest&limit=2').expect(200);
+      expect(first.body.meta.total).toBe(3);
+      const second = await as(runner).get(`/marketplace/errands?sort=newest&limit=2&cursor=${first.body.meta.nextCursor}`).expect(200);
+      expect(second.body.meta.total).toBeUndefined();
+    });
+
     it('rejects a damaged cursor, and a cursor from the other sort order', async () => {
       for (let i = 0; i < 3; i += 1) await post();
       const first = await as(runner).get('/marketplace/errands?sort=nearest&limit=1').expect(200);

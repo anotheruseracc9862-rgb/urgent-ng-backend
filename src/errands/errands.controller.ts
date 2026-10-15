@@ -8,7 +8,7 @@ import { CurrentUser, type AuthenticatedUser } from '../auth/decorators/current-
 import { ErrandService } from './errand.service.js';
 import { ErrandLifecycleService } from './errand-lifecycle.service.js';
 import { ErrandQueryService } from './errand-query.service.js';
-import { CancelErrandDto, CreateErrandDto, ErrandDto, ErrandSummaryDto, MineQueryDto, PublishErrandDto, UpdateErrandDto } from './errand.dto.js';
+import { CancelErrandDto, CreateErrandDto, ErrandDto, ErrandSummaryDto, MineCountsDto, MineQueryDto, PublishErrandDto, UpdateErrandDto } from './errand.dto.js';
 
 /** The requester's side of errands (Backend PRD 30.4). The marketplace views are in MarketplaceController. */
 @ApiTags('Errands')
@@ -40,6 +40,15 @@ export class ErrandsController {
   @ApiErrors(400)
   mine(@CurrentUser() user: AuthenticatedUser, @Query() query: MineQueryDto) {
     return this.query.mine(user.userId, query);
+  }
+
+  /** How many errands sit behind each tab of the list, in one call. */
+  @Get('mine/counts')
+  @ConsumerAuth({ allow: ['DEACTIVATED'] })
+  @ApiConsumerAuth()
+  @ApiEnveloped(MineCountsDto)
+  counts(@CurrentUser() user: AuthenticatedUser) {
+    return this.query.counts(user.userId);
   }
 
   @Get(':id')

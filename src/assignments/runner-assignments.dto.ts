@@ -124,4 +124,14 @@ export class RunnerAssignmentSummaryDto {
 
   @ApiProperty({ type: Date })
   selectedAt!: Date;
+
+  @ApiProperty({ description: "The requester's first name." })
+  requesterFirstName!: string;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'The conversation with the requester about this errand, if one exists. Open it at /conversations/{id}.',
+  })
+  conversationId!: string | null;
 }

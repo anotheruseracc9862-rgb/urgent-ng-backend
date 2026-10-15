@@ -71,6 +71,43 @@ describe('Demo list features (HTTP)', () => {
       expect(runner.recentActivity[0]).toMatchObject({ role: 'RUNNER' });
     });
 
+    it('gives four weekly posting counts, offers per errand and a time to select for the requester', async () => {
+      const s = await selectedScene(app, categories.delivery);
+
+      const res = (await get(s.requester, '/me/summary').expect(200)).body.data.asRequester;
+
+      expect(res.errandsPerWeek).toHaveLength(4);
+      expect(res.errandsPerWeek[3]).toBeGreaterThanOrEqual(1);
+      expect(res.averageOffersPerErrand).toBeGreaterThanOrEqual(1);
+      expect(res.medianMinutesToSelect).toBeGreaterThanOrEqual(1);
+
+      const empty = await signedInUser(app);
+      const none = (await get(empty, '/me/summary').expect(200)).body.data.asRequester;
+      expect(none).toMatchObject({ errandsPerWeek: [0, 0, 0, 0], averageOffersPerErrand: null, medianMinutesToSelect: null });
+    });
+
+    it('gives seven Lagos days of offers sent and times selected for the runner, without gaps', async () => {
+      const s = await selectedScene(app, categories.delivery);
+
+      const res = (await get(s.runner, '/me/summary').expect(200)).body.data.asRunner;
+
+      expect(res.offersPerDay).toHaveLength(7);
+      const dates = res.offersPerDay.map((day: { date: string }) => day.date);
+      expect([...dates].sort()).toEqual(dates);
+      const today = res.offersPerDay[6];
+      expect(today).toMatchObject({ sent: 1, selected: 1 });
+      expect(res.offersPerDay.slice(0, 6).every((day: { sent: number; selected: number }) => day.sent === 0 && day.selected === 0)).toBe(true);
+    });
+
+    it('names the requester and the conversation on the runner task list', async () => {
+      const s = await selectedScene(app, categories.delivery);
+
+      const res = (await get(s.runner, '/runner/assignments?status=ACTIVE').expect(200)).body.data;
+
+      expect(res[0]).toEqual(expect.objectContaining({ requesterFirstName: expect.any(String) }));
+      expect(res[0]).toHaveProperty('conversationId');
+    });
+
     it('has a success rate over errands that ended, and null with none', async () => {
       const empty = await signedInUser(app);
       expect((await get(empty, '/me/summary').expect(200)).body.data.asRequester.successRate).toBeNull();
@@ -87,6 +124,50 @@ describe('Demo list features (HTTP)', () => {
       const res = (await get(s.requester, '/me/summary').expect(200)).body.data;
 
       expect(res.asRequester).toMatchObject({ openErrands: 1, errandsWithOffers: 1, offersToReview: 1 });
+    });
+  });
+
+  describe('GET /errands/mine enrichment', () => {
+    it('shows the lowest offer and who offered on an open errand, and flags it for attention', async () => {
+      const s = await offerScene(app, categories.delivery);
+
+      const res = (await get(s.requester, '/errands/mine?tab=OPEN').expect(200)).body.data;
+
+      expect(res[0]).toMatchObject({ id: s.errandId, attention: 'OFFERS', runner: null, agreedAmountMinor: null });
+      expect(res[0].lowestOfferMinor).toBeGreaterThan(0);
+      expect(res[0].offerPreview).toHaveLength(1);
+      expect(res[0].offerPreview[0]).toEqual(expect.objectContaining({ firstName: expect.any(String) }));
+    });
+
+    it('shows the selected runner with the agreed amount and asks the requester to confirm', async () => {
+      const s = await selectedScene(app, categories.delivery);
+
+      const res = (await get(s.requester, '/errands/mine?tab=ACTIVE').expect(200)).body.data;
+
+      expect(res[0]).toMatchObject({ id: s.errandId, attention: 'RUNNER_TO_CONFIRM', lowestOfferMinor: null, offerPreview: [] });
+      expect(res[0].runner).toEqual(expect.objectContaining({ firstName: expect.any(String), completedErrands: expect.any(Number) }));
+      expect(res[0].agreedAmountMinor).toBeGreaterThan(0);
+    });
+
+    it('lists only errands that need the requester on the ATTENTION tab', async () => {
+      const s = await offerScene(app, categories.delivery);
+      const quiet = await insertErrand({ requesterId: s.requester.userId, categoryId: categories.delivery, title: 'Nothing happening here' });
+
+      const res = (await get(s.requester, '/errands/mine?tab=ATTENTION').expect(200)).body.data;
+      const ids = res.map((e: { id: string }) => e.id);
+
+      expect(ids).toContain(s.errandId);
+      expect(ids).not.toContain(quiet);
+    });
+
+    it('counts every tab in one call', async () => {
+      const s = await offerScene(app, categories.delivery);
+      await insertErrand({ requesterId: s.requester.userId, categoryId: categories.delivery, title: 'A draft', status: 'DRAFT' });
+
+      const res = (await get(s.requester, '/errands/mine/counts').expect(200)).body.data;
+
+      expect(res).toMatchObject({ all: 2, open: 1, draft: 1, active: 0, past: 0 });
+      expect(res.attention).toBeGreaterThanOrEqual(1);
     });
   });
 

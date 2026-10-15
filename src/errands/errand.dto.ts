@@ -370,6 +370,33 @@ export class ErrandDto {
 }
 
 /** One line of the requester's own list. */
+export const ERRAND_ATTENTION = ['OFFERS', 'RUNNER_TO_CONFIRM', 'DELIVERY', 'CHANGE_REQUEST', 'EXPIRING'] as const;
+export type ErrandAttention = (typeof ERRAND_ATTENTION)[number];
+
+export class OfferPreviewDto {
+  @ApiProperty()
+  firstName!: string;
+  @ApiProperty({ nullable: true, type: String })
+  lastName!: string | null;
+  @ApiProperty({ nullable: true, type: String })
+  photoMediaId!: string | null;
+}
+
+export class ErrandRunnerSummaryDto {
+  @ApiProperty()
+  firstName!: string;
+  @ApiProperty({ nullable: true, type: String })
+  lastName!: string | null;
+  @ApiProperty({ nullable: true, type: String })
+  photoMediaId!: string | null;
+  @ApiProperty({ nullable: true, type: Number, description: 'Null until enough ratings are published to show an average.' })
+  rating!: number | null;
+  @ApiProperty()
+  ratingCount!: number;
+  @ApiProperty({ description: 'Errands this runner has completed.' })
+  completedErrands!: number;
+}
+
 export class ErrandSummaryDto {
   id!: string;
   @ApiProperty({ enum: ErrandStatus, enumName: 'ErrandStatus' })
@@ -396,10 +423,49 @@ export class ErrandSummaryDto {
   expiresAt!: Date | null;
   createdAt!: Date;
   updatedAt!: Date;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'The lowest active offer in kobo on an open errand. Null with no active offers or once a runner is selected.',
+  })
+  lowestOfferMinor!: number | null;
+  @ApiProperty({
+    type: OfferPreviewDto,
+    isArray: true,
+    description: 'Up to four runners with active offers, lowest amount first. Empty once a runner is selected.',
+  })
+  offerPreview!: OfferPreviewDto[];
+  @ApiProperty({ type: ErrandRunnerSummaryDto, nullable: true, description: 'The runner on the errand, from selection onward.' })
+  runner!: ErrandRunnerSummaryDto | null;
+  @ApiProperty({ nullable: true, type: Number, description: 'The agreed amount in kobo, once a runner is selected.' })
+  agreedAmountMinor!: number | null;
+  @ApiProperty({
+    enum: ERRAND_ATTENTION,
+    nullable: true,
+    description: 'What needs the requester next: OFFERS to review, a RUNNER_TO_CONFIRM, a DELIVERY to confirm, a CHANGE_REQUEST to answer, or an open errand EXPIRING within two hours.',
+  })
+  attention!: ErrandAttention | null;
+  @ApiProperty({ nullable: true, type: Date, description: 'When the attention item lapses: the change request expiry or the errand deadline.' })
+  attentionExpiresAt!: Date | null;
+}
+
+export class MineCountsDto {
+  @ApiProperty({ description: 'Every errand that is not deleted.' })
+  all!: number;
+  @ApiProperty({ description: 'Errands that need the requester next (the ATTENTION tab).' })
+  attention!: number;
+  @ApiProperty()
+  open!: number;
+  @ApiProperty()
+  active!: number;
+  @ApiProperty()
+  past!: number;
+  @ApiProperty()
+  draft!: number;
 }
 
 /** Requester tabs on the dashboard (Backend PRD 30.4). */
-export const MINE_TABS = ['DRAFT', 'OPEN', 'ACTIVE', 'PAST'] as const;
+export const MINE_TABS = ['DRAFT', 'OPEN', 'ACTIVE', 'PAST', 'ATTENTION'] as const;
 export type MineTab = (typeof MINE_TABS)[number];
 
 /** Sort orders of the requester's list: newest first, what needs a reply first, or the largest budget. */
@@ -409,7 +475,7 @@ export type MineSort = (typeof MINE_SORTS)[number];
 export class MineQueryDto {
   @ApiPropertyOptional({
     enum: MINE_TABS,
-    description: 'DRAFT, OPEN (published, no runner yet), ACTIVE (runner selected through delivery, or disputed), PAST (completed, cancelled, expired). Leave out for all.',
+    description: 'DRAFT, OPEN (published, no runner yet), ACTIVE (runner selected through delivery, or disputed), PAST (completed, cancelled, expired), ATTENTION (needs the requester next: offers to review, a runner to confirm, a delivery to confirm, a change request, or closing soon). Leave out for all.',
   })
   @IsOptional()
   @IsEnum(MINE_TABS)

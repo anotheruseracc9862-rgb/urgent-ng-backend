@@ -62,7 +62,9 @@ export class DashboardService {
       WHERE e.requester_id = ${userId}::uuid AND e.deleted_at IS NULL
     `;
     const r = rows[0];
+    const extra = await this.requesterTrends(userId);
     return {
+      ...extra,
       errandsThisMonth: r.errands_this_month,
       completedThisMonth: r.completed_this_month,
       openErrands: r.open_errands,
@@ -74,6 +76,70 @@ export class DashboardService {
       deliveriesToConfirm: r.deliveries,
       changeRequestsToAnswer: r.change_requests,
     };
+  }
+
+  /** Weekly posting, offers per errand and time to select, all over the user's own errands. */
+  private async requesterTrends(userId: string): Promise<Pick<DashboardRequesterDto, 'errandsPerWeek' | 'averageOffersPerErrand' | 'medianMinutesToSelect'>> {
+    const [weeks, averages, selects] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ n: number; total: number }>>`
+        SELECT w.n, count(e.id)::int AS total
+        FROM generate_series(0, 3) AS w(n)
+        LEFT JOIN errands e
+          ON e.requester_id = ${userId}::uuid AND e.deleted_at IS NULL AND e.status <> 'DRAFT'::"ErrandStatus"
+         AND e.created_at >= now() - make_interval(days => (w.n + 1) * 7)
+         AND e.created_at < now() - make_interval(days => w.n * 7)
+        GROUP BY w.n
+        ORDER BY w.n DESC
+      `,
+      this.prisma.$queryRaw<Array<{ average: number | null }>>`
+        SELECT avg(e.offer_count)::float8 AS average
+        FROM errands e
+        WHERE e.requester_id = ${userId}::uuid AND e.deleted_at IS NULL AND e.status <> 'DRAFT'::"ErrandStatus"
+          AND e.published_at IS NOT NULL AND e.published_at >= now() - make_interval(days => ${SUCCESS_WINDOW_DAYS}::int)
+      `,
+      this.prisma.$queryRaw<Array<{ median: number | null }>>`
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY first.minutes)::float8 AS median
+        FROM (
+          SELECT DISTINCT ON (a.errand_id)
+                 extract(epoch FROM (a.selected_at - e.published_at)) / 60 AS minutes
+          FROM assignments a
+          JOIN errands e ON e.id = a.errand_id AND e.deleted_at IS NULL
+          WHERE a.requester_id = ${userId}::uuid AND a.deleted_at IS NULL
+            AND e.published_at IS NOT NULL AND a.selected_at >= e.published_at
+            AND a.selected_at >= now() - make_interval(days => ${SUCCESS_WINDOW_DAYS}::int)
+          ORDER BY a.errand_id, a.selected_at ASC
+        ) first
+      `,
+    ]);
+    const average = averages[0]?.average ?? null;
+    const median = selects[0]?.median ?? null;
+    return {
+      errandsPerWeek: weeks.map((week) => week.total),
+      averageOffersPerErrand: average === null ? null : Math.round(average * 10) / 10,
+      medianMinutesToSelect: median === null ? null : Math.max(1, Math.round(median)),
+    };
+  }
+
+  /** The last seven Lagos days: offers sent and times selected, oldest first, no gaps. */
+  private async offersPerDay(userId: string): Promise<DashboardRunnerDto['offersPerDay']> {
+    const rows = await this.prisma.$queryRaw<Array<{ day: string; sent: number; selected: number }>>`
+      SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+             (SELECT count(*)::int FROM offers o
+               WHERE o.runner_id = ${userId}::uuid AND o.deleted_at IS NULL
+                 AND (o.created_at AT TIME ZONE 'Africa/Lagos')::date = d.day) AS sent,
+             (SELECT count(*)::int FROM assignments a
+               WHERE a.runner_id = ${userId}::uuid AND a.deleted_at IS NULL
+                 AND (a.selected_at AT TIME ZONE 'Africa/Lagos')::date = d.day) AS selected
+      FROM (
+        SELECT generate_series(
+                 (now() AT TIME ZONE 'Africa/Lagos')::date - 6,
+                 (now() AT TIME ZONE 'Africa/Lagos')::date,
+                 interval '1 day'
+               )::date AS day
+      ) d
+      ORDER BY d.day
+    `;
+    return rows.map((row) => ({ date: row.day, sent: row.sent, selected: row.selected }));
   }
 
   private async runner(userId: string): Promise<DashboardRunnerDto> {
@@ -110,7 +176,9 @@ export class DashboardService {
             AND c.requested_by <> ${userId}::uuid AND c.expires_at > now()) AS change_requests
     `;
     const r = rows[0];
+    const offersPerDay = await this.offersPerDay(userId);
     return {
+      offersPerDay,
       activeAssignments: r.active_assignments,
       selectedAwaitingYou: r.selected_awaiting,
       activeOffers: r.active_offers,

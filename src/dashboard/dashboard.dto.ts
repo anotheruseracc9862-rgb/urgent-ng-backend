@@ -26,6 +26,33 @@ export class DashboardRequesterDto {
   deliveriesToConfirm!: number;
   @ApiProperty({ description: 'Change requests from a runner that you have not answered.' })
   changeRequestsToAnswer!: number;
+  @ApiProperty({
+    type: Number,
+    isArray: true,
+    description: 'Errands you published in each of the last four 7-day periods, oldest first (four numbers). Drafts excluded.',
+  })
+  errandsPerWeek!: number[];
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Average offers per errand you published in the last 90 days, one decimal. Null with none published.',
+  })
+  averageOffersPerErrand!: number | null;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Median minutes from publishing to selecting a runner, over errands where you selected one in the last 90 days. Null without a sample.',
+  })
+  medianMinutesToSelect!: number | null;
+}
+
+export class OfferDayDto {
+  @ApiProperty({ description: 'The day in Lagos time, YYYY-MM-DD.', example: '2026-10-15' })
+  date!: string;
+  @ApiProperty({ description: 'Offers you sent that day.' })
+  sent!: number;
+  @ApiProperty({ description: 'Times you were selected that day.' })
+  selected!: number;
 }
 
 export class DashboardRunnerDto {
@@ -43,6 +70,8 @@ export class DashboardRunnerDto {
   completedLast30Days!: number;
   @ApiProperty({ description: 'Change requests from a requester that you have not answered.' })
   changeRequestsToAnswer!: number;
+  @ApiProperty({ type: OfferDayDto, isArray: true, description: 'The last seven days in Lagos time, oldest first: offers sent and times selected.' })
+  offersPerDay!: OfferDayDto[];
 }
 
 export class ActivityItemDto {

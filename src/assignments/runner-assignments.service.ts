@@ -47,11 +47,20 @@ export class RunnerAssignmentsService {
       take: limit + 1,
       include: {
         errand: { select: { title: true, status: true, locations: { where: { deletedAt: null }, select: { type: true, area: true } } } },
+        requester: { select: { firstName: true } },
       },
     });
     const hasNextPage = rows.length > limit;
     const page = hasNextPage ? rows.slice(0, limit) : rows;
     const last = page[page.length - 1];
+    // One conversation per offer; the runner is always a participant of their own.
+    const conversations = page.length
+      ? await this.prisma.client.conversation.findMany({
+          where: { offerId: { in: page.map((row) => row.selectedOfferId) }, runnerId, deletedAt: null },
+          select: { id: true, offerId: true },
+        })
+      : [];
+    const conversationByOffer = new Map(conversations.map((conversation) => [conversation.offerId, conversation.id]));
 
     return new Paginated(
       page.map((row) => ({
@@ -66,6 +75,8 @@ export class RunnerAssignmentsService {
         pickupArea: row.errand.locations.find((l) => l.type === 'ERRAND_PICKUP')?.area ?? null,
         destinationArea: row.errand.locations.find((l) => l.type === 'ERRAND_DESTINATION')?.area ?? null,
         selectedAt: row.selectedAt,
+        requesterFirstName: row.requester.firstName,
+        conversationId: conversationByOffer.get(row.selectedOfferId) ?? null,
       })),
       {
         hasNextPage,

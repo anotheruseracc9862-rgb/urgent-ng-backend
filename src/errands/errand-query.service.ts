@@ -5,14 +5,27 @@ import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
 import { ErrandExpiryService } from './errand-expiry.service.js';
 import { toNumber } from './errand-view.service.js';
-import type { ErrandSummaryDto, MineSort, MineTab } from './errand.dto.js';
+import type { ErrandAttention, ErrandSummaryDto, MineCountsDto, MineSort, MineTab } from './errand.dto.js';
 
-const TAB_STATUSES: Record<MineTab, ErrandStatus[]> = {
+const TAB_STATUSES: Record<Exclude<MineTab, 'ATTENTION'>, ErrandStatus[]> = {
   DRAFT: ['DRAFT'],
   OPEN: ['OPEN'],
   ACTIVE: ['RUNNER_SELECTED', 'ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED', 'DISPUTED'],
   PAST: ['COMPLETED', 'CANCELLED', 'EXPIRED'],
 };
+
+/** Errands that need the requester next. Alias `e` is the errand. */
+const ATTENTION_SQL = Prisma.sql`(
+  e.status IN ('DELIVERED'::"ErrandStatus", 'RUNNER_SELECTED'::"ErrandStatus")
+  OR (e.status = 'OPEN'::"ErrandStatus" AND (e.offer_count > 0 OR e.expires_at <= now() + interval '2 hours'))
+  OR EXISTS (
+    SELECT 1 FROM change_requests c JOIN assignments a ON a.id = c.assignment_id
+    WHERE a.errand_id = e.id AND a.deleted_at IS NULL AND c.deleted_at IS NULL
+      AND c.status = 'PENDING'::"ChangeRequestStatus" AND c.requested_by <> e.requester_id AND c.expires_at > now()
+  )
+)`;
+
+const EXPIRING_WINDOW_HOURS = 2;
 
 /** The requester's own list of errands, for the dashboard tabs (Backend PRD 30.4). */
 @Injectable()
@@ -47,7 +60,9 @@ export class ErrandQueryService {
     const timeColumn = sort === 'NEEDS_ATTENTION' ? Prisma.sql`e.updated_at` : Prisma.sql`e.created_at`;
 
     const conditions: Prisma.Sql[] = [Prisma.sql`e.requester_id = ${userId}::uuid`, Prisma.sql`e.deleted_at IS NULL`];
-    if (options.tab) {
+    if (options.tab === 'ATTENTION') {
+      conditions.push(ATTENTION_SQL);
+    } else if (options.tab) {
       conditions.push(Prisma.sql`e.status::text = ANY(${TAB_STATUSES[options.tab] as string[]}::text[])`);
     }
     const term = options.q?.trim();
@@ -86,9 +101,11 @@ export class ErrandQueryService {
     });
     const byId = new Map(found.map((errand) => [errand.id, errand]));
     const page = pageKeys.map((k) => byId.get(k.id)).filter((errand): errand is NonNullable<typeof errand> => Boolean(errand));
+    const extras = await this.extras(userId, page.map((errand) => ({ id: errand.id, status: errand.status, offerCount: errand.offerCount, expiresAt: errand.expiresAt })));
 
     return new Paginated(
       page.map((errand) => ({
+        ...extras.get(errand.id)!,
         id: errand.id,
         status: errand.status,
         title: errand.title,
@@ -112,6 +129,121 @@ export class ErrandQueryService {
           : {}),
       },
     );
+  }
+
+  /** How many errands sit behind each tab, so the tabs can show numbers. */
+  async counts(userId: string): Promise<MineCountsDto> {
+    await this.expireOverdue(userId);
+    const rows = await this.prisma.$queryRaw<Array<MineCountsDto>>`
+      SELECT count(*)::int AS "all",
+             count(*) FILTER (WHERE ${ATTENTION_SQL})::int AS attention,
+             count(*) FILTER (WHERE e.status = 'OPEN'::"ErrandStatus")::int AS open,
+             count(*) FILTER (WHERE e.status::text = ANY(${TAB_STATUSES.ACTIVE as string[]}::text[]))::int AS active,
+             count(*) FILTER (WHERE e.status::text = ANY(${TAB_STATUSES.PAST as string[]}::text[]))::int AS past,
+             count(*) FILTER (WHERE e.status = 'DRAFT'::"ErrandStatus")::int AS draft
+      FROM errands e
+      WHERE e.requester_id = ${userId}::uuid AND e.deleted_at IS NULL
+    `;
+    return rows[0] ?? { all: 0, attention: 0, open: 0, active: 0, past: 0, draft: 0 };
+  }
+
+  /** The offer preview, the selected runner and the attention flag for one page of errands. */
+  private async extras(
+    userId: string,
+    errands: Array<{ id: string; status: ErrandStatus; offerCount: number; expiresAt: Date | null }>,
+  ): Promise<
+    Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'attention' | 'attentionExpiresAt'>>
+  > {
+    const ids = errands.map((errand) => errand.id);
+    const out = new Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'attention' | 'attentionExpiresAt'>>();
+    if (ids.length === 0) return out;
+
+    const [offers, assignments, changes] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ errand_id: string; amount: bigint; first_name: string; last_name: string | null; photo: string | null }>>`
+        SELECT o.errand_id::text, o.amount_minor AS amount, u.first_name, u.last_name, pr.photo_media_id::text AS photo
+        FROM offers o
+        JOIN users u ON u.id = o.runner_id
+        LEFT JOIN profiles pr ON pr.user_id = u.id AND pr.deleted_at IS NULL
+        WHERE o.errand_id = ANY(${ids}::uuid[]) AND o.deleted_at IS NULL AND o.status = 'ACTIVE'::"OfferStatus"
+        ORDER BY o.errand_id, o.amount_minor ASC, o.created_at ASC
+      `,
+      this.prisma.$queryRaw<
+        Array<{
+          errand_id: string;
+          amount: bigint;
+          first_name: string;
+          last_name: string | null;
+          photo: string | null;
+          rating_avg: number | null;
+          rating_count: number;
+          completed: number;
+        }>
+      >`
+        SELECT DISTINCT ON (a.errand_id)
+               a.errand_id::text, a.agreed_amount_minor AS amount, u.first_name, u.last_name, pr.photo_media_id::text AS photo,
+               us.runner_rating_avg::float8 AS rating_avg, COALESCE(us.runner_rating_count, 0)::int AS rating_count,
+               COALESCE(us.completed_as_runner, 0)::int AS completed
+        FROM assignments a
+        JOIN users u ON u.id = a.runner_id
+        LEFT JOIN profiles pr ON pr.user_id = u.id AND pr.deleted_at IS NULL
+        LEFT JOIN user_stats us ON us.user_id = u.id
+        WHERE a.errand_id = ANY(${ids}::uuid[]) AND a.deleted_at IS NULL
+          AND a.status IN ('PENDING_ACCEPTANCE'::"AssignmentStatus", 'ACCEPTED'::"AssignmentStatus", 'COMPLETED'::"AssignmentStatus")
+        ORDER BY a.errand_id, a.selected_at DESC
+      `,
+      this.prisma.$queryRaw<Array<{ errand_id: string; expires_at: Date }>>`
+        SELECT DISTINCT ON (a.errand_id) a.errand_id::text, c.expires_at
+        FROM change_requests c
+        JOIN assignments a ON a.id = c.assignment_id AND a.deleted_at IS NULL
+        WHERE a.errand_id = ANY(${ids}::uuid[]) AND c.deleted_at IS NULL
+          AND c.status = 'PENDING'::"ChangeRequestStatus" AND c.requested_by <> ${userId}::uuid AND c.expires_at > now()
+        ORDER BY a.errand_id, c.expires_at ASC
+      `,
+    ]);
+
+    const offersByErrand = new Map<string, typeof offers>();
+    for (const row of offers) offersByErrand.set(row.errand_id, [...(offersByErrand.get(row.errand_id) ?? []), row]);
+    const assignmentByErrand = new Map(assignments.map((row) => [row.errand_id, row]));
+    const changeByErrand = new Map(changes.map((row) => [row.errand_id, row.expires_at]));
+    const soon = Date.now() + EXPIRING_WINDOW_HOURS * 3_600_000;
+
+    for (const errand of errands) {
+      const own = offersByErrand.get(errand.id) ?? [];
+      const assignment = assignmentByErrand.get(errand.id);
+      const open = errand.status === 'OPEN';
+      const change = changeByErrand.get(errand.id) ?? null;
+      let attention: ErrandAttention | null = null;
+      let attentionExpiresAt: Date | null = null;
+      if (errand.status === 'DELIVERED') attention = 'DELIVERY';
+      else if (change) {
+        attention = 'CHANGE_REQUEST';
+        attentionExpiresAt = change;
+      } else if (errand.status === 'RUNNER_SELECTED') attention = 'RUNNER_TO_CONFIRM';
+      else if (open && errand.offerCount > 0) attention = 'OFFERS';
+      if (open && errand.expiresAt && errand.expiresAt.getTime() <= soon) {
+        // Closing soon outranks "has offers": the requester can still extend it once.
+        attention = 'EXPIRING';
+        attentionExpiresAt = errand.expiresAt;
+      }
+      out.set(errand.id, {
+        lowestOfferMinor: open && own.length ? Number(own[0].amount) : null,
+        offerPreview: open ? own.slice(0, 4).map((row) => ({ firstName: row.first_name, lastName: row.last_name, photoMediaId: row.photo })) : [],
+        runner: assignment
+          ? {
+              firstName: assignment.first_name,
+              lastName: assignment.last_name,
+              photoMediaId: assignment.photo,
+              rating: assignment.rating_avg,
+              ratingCount: assignment.rating_count,
+              completedErrands: assignment.completed,
+            }
+          : null,
+        agreedAmountMinor: assignment ? Number(assignment.amount) : null,
+        attention,
+        attentionExpiresAt,
+      });
+    }
+    return out;
   }
 
   private async expireOverdue(userId: string): Promise<void> {

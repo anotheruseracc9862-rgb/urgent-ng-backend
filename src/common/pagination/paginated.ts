@@ -3,6 +3,8 @@ import type { CursorData, CursorService } from './cursor.service.js';
 export interface PageMeta {
   hasNextPage: boolean;
   nextCursor?: string;
+  /** The size of the whole result, where a list offers it cheaply (first page only). */
+  total?: number;
 }
 
 /**

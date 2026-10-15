@@ -154,16 +154,42 @@ export class MarketplaceFeedService {
     const hasNextPage = rows.length > limit;
     const page = hasNextPage ? rows.slice(0, limit) : rows;
     const last = page[page.length - 1];
+    // The size of the whole result, so the app can say "See all 42". Only the first page asks.
+    const total = cursor ? undefined : await this.countVisible(userId, query);
 
     return new Paginated(
       [...pinned.map((row) => toFeedItem(row, true, ratingMin)), ...page.map((row) => toFeedItem(row, false, ratingMin))],
       {
         hasNextPage,
+        ...(total === undefined ? {} : { total }),
         ...(hasNextPage && last
           ? { nextCursor: this.cursors.encode({ sort: this.cursorValue(sort, last), createdAt: last.published_at, id: last.id }) }
           : {}),
       },
     );
+  }
+
+  /** How many open errands pass every filter inside the runner's circle. Same rules as the page itself. */
+  private async countVisible(userId: string, query: FeedQueryDto): Promise<number> {
+    const filters = await this.filters(userId, query, {});
+    const rows = await this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+      SELECT count(*)::int AS total
+      FROM errands e
+      JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
+      JOIN categories c ON c.id = e.category_id
+      ${this.locationJoins(query)}
+      WHERE ${filters}
+    `);
+    return rows[0]?.total ?? 0;
+  }
+
+  /** Pickup and destination rows, joined only when a text search needs the area names. */
+  private locationJoins(query: MarketplaceFilterDto): Prisma.Sql {
+    return query.q?.trim()
+      ? Prisma.sql`
+          LEFT JOIN errand_locations pl ON pl.errand_id = e.id AND pl.type = 'ERRAND_PICKUP'::"LocationType" AND pl.deleted_at IS NULL
+          LEFT JOIN errand_locations dl ON dl.errand_id = e.id AND dl.type = 'ERRAND_DESTINATION'::"LocationType" AND dl.deleted_at IS NULL`
+      : Prisma.empty;
   }
 
   // ---- Map ----
@@ -344,11 +370,7 @@ export class MarketplaceFeedService {
           : sort === 'recommended'
             ? Prisma.sql`dist_ring ASC, published_at DESC, id DESC`
             : Prisma.sql`dist_m ASC, published_at DESC, id DESC`;
-    const locations = query.q?.trim()
-      ? Prisma.sql`
-          LEFT JOIN errand_locations pl ON pl.errand_id = e.id AND pl.type = 'ERRAND_PICKUP'::"LocationType" AND pl.deleted_at IS NULL
-          LEFT JOIN errand_locations dl ON dl.errand_id = e.id AND dl.type = 'ERRAND_DESTINATION'::"LocationType" AND dl.deleted_at IS NULL`
-      : Prisma.empty;
+    const locations = this.locationJoins(query);
 
     return Prisma.sql`
       SELECT ranked.id, ranked.published_at, ranked.dist_m, ranked.budget, ranked.dist_ring FROM (
