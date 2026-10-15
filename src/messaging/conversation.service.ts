@@ -156,7 +156,18 @@ export class ConversationService {
         unread: number;
         other_id: string;
         other_first_name: string;
+        other_last_name: string | null;
         other_photo: string | null;
+        other_role: 'REQUESTER' | 'RUNNER';
+        other_rating_avg: number | null;
+        other_rating_count: number;
+        last_preview: string | null;
+        errand_status: string;
+        pickup_area: string | null;
+        destination_area: string | null;
+        assignment_id: string | null;
+        agreed_minor: bigint | null;
+        offer_minor: bigint | null;
       }>
     >`
       SELECT c.id::text, c.errand_id::text, c.requester_id::text, c.runner_id::text, e.title,
@@ -165,12 +176,34 @@ export class ConversationService {
              (SELECT count(*)::int FROM messages m
                WHERE m.conversation_id = c.id AND m.sender_id <> ${userId}::uuid AND m.read_at IS NULL
                  AND m.status <> 'REMOVED'::"MessageStatus" AND m.deleted_at IS NULL) AS unread,
-             o.id::text AS other_id, o.first_name AS other_first_name, pr.photo_media_id::text AS other_photo
+             o.id::text AS other_id, o.first_name AS other_first_name, o.last_name AS other_last_name, pr.photo_media_id::text AS other_photo,
+             CASE WHEN c.requester_id = ${userId}::uuid THEN 'RUNNER' ELSE 'REQUESTER' END AS other_role,
+             CASE WHEN c.requester_id = ${userId}::uuid THEN us.runner_rating_avg ELSE us.requester_rating_avg END::float8 AS other_rating_avg,
+             COALESCE(CASE WHEN c.requester_id = ${userId}::uuid THEN us.runner_rating_count ELSE us.requester_rating_count END, 0)::int AS other_rating_count,
+             (SELECT CASE WHEN lm.type = 'IMAGE'::"MessageType" THEN 'Photo' ELSE left(COALESCE(lm.body, ''), 120) END
+                FROM messages lm
+               WHERE lm.conversation_id = c.id AND lm.status <> 'REMOVED'::"MessageStatus" AND lm.deleted_at IS NULL
+               ORDER BY lm.created_at DESC, lm.id DESC LIMIT 1) AS last_preview,
+             e.status::text AS errand_status,
+             pl.area AS pickup_area, dl.area AS destination_area,
+             asg.id::text AS assignment_id, asg.agreed_amount_minor AS agreed_minor,
+             (SELECT lo.amount_minor FROM offers lo
+               WHERE lo.errand_id = c.errand_id AND lo.runner_id = c.runner_id AND lo.deleted_at IS NULL
+               ORDER BY lo.created_at DESC LIMIT 1) AS offer_minor
       FROM conversations c
       JOIN errands e ON e.id = c.errand_id
+      LEFT JOIN errand_locations pl ON pl.errand_id = e.id AND pl.type = 'ERRAND_PICKUP'::"LocationType" AND pl.deleted_at IS NULL
+      LEFT JOIN errand_locations dl ON dl.errand_id = e.id AND dl.type = 'ERRAND_DESTINATION'::"LocationType" AND dl.deleted_at IS NULL
+      LEFT JOIN LATERAL (
+        SELECT a.id, a.agreed_amount_minor FROM assignments a
+        WHERE a.errand_id = c.errand_id AND a.runner_id = c.runner_id AND a.deleted_at IS NULL
+          AND a.status IN ('PENDING_ACCEPTANCE'::"AssignmentStatus", 'ACCEPTED'::"AssignmentStatus", 'COMPLETED'::"AssignmentStatus")
+        ORDER BY a.selected_at DESC LIMIT 1
+      ) asg ON TRUE
       LEFT JOIN conversation_participants p ON p.conversation_id = c.id AND p.user_id = ${userId}::uuid AND p.deleted_at IS NULL
       JOIN users o ON o.id = CASE WHEN c.requester_id = ${userId}::uuid THEN c.runner_id ELSE c.requester_id END
       LEFT JOIN profiles pr ON pr.user_id = o.id AND pr.deleted_at IS NULL
+      LEFT JOIN user_stats us ON us.user_id = o.id
       WHERE c.deleted_at IS NULL AND (c.requester_id = ${userId}::uuid OR c.runner_id = ${userId}::uuid)
         ${statusClause}
         ${searchClause}
@@ -183,13 +216,29 @@ export class ConversationService {
     const hasNextPage = rows.length > limit;
     const page = hasNextPage ? rows.slice(0, limit) : rows;
     const data: ConversationDto[] = [];
+    const ratingMin = await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE');
     for (const row of page) {
       const state = await this.stateOf(this.prisma, { id: row.id, errandId: row.errand_id, requesterId: row.requester_id, runnerId: row.runner_id });
       data.push({
         id: row.id,
         errandId: row.errand_id,
         errandTitle: row.title,
-        counterpart: { userId: row.other_id, firstName: row.other_first_name, photoMediaId: row.other_photo },
+        counterpart: {
+          userId: row.other_id,
+          firstName: row.other_first_name,
+          lastName: row.other_last_name,
+          photoMediaId: row.other_photo,
+          role: row.other_role,
+          rating: row.other_rating_avg !== null && row.other_rating_count >= ratingMin ? Number(row.other_rating_avg) : null,
+          ratingCount: row.other_rating_count,
+        },
+        lastMessagePreview: row.last_preview,
+        errandStatus: row.errand_status,
+        amountMinor: row.agreed_minor !== null ? Number(row.agreed_minor) : row.offer_minor !== null ? Number(row.offer_minor) : null,
+        amountKind: row.agreed_minor !== null ? 'AGREED' : row.offer_minor !== null ? 'OFFER' : null,
+        pickupArea: row.pickup_area,
+        destinationArea: row.destination_area,
+        assignmentId: row.assignment_id,
         lastMessageAt: row.last_message_at,
         unreadCount: row.unread,
         muted: row.muted,

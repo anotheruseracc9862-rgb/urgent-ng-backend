@@ -95,6 +95,23 @@ export class MessageDto {
   createdAt!: Date;
 }
 
+export class ConversationCounterpartDto {
+  @ApiProperty()
+  userId!: string;
+  @ApiProperty()
+  firstName!: string;
+  @ApiProperty({ nullable: true, type: String })
+  lastName!: string | null;
+  @ApiProperty({ nullable: true, type: String })
+  photoMediaId!: string | null;
+  @ApiProperty({ enum: ['REQUESTER', 'RUNNER'], description: "The other person's side of this errand." })
+  role!: 'REQUESTER' | 'RUNNER';
+  @ApiProperty({ nullable: true, type: Number, description: 'Null until enough ratings are published to show an average.' })
+  rating!: number | null;
+  @ApiProperty()
+  ratingCount!: number;
+}
+
 export class ConversationDto {
   @ApiProperty()
   id!: string;
@@ -105,8 +122,29 @@ export class ConversationDto {
   @ApiProperty()
   errandTitle!: string;
 
-  @ApiProperty({ type: Object, description: 'The other person: { userId, firstName, photoMediaId }.' })
-  counterpart!: { userId: string; firstName: string; photoMediaId: string | null };
+  @ApiProperty({ type: ConversationCounterpartDto, description: 'The other person.' })
+  counterpart!: ConversationCounterpartDto;
+
+  @ApiProperty({ nullable: true, type: String, description: 'The latest message that is not removed: its text, or "Photo". Null when there is none.' })
+  lastMessagePreview!: string | null;
+
+  @ApiProperty({ description: 'Where the errand is now, as the errand status.' })
+  errandStatus!: string;
+
+  @ApiProperty({ nullable: true, type: Number, description: 'Agreed amount in kobo once a runner is selected, otherwise the runner\'s latest offer. Null with neither.' })
+  amountMinor!: number | null;
+
+  @ApiProperty({ enum: ['AGREED', 'OFFER'], nullable: true, type: String })
+  amountKind!: 'AGREED' | 'OFFER' | null;
+
+  @ApiProperty({ nullable: true, type: String, description: 'Approximate area only.' })
+  pickupArea!: string | null;
+
+  @ApiProperty({ nullable: true, type: String, description: 'Approximate area only.' })
+  destinationArea!: string | null;
+
+  @ApiProperty({ nullable: true, type: String, description: 'The assignment for this conversation, from selection onward.' })
+  assignmentId!: string | null;
 
   @ApiProperty({ type: Date, nullable: true })
   lastMessageAt!: Date | null;

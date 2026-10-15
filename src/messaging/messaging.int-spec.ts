@@ -82,6 +82,25 @@ describe('Messaging (P8-01)', () => {
       expect(all[0].id).toBe(first.id);
     });
 
+    it('carry what a list row and a detail pane need: preview, role, errand status and the offer amount', async () => {
+      const s = await chat();
+      await text(s.runner, s.conversationId, 'I can do it today').expect(201);
+
+      const [row] = await conversationOf(s.requester) as unknown as Array<Record<string, any>>;
+
+      expect(row.lastMessagePreview).toBe('I can do it today');
+      expect(row.errandStatus).toBe('OPEN');
+      expect(row.counterpart).toMatchObject({ userId: s.runner.userId, role: 'RUNNER' });
+      expect(row.counterpart.firstName).toEqual(expect.any(String));
+      expect(row.amountKind).toBe('OFFER');
+      expect(row.amountMinor).toBeGreaterThan(0);
+      expect(row).toHaveProperty('pickupArea');
+      expect(row.assignmentId).toBeNull();
+
+      const [runnerRow] = await conversationOf(s.runner) as unknown as Array<Record<string, any>>;
+      expect(runnerRow.counterpart.role).toBe('REQUESTER');
+    });
+
     it('are invisible to everyone else', async () => {
       const s = await chat();
       const stranger = await signedInUser(app);

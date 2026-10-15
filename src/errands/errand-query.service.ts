@@ -152,10 +152,10 @@ export class ErrandQueryService {
     userId: string,
     errands: Array<{ id: string; status: ErrandStatus; offerCount: number; expiresAt: Date | null }>,
   ): Promise<
-    Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'attention' | 'attentionExpiresAt'>>
+    Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'assignmentId' | 'conversationId' | 'attention' | 'attentionExpiresAt'>>
   > {
     const ids = errands.map((errand) => errand.id);
-    const out = new Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'attention' | 'attentionExpiresAt'>>();
+    const out = new Map<string, Pick<ErrandSummaryDto, 'lowestOfferMinor' | 'offerPreview' | 'runner' | 'agreedAmountMinor' | 'assignmentId' | 'conversationId' | 'attention' | 'attentionExpiresAt'>>();
     if (ids.length === 0) return out;
 
     const [offers, assignments, changes] = await Promise.all([
@@ -170,6 +170,8 @@ export class ErrandQueryService {
       this.prisma.$queryRaw<
         Array<{
           errand_id: string;
+          assignment_id: string;
+          conversation_id: string | null;
           amount: bigint;
           first_name: string;
           last_name: string | null;
@@ -180,13 +182,15 @@ export class ErrandQueryService {
         }>
       >`
         SELECT DISTINCT ON (a.errand_id)
-               a.errand_id::text, a.agreed_amount_minor AS amount, u.first_name, u.last_name, pr.photo_media_id::text AS photo,
+               a.errand_id::text, a.id::text AS assignment_id, cv.id::text AS conversation_id,
+               a.agreed_amount_minor AS amount, u.first_name, u.last_name, pr.photo_media_id::text AS photo,
                us.runner_rating_avg::float8 AS rating_avg, COALESCE(us.runner_rating_count, 0)::int AS rating_count,
                COALESCE(us.completed_as_runner, 0)::int AS completed
         FROM assignments a
         JOIN users u ON u.id = a.runner_id
         LEFT JOIN profiles pr ON pr.user_id = u.id AND pr.deleted_at IS NULL
         LEFT JOIN user_stats us ON us.user_id = u.id
+        LEFT JOIN conversations cv ON cv.offer_id = a.selected_offer_id AND cv.deleted_at IS NULL
         WHERE a.errand_id = ANY(${ids}::uuid[]) AND a.deleted_at IS NULL
           AND a.status IN ('PENDING_ACCEPTANCE'::"AssignmentStatus", 'ACCEPTED'::"AssignmentStatus", 'COMPLETED'::"AssignmentStatus")
         ORDER BY a.errand_id, a.selected_at DESC
@@ -239,6 +243,8 @@ export class ErrandQueryService {
             }
           : null,
         agreedAmountMinor: assignment ? Number(assignment.amount) : null,
+        assignmentId: assignment?.assignment_id ?? null,
+        conversationId: assignment?.conversation_id ?? null,
         attention,
         attentionExpiresAt,
       });

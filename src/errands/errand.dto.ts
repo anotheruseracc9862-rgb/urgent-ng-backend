@@ -439,6 +439,10 @@ export class ErrandSummaryDto {
   runner!: ErrandRunnerSummaryDto | null;
   @ApiProperty({ nullable: true, type: Number, description: 'The agreed amount in kobo, once a runner is selected.' })
   agreedAmountMinor!: number | null;
+  @ApiProperty({ nullable: true, type: String, description: 'The assignment with the selected runner. Open it at /assignments/{id}.' })
+  assignmentId!: string | null;
+  @ApiProperty({ nullable: true, type: String, description: 'The conversation with the selected runner about this errand, if one exists.' })
+  conversationId!: string | null;
   @ApiProperty({
     enum: ERRAND_ATTENTION,
     nullable: true,

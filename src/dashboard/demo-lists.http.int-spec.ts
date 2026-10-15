@@ -147,6 +147,8 @@ describe('Demo list features (HTTP)', () => {
       expect(res[0]).toMatchObject({ id: s.errandId, attention: 'RUNNER_TO_CONFIRM', lowestOfferMinor: null, offerPreview: [] });
       expect(res[0].runner).toEqual(expect.objectContaining({ firstName: expect.any(String), completedErrands: expect.any(Number) }));
       expect(res[0].agreedAmountMinor).toBeGreaterThan(0);
+      expect(res[0].assignmentId).toEqual(expect.any(String));
+      expect(res[0]).toHaveProperty('conversationId');
     });
 
     it('lists only errands that need the requester on the ATTENTION tab', async () => {
