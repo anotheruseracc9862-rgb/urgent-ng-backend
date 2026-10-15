@@ -489,7 +489,14 @@ export class AssignmentService {
     }
     const role = row.requesterId === userId ? 'REQUESTER' : 'RUNNER';
     const exact = role === 'REQUESTER' || row.status === 'ACCEPTED';
-    const errand = await this.errandViews.forAssignedRunner(this.prisma, row.errandId, exact);
-    return { ...toAssignmentDto(row), role, errand: errand as unknown as AssignedErrandDto };
+    const [errand, dispute] = await Promise.all([
+      this.errandViews.forAssignedRunner(this.prisma, row.errandId, exact),
+      this.prisma.dispute.findFirst({
+        where: { assignmentId: row.id, deletedAt: null },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { id: true },
+      }),
+    ]);
+    return { ...toAssignmentDto(row), role, disputeId: dispute?.id ?? null, errand: errand as unknown as AssignedErrandDto };
   }
 }

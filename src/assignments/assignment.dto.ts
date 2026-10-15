@@ -148,6 +148,9 @@ export class AssignmentDetailDto extends AssignmentDto {
   @ApiProperty({ enum: ['REQUESTER', 'RUNNER'], description: 'The caller\'s side of this assignment.' })
   role!: 'REQUESTER' | 'RUNNER';
 
+  @ApiPropertyOptional({ type: String, nullable: true, description: 'The latest non-deleted dispute for this assignment, or null. Visible only to its parties.' })
+  disputeId?: string | null;
+
   @ApiProperty({ type: AssignedErrandDto, description: 'The errand as this caller may see it. Exact locations and contacts only for the requester, and for the runner while the assignment is ACCEPTED.' })
   errand!: AssignedErrandDto;
 }

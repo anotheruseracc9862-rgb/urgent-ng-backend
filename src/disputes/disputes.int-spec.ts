@@ -11,7 +11,7 @@ import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { seedCategories } from '../test/errand.helper.js';
-import { acceptedScene, executionStep, selectedScene } from '../test/assignment.helper.js';
+import { acceptedScene, executionStep, getAssignment, selectedScene } from '../test/assignment.helper.js';
 import { dispatchOutbox } from '../test/events.helper.js';
 import { readyMedia } from '../test/media.helper.js';
 import { ExecutionService } from '../execution/execution.service.js';
@@ -79,6 +79,26 @@ describe('Disputes (P9-03)', () => {
   }
 
   describe('opening', () => {
+    it('lets only the assignment parties discover the latest non-deleted case after a reload', async () => {
+      const s = await atStage('IN_PROGRESS');
+      expect((await getAssignment(app, s.requester, s.assignmentId).expect(200)).body.data.disputeId).toBeNull();
+      const opened = (await open(s.requester, s.assignmentId).expect(201)).body.data;
+      await prisma.dispute.create({ data: {
+        assignmentId: s.assignmentId, errandId: s.errandId, openedBy: s.requester.userId,
+        type: 'OTHER', claim: 'Deleted case', status: 'CLOSED', deletedAt: new Date(),
+        resolution: 'DISMISS', resolvedAt: new Date(), resolvedBy: await adminId(),
+        createdAt: new Date(Date.now() + 60_000),
+      } });
+      for (const party of [s.requester, s.runner]) {
+        const assignment = (await getAssignment(app, party, s.assignmentId).expect(200)).body.data;
+        expect(assignment.disputeId).toBe(opened.id);
+        expect(assignment.errand.status).toBe('DISPUTED');
+      }
+      const stranger = await signedInUser(app);
+      const denied = await getAssignment(app, stranger, s.assignmentId).expect(404);
+      expect(JSON.stringify(denied.body)).not.toContain(opened.id);
+    });
+
     it.each(['ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED'] as const)('moves a %s errand to DISPUTED and remembers where it was', async (stage) => {
       const s = await atStage(stage);
 

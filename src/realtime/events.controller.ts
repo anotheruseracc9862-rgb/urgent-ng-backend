@@ -1,5 +1,5 @@
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Controller, Get, Headers, HttpCode, Post, Req, Res, SetMetadata, UseGuards } from '@nestjs/common';
+import { Controller, Get, Headers, HttpCode, Post, Query, Req, Res, SetMetadata, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ApiConsumerAuth, ApiEnveloped } from '../common/api/api-docs.js';
 import { NoEnvelope } from '../common/decorators/no-envelope.decorator.js';
@@ -60,6 +60,7 @@ export class EventsController {
   async stream(
     @CurrentUser() user: AuthenticatedUser,
     @Headers('last-event-id') lastEventId: string | undefined,
+    @Query('lastEventId') lastEventIdQuery: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
@@ -80,7 +81,7 @@ export class EventsController {
     res.write('retry: 3000\n\n');
 
     try {
-      for await (const frame of this.streams.frames(user.userId, lastEventId || undefined, abort.signal, { heartbeatMs: HEARTBEAT_MS })) {
+      for await (const frame of this.streams.frames(user.userId, lastEventId || lastEventIdQuery || undefined, abort.signal, { heartbeatMs: HEARTBEAT_MS })) {
         write(res, frame);
         if (frame.kind === 'heartbeat') {
           await this.streams.refreshSlot(user.userId, slot);
@@ -97,4 +98,3 @@ export class EventsController {
     }
   }
 }
-
