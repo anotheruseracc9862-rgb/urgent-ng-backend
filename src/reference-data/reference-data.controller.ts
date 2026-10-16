@@ -1,6 +1,8 @@
 import { ApiTags } from '@nestjs/swagger';
 import { ApiEnveloped, ApiErrors } from '../common/api/api-docs.js';
-import { CategoryDto, ProhibitedItemDto } from './reference-data.dto.js';
+import { CategoryDto, ProhibitedItemDto, ServiceAreasDto } from './reference-data.dto.js';
+import { SERVICE_STATES } from '../geography/service-areas.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
 import { PolicyVersionDto } from '../auth/dto/responses.dto.js';
 import { Controller, Get, Param, ParseEnumPipe } from '@nestjs/common';
 import { ConsentType } from '@prisma/client';
@@ -16,7 +18,14 @@ export class ReferenceDataController {
   constructor(
     private readonly reference: ReferenceDataService,
     private readonly policies: PolicyService,
+    private readonly config: BusinessConfigService,
   ) {}
+
+  @Get('service-areas')
+  @ApiEnveloped(ServiceAreasDto)
+  async serviceAreas(): Promise<ServiceAreasDto> {
+    return { states: SERVICE_STATES, interstateEnabled: await this.config.get('INTERSTATE_ERRANDS_ENABLED') };
+  }
 
   @Get('categories')
   @ApiEnveloped(CategoryDto, { isArray: true })

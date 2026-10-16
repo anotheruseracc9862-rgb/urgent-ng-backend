@@ -7,6 +7,8 @@ import {
   IsEnum,
   IsNumber,
   IsOptional,
+  IsIn,
+  IsString,
   IsUUID,
   Max,
   Min,
@@ -31,11 +33,33 @@ export class UpdateRunnerProfileDto {
   @IsEnum(TransportMethod)
   transport!: TransportMethod;
 
-  /** Centre of the operating circle. */
-  @ApiProperty({ type: LatLngDto })
+  @ApiPropertyOptional({ enum: ['STATE', 'LGAS', 'RADIUS'], default: 'RADIUS' })
+  @IsOptional()
+  @IsIn(['STATE', 'LGAS', 'RADIUS'])
+  areaMode?: 'STATE' | 'LGAS' | 'RADIUS';
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(37)
+  @ArrayUnique()
+  @IsString({ each: true })
+  areaStateIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(800)
+  @ArrayUnique()
+  @IsString({ each: true })
+  areaLgaIds?: string[];
+
+  /** Required only for a radius. Administrative coverage has no centre. */
+  @ApiPropertyOptional({ type: LatLngDto, nullable: true })
+  @IsOptional()
   @ValidateNested()
   @Type(() => LatLngDto)
-  areaCenter!: LatLngDto;
+  areaCenter?: LatLngDto | null;
 
   /** Radius in km, one decimal. Must be within the configured range (default 1 to 20); default 5. */
   @IsOptional()
@@ -60,8 +84,14 @@ export class UpdateAvailabilityDto {
 export class RunnerProfileDto {
   @ApiProperty({ enum: TransportMethod, enumName: 'TransportMethod' })
   transport!: TransportMethod;
-  @ApiProperty({ type: LatLngDto })
-  areaCenter!: LatLngDto;
+  @ApiProperty({ enum: ['STATE', 'LGAS', 'RADIUS'] })
+  areaMode!: 'STATE' | 'LGAS' | 'RADIUS';
+  @ApiProperty({ type: [String] })
+  areaStateIds!: string[];
+  @ApiProperty({ type: [String] })
+  areaLgaIds!: string[];
+  @ApiProperty({ type: LatLngDto, nullable: true })
+  areaCenter!: LatLngDto | null;
   areaRadiusKm!: number;
   @ApiProperty({ enum: RunnerAvailability, enumName: 'RunnerAvailability' })
   availability!: RunnerAvailability;
@@ -76,7 +106,7 @@ export class RunnerEligibilityDto {
   canBrowseFeed!: boolean;
   @ApiProperty({
     type: [String],
-    enum: ['ACCOUNT_NOT_ACTIVE', 'PHONE_NOT_VERIFIED', 'NOT_VERIFIED', 'VERIFICATION_PENDING', 'NO_RUNNER_PROFILE', 'UNAVAILABLE', 'RESTRICTED'],
+    enum: ['ACCOUNT_NOT_ACTIVE', 'PHONE_NOT_VERIFIED', 'NOT_VERIFIED', 'VERIFICATION_PENDING', 'NO_RUNNER_PROFILE', 'OPERATING_AREA_REQUIRED', 'UNAVAILABLE', 'RESTRICTED'],
   })
   reasons!: string[];
   @ApiPropertyOptional()

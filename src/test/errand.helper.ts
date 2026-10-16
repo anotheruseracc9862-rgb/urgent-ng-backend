@@ -89,11 +89,11 @@ export async function insertErrand(options: InsertErrandOptions): Promise<string
     )
   `;
   await prisma.$executeRaw`
-    INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, source, updated_at)
+    INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, state_id, lga_id, source, updated_at)
     VALUES (${id}::uuid, 'ERRAND_PICKUP'::"LocationType",
             ST_SetSRID(ST_MakePoint(${lng}::float8, ${lat}::float8), 4326)::geography,
             ST_SetSRID(ST_MakePoint(${lng + 0.002}::float8, ${lat + 0.002}::float8), 4326)::geography,
-            ${options.area ?? 'Yaba'}, 'Lagos Mainland', 'Lagos', 'MAP_PIN'::"LocationSource", now())
+            ${options.area ?? 'Yaba'}, 'Lagos Mainland', 'Lagos', 'ng-lagos', 'ng-lagos:lagos-mainland', 'MAP_PIN'::"LocationSource", now())
   `;
   return id;
 }
@@ -104,7 +104,8 @@ export async function insertErrand(options: InsertErrandOptions): Promise<string
 type SignedInUser = { accessToken: string };
 
 export const LAGOS_PICKUP = { lat: 6.5244, lng: 3.3792 };
-export const LAGOS_DESTINATION = { lat: 6.6018, lng: 3.3515 };
+// Both stops fit the default runner's 5 km circle; coverage now checks every stop.
+export const LAGOS_DESTINATION = { lat: 6.55, lng: 3.39 };
 
 /** A complete delivery draft: both locations, ASAP. Override or add fields as needed. */
 export const draftBody = (categoryId: string, extra: Record<string, unknown> = {}) => ({

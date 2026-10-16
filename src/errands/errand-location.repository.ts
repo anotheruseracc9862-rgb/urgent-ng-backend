@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { LocationSource, LocationType, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
 import type { LatLng } from './location-privacy.js';
+import { resolveState, resolveLga } from '../geography/service-areas.js';
 
 export type ErrandLocationType = Extract<LocationType, 'ERRAND_PICKUP' | 'ERRAND_DESTINATION'>;
 
@@ -16,6 +17,8 @@ export interface ErrandLocationRecord {
   lga: string | null;
   state: string | null;
   source: LocationSource;
+  stateId?: string | null;
+  lgaId?: string | null;
 }
 
 export interface ErrandLocationWrite {
@@ -46,6 +49,8 @@ interface Row {
   lga: string | null;
   state: string | null;
   source: LocationSource;
+  state_id: string | null;
+  lga_id: string | null;
 }
 
 const toRecord = (row: Row): ErrandLocationRecord => ({
@@ -57,6 +62,8 @@ const toRecord = (row: Row): ErrandLocationRecord => ({
   area: row.area,
   lga: row.lga,
   state: row.state,
+  stateId: row.state_id,
+  lgaId: row.lga_id,
   source: row.source,
 });
 
@@ -69,15 +76,17 @@ export class ErrandLocationRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async upsert(tx: Prisma.TransactionClient, input: ErrandLocationWrite): Promise<void> {
+    const stateId = resolveState(input.state)?.id ?? null;
+    const lgaId = stateId ? resolveLga(stateId, input.lga)?.id ?? null : null;
     await tx.$executeRaw`
       INSERT INTO errand_locations
-        (errand_id, type, exact_point, approx_point, address_text, landmark, area, lga, state, source, updated_at)
+        (errand_id, type, exact_point, approx_point, address_text, landmark, area, lga, state, state_id, lga_id, source, updated_at)
       VALUES (
         ${input.errandId}::uuid, ${input.type}::"LocationType",
         ST_SetSRID(ST_MakePoint(${input.exact.lng}::float8, ${input.exact.lat}::float8), 4326)::geography,
         ST_SetSRID(ST_MakePoint(${input.approx.lng}::float8, ${input.approx.lat}::float8), 4326)::geography,
         ${input.addressText ?? null}, ${input.landmark ?? null}, ${input.area}, ${input.lga ?? null},
-        ${input.state ?? null}, ${input.source}::"LocationSource", now()
+        ${input.state ?? null}, ${stateId}, ${lgaId}, ${input.source}::"LocationSource", now()
       )
       ON CONFLICT (errand_id, type) WHERE deleted_at IS NULL DO UPDATE SET
         exact_point = EXCLUDED.exact_point,
@@ -87,6 +96,8 @@ export class ErrandLocationRepository {
         area = EXCLUDED.area,
         lga = EXCLUDED.lga,
         state = EXCLUDED.state,
+        state_id = EXCLUDED.state_id,
+        lga_id = EXCLUDED.lga_id,
         source = EXCLUDED.source,
         updated_at = now()
     `;
@@ -105,7 +116,7 @@ export class ErrandLocationRepository {
       SELECT errand_id::text, type::text AS type,
              ST_Y(exact_point::geometry) AS exact_lat, ST_X(exact_point::geometry) AS exact_lng,
              ST_Y(approx_point::geometry) AS approx_lat, ST_X(approx_point::geometry) AS approx_lng,
-             address_text, landmark, area, lga, state, source::text AS source
+             address_text, landmark, area, lga, state, state_id, lga_id, source::text AS source
       FROM errand_locations
       WHERE errand_id = ${errandId}::uuid AND deleted_at IS NULL
       ORDER BY type
@@ -123,7 +134,7 @@ export class ErrandLocationRepository {
       SELECT errand_id::text, type::text AS type,
              ST_Y(exact_point::geometry) AS exact_lat, ST_X(exact_point::geometry) AS exact_lng,
              ST_Y(approx_point::geometry) AS approx_lat, ST_X(approx_point::geometry) AS approx_lng,
-             address_text, landmark, area, lga, state, source::text AS source
+             address_text, landmark, area, lga, state, state_id, lga_id, source::text AS source
       FROM errand_locations
       WHERE errand_id = ANY(${errandIds}::uuid[]) AND deleted_at IS NULL
       ORDER BY type

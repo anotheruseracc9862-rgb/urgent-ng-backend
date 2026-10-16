@@ -4,6 +4,7 @@
  */
 
 export interface BusinessConfig {
+  INTERSTATE_ERRANDS_ENABLED: boolean;
   // 32.1 Marketplace rules
   ERRAND_EXPIRY_HOURS: number;
   SCHEDULED_ERRAND_MAX_OPEN_DAYS: number;
@@ -171,6 +172,7 @@ export interface BusinessConfig {
 }
 
 export const DEFAULTS: BusinessConfig = {
+  INTERSTATE_ERRANDS_ENABLED: false,
   // 32.1 Marketplace rules
   ERRAND_EXPIRY_HOURS: 24,
   SCHEDULED_ERRAND_MAX_OPEN_DAYS: 7,
@@ -330,5 +332,4 @@ export const DEFAULTS: BusinessConfig = {
   FEATURE_OFFERS_ENABLED: true,
   FEATURE_BILLING_ENABLED: true,
 };
-
 

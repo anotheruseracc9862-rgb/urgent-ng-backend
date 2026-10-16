@@ -9,6 +9,7 @@ import { ErrandLocationRepository } from './errand-location.repository.js';
 import { ErrandPhotosService } from './errand-photos.service.js';
 import { ProhibitedItemsService } from './prohibited-items.service.js';
 import { ErrandViewService } from './errand-view.service.js';
+import { GeographyService } from '../geography/geography.service.js';
 
 type Client = Prisma.TransactionClient | PrismaService;
 
@@ -29,6 +30,7 @@ export class ErrandValidatorService {
     private readonly photos: ErrandPhotosService,
     private readonly prohibited: ProhibitedItemsService,
     private readonly view: ErrandViewService,
+    private readonly geography: GeographyService,
   ) {}
 
   /** The database clock, so business rules and the database agree on "now". */
@@ -106,6 +108,7 @@ export class ErrandValidatorService {
     if (options.checkSchedule && errand.timeMode === 'SCHEDULED' && errand.scheduledAt) {
       await this.assertScheduleInRange(errand.scheduledAt, now);
     }
+    await this.geography.assertPublishable(locations);
     await this.assertNoProhibitedText(errand.title, errand.description, errand.instructions);
     await this.photos.assertAllReady(client, userId, errandId);
   }

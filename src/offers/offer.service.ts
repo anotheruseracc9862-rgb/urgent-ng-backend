@@ -22,6 +22,7 @@ import { RunnerEligibilityService } from '../runner/runner-eligibility.service.j
 import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
 import { ConversationService } from '../messaging/conversation.service.js';
+import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 
 export type { OfferStatus, OfferCloseReason };
 export type AwaitingParty = 'RUNNER' | 'REQUESTER' | 'NONE';
@@ -106,6 +107,7 @@ export class OfferService {
     // connection while they wait on the counter lock, and must not need another one.
     const maxOpenOffers = await this.config.get('MAX_OPEN_OFFERS_PER_RUNNER');
     const allowance = await this.entitlement.offerAllowance(runnerId);
+    const interstateEnabled = await this.config.get('INTERSTATE_ERRANDS_ENABLED');
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
@@ -136,6 +138,18 @@ export class OfferService {
         `;
         if (blocked.length > 0) {
           throw DomainException.of(RESOURCE_NOT_FOUND);
+        }
+
+        const covered = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT e.id::text FROM errands e
+          JOIN runner_profiles me ON me.user_id = ${runnerId}::uuid AND me.deleted_at IS NULL
+          WHERE e.id = ${errandId}::uuid
+            AND ${errandGeographySql(interstateEnabled)} AND ${runnerCoverageSql('me')}
+            AND NOT (e.category_id = ANY(me.excluded_category_ids))
+          FOR SHARE OF me
+        `);
+        if (covered.length === 0) {
+          throw DomainException.of(OFFER_NOT_ELIGIBLE, { details: { reasons: ['OUTSIDE_OPERATING_AREA'] } });
         }
 
         // Locks the runner's daily counter row: from here on this runner's submits are serial.

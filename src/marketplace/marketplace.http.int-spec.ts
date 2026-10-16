@@ -7,7 +7,11 @@ import { cleanAll, enforcementActionFor, getTestPrisma } from '../test/database.
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { fakeStorage, readyMedia } from '../test/media.helper.js';
 import { NIN, fakeKyc, readyRunner, type TestUser } from '../test/verification.helper.js';
-import { createDraft, draftBody, insertErrand, openErrand, seedCategories } from '../test/errand.helper.js';
+import { createDraft, draftBody, insertErrand, openErrand, publishErrand, seedCategories } from '../test/errand.helper.js';
+import { MAPS_PROVIDER } from '../common/providers/maps.provider.js';
+import { FakeMapsProvider } from '../common/providers/fakes/maps.fake.js';
+import { NearbyMatchingService } from './nearby-matching.service.js';
+import { NotificationService } from '../notifications/notification.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { FEED_BOOST_SOURCE } from './feed-boost.hook.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
@@ -34,6 +38,7 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
     put: (path: string) => request(server()).put(`${API}${path}`).set(...bearer(who.accessToken)),
   });
   const config = () => app.get(BusinessConfigService);
+  const maps = () => app.get<FakeMapsProvider>(MAPS_PROVIDER);
   const post = (extra: Record<string, unknown> = {}, category = 'delivery', who: TestUser = requester) =>
     openErrand(app, who, categories[category], { pickup: pin(NEAR), destination: pin(MID), ...extra });
   const ids = (res: request.Response) => (res.body.data as Array<{ id: string }>).map((item) => item.id);
@@ -47,6 +52,7 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
     categories = await seedCategories();
     fakeKyc(app).reset();
     fakeStorage(app).reset();
+    maps().reset();
     requester = await signedInUser(app);
     runner = await readyRunner(app, NIN.ok);
   });
@@ -56,6 +62,128 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
   });
   afterAll(async () => {
     await app.close();
+  });
+
+  describe('administrative coverage contract', () => {
+    const coverage = (areaMode = 'STATE', areaStateIds = ['ng-lagos'], areaLgaIds: string[] = []) =>
+      as(runner).put('/runner/profile').send({ transport: 'BICYCLE', areaMode, areaStateIds, areaLgaIds });
+    const offer = (id: string) => as(runner).post(`/errands/${id}/offers`).set('Idempotency-Key', randomUUID())
+      .send({ amountMinor: 200000, durationMinutes: 30, availabilityConfirmed: true });
+    const place = (state: string, lga = 'Lagos Mainland') => ({ success: true, state, lga, area: lga });
+
+    it('exposes stable public reference IDs and validates state/LGA membership and the rollout toggle', async () => {
+      const ref = await request(server()).get(`${API}/reference/service-areas`).expect(200);
+      expect(ref.body.data.interstateEnabled).toBe(false);
+      expect(ref.body.data.states).toHaveLength(37);
+      expect(ref.body.data.states.find((s: { id: string }) => s.id === 'ng-lagos').lgas).toContainEqual({ id: 'ng-lagos:lagos-mainland', name: 'Lagos Mainland' });
+      expect(ref.body.data.states).toContainEqual(expect.objectContaining({ id: 'ng-katsina', name: 'Katsina' }));
+      await coverage('STATE', []).expect(400);
+      await coverage('STATE', ['ng-imaginary']).expect(400);
+      await coverage('LGAS', ['ng-lagos'], []).expect(400);
+      await coverage('LGAS', ['ng-lagos'], ['ng-oyo:ibadan-north']).expect(400);
+      await coverage('STATE', ['ng-lagos', 'ng-ogun']).expect(400);
+      await config().set('INTERSTATE_ERRANDS_ENABLED', true);
+      await coverage('STATE', ['ng-lagos', 'ng-ogun']).expect(200);
+      expect((await request(server()).get(`${API}/reference/service-areas`)).body.data.interstateEnabled).toBe(true);
+    });
+
+    it('matches all stops in selected LGAs for feed/map/count/detail/saved/offers and nearby notifications', async () => {
+      await coverage('LGAS', ['ng-lagos'], ['ng-lagos:lagos-mainland', 'ng-lagos:ikeja']).expect(200);
+      maps().scriptOutcomes('reverseGeocode', [place('Lagos State'), place('Lagos', 'Ikeja')]);
+      const id = await post();
+      const notify = vi.spyOn(app.get(NotificationService), 'notify').mockResolvedValue({ notificationId: null, created: true });
+      expect(await app.get(NearbyMatchingService).onDelayed(id, [runner.userId], new Date())).toBe(1);
+      expect(notify).toHaveBeenCalledOnce();
+      const feed = await as(runner).get('/marketplace/errands').expect(200);
+      expect(ids(feed)).toEqual([id]);
+      expect(feed.body.meta.total).toBe(1);
+      expect(feed.body.data[0].distance).toBeNull();
+      expect((await as(runner).get('/marketplace/errands/map').expect(200)).body.data[0].distance).toBeNull();
+      expect((await as(runner).get(`/marketplace/errands/${id}`).expect(200)).body.data.distance).toBeNull();
+      await as(runner).post(`/saved-errands/${id}`).expect(200);
+      const before = (await as(runner).get('/runner/offer-limit').expect(200)).body.data.used;
+      await coverage('LGAS', ['ng-lagos'], ['ng-lagos:lagos-mainland']).expect(200);
+      expect(ids(await as(runner).get('/marketplace/errands').expect(200))).toEqual([]);
+      expect(ids(await as(runner).get('/marketplace/errands/map').expect(200))).toEqual([]);
+      await as(runner).get(`/marketplace/errands/${id}`).expect(404);
+      await as(runner).post(`/saved-errands/${id}`).expect(404);
+      expect(ids(await as(runner).get('/saved-errands').expect(200))).toEqual([]);
+      expect(await app.get(NearbyMatchingService).onDelayed(id, [runner.userId], new Date())).toBe(0);
+      expect((await offer(id).expect(403)).body.error.details.reasons).toContain('OUTSIDE_OPERATING_AREA');
+      expect((await as(runner).get('/runner/offer-limit').expect(200)).body.data.used).toBe(before);
+      await coverage('LGAS', ['ng-lagos'], ['ng-lagos:lagos-mainland', 'ng-lagos:ikeja']).expect(200);
+      await offer(id).expect(201);
+    });
+
+    it('blocks interstate publish and OPEN edits by default, enables them explicitly, and rechecks reads/offers when disabled', async () => {
+      await coverage().expect(200);
+      maps().scriptOutcomes('reverseGeocode', [place('Lagos'), place('Ogun', 'Abeokuta North')]);
+      const draft = await createDraft(app, requester, draftBody(categories.delivery));
+      expect(draft.status).toBe(201);
+      const id = draft.body.data.id;
+      expect((await publishErrand(app, requester, id).expect(422)).body.error.details.reason).toBe('INTERSTATE_NOT_AVAILABLE');
+      await config().set('INTERSTATE_ERRANDS_ENABLED', true);
+      await publishErrand(app, requester, id).expect(201);
+      await as(runner).get(`/marketplace/errands/${id}`).expect(404);
+      await coverage('STATE', ['ng-lagos', 'ng-ogun']).expect(200);
+      await as(runner).get(`/marketplace/errands/${id}`).expect(200);
+      await as(runner).post(`/saved-errands/${id}`).expect(200);
+      await config().set('INTERSTATE_ERRANDS_ENABLED', false);
+      await as(runner).get(`/marketplace/errands/${id}`).expect(404);
+      expect(ids(await as(runner).get('/saved-errands').expect(200))).toEqual([]);
+      await offer(id).expect(403);
+      const local = await post();
+      maps().scriptOutcomes('reverseGeocode', [place('Ogun', 'Abeokuta North')]);
+      const edit = await request(server()).patch(`${API}/errands/${local}`).set(...bearer(requester.accessToken))
+        .send({ destination: pin(MID) }).expect(422);
+      expect(edit.body.error.details.reason).toBe('INTERSTATE_NOT_AVAILABLE');
+      await config().set('INTERSTATE_ERRANDS_ENABLED', true);
+      maps().scriptOutcomes('reverseGeocode', [place('Ogun', 'Abeokuta North')]);
+      await request(server()).patch(`${API}/errands/${local}`).set(...bearer(requester.accessToken)).send({ destination: pin(MID) }).expect(200);
+    });
+
+    it('keeps unknown-state drafts safe but blocks publication and never geocodes exact errand pins', async () => {
+      maps().clearCalls();
+      maps().scriptOutcomes('reverseGeocode', [place('Unrecognised'), place('Lagos')]);
+      const draft = await createDraft(app, requester, draftBody(categories.delivery, { pickup: pin(NEAR), destination: pin(MID) })).expect(201);
+      const id = draft.body.data.id;
+      expect((await publishErrand(app, requester, id).expect(422)).body.error.details.reason).toBe('LOCATION_STATE_UNVERIFIED');
+      expect((await prisma.errand.findUniqueOrThrow({ where: { id } })).status).toBe('DRAFT');
+      const calls = maps().getCalls('reverseGeocode');
+      expect(calls).toHaveLength(2);
+      expect(calls[0].args).not.toEqual([NEAR.lat, NEAR.lng]);
+      expect(calls[1].args).not.toEqual([MID.lat, MID.lng]);
+      await config().set('INTERSTATE_ERRANDS_ENABLED', true);
+      await publishErrand(app, requester, id).expect(422);
+      await request(server()).patch(`${API}/errands/${id}`).set(...bearer(requester.accessToken)).send({ pickup: pin(NEAR) }).expect(200);
+      await publishErrand(app, requester, id).expect(201);
+    });
+
+    it.each(['nearest', 'recommended'])('uses null distances with deterministic %s pagination for centreless profiles', async (sort) => {
+      const profile = await coverage().expect(200);
+      expect(profile.body.data).toMatchObject({ areaMode: 'STATE', areaStateIds: ['ng-lagos'], areaLgaIds: [], areaCenter: null });
+      expect((await as(runner).get('/runner/profile').expect(200)).body.data.areaCenter).toBeNull();
+      const expected = [await post(), await post(), await post()];
+      const first = await as(runner).get(`/marketplace/errands?sort=${sort}&limit=2`).expect(200);
+      const second = await as(runner).get(`/marketplace/errands?sort=${sort}&limit=2&cursor=${first.body.meta.nextCursor}`).expect(200);
+      expect([...ids(first), ...ids(second)]).toEqual(expected.reverse());
+      expect([...first.body.data, ...second.body.data].every((row: { distance: unknown }) => row.distance === null)).toBe(true);
+    });
+
+    it('keeps legacy radius writes compatible but requires old circles to be confirmed and every stop to fit', async () => {
+      await prisma.$executeRaw`UPDATE runner_profiles SET area_state_ids = '{}' WHERE user_id = ${runner.userId}::uuid`;
+      expect((await as(runner).get('/runner/eligibility').expect(200)).body.data.reasons).toContain('OPERATING_AREA_REQUIRED');
+      await as(runner).get('/marketplace/errands').expect(403);
+      const profile = await as(runner).put('/runner/profile').send({ transport: 'BICYCLE', areaCenter: { lat: 6.5244, lng: 3.3792 } }).expect(200);
+      expect(profile.body.data).toMatchObject({ areaMode: 'RADIUS', areaStateIds: ['ng-lagos'] });
+      const local = await post();
+      const farStop = await post({ destination: pin(FAR) });
+      expect(ids(await as(runner).get('/marketplace/errands').expect(200))).toEqual([local]);
+      await as(runner).get(`/marketplace/errands/${farStop}`).expect(404);
+      maps().scriptOutcomes('reverseGeocode', [place('Unknown')]);
+      await as(runner).put('/runner/profile').send({ transport: 'BICYCLE', areaCenter: NEAR }).expect(400);
+      await as(runner).put('/runner/profile').send({ transport: 'BICYCLE' }).expect(400);
+    });
   });
 
   describe('who may browse (P5-07 done-when)', () => {
@@ -160,7 +288,7 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
     });
 
     it('lets a runner narrow the radius but never widen it', async () => {
-      const near = await post({ pickup: pin(NEAR) });
+      const near = await post({ pickup: pin(NEAR), destination: pin(NEAR) });
       const mid = await post({ pickup: pin(MID) });
       expect(ids(await as(runner).get('/marketplace/errands?sort=newest').expect(200)).sort()).toEqual([near, mid].sort());
       expect(ids(await as(runner).get('/marketplace/errands?radiusKm=1').expect(200))).toEqual([near]);

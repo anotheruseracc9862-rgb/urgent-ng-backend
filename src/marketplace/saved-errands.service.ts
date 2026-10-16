@@ -9,6 +9,7 @@ import { RunnerEligibilityService } from '../runner/runner-eligibility.service.j
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { FEED_COLUMNS, FEED_JOINS, openErrandVisibleTo, toFeedItem, type FeedRow } from './marketplace-feed.service.js';
 import type { SavedErrandItemDto } from './marketplace.dto.js';
+import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 
 interface SavedRow extends FeedRow {
   status: ErrandStatus;
@@ -30,7 +31,11 @@ export class SavedErrandsService {
   async save(userId: string, errandId: string): Promise<{ saved: true }> {
     await this.eligibility.assertCanBrowseFeed(userId);
     const visible = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT e.id::text FROM errands e WHERE e.id = ${errandId}::uuid AND ${openErrandVisibleTo(userId)}
+      SELECT e.id::text FROM errands e
+      JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
+      WHERE e.id = ${errandId}::uuid AND ${openErrandVisibleTo(userId)}
+        AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
+        AND ${runnerCoverageSql('me')} AND NOT (e.category_id = ANY(me.excluded_category_ids))
     `);
     if (visible.length === 0) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
@@ -69,6 +74,11 @@ export class SavedErrandsService {
       LEFT JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
       ${FEED_JOINS}
       WHERE s.user_id = ${userId}::uuid AND s.deleted_at IS NULL
+        AND (e.status <> 'OPEN'::"ErrandStatus" OR (
+          ${openErrandVisibleTo(userId)}
+          AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
+          AND ${runnerCoverageSql('me')} AND NOT (e.category_id = ANY(me.excluded_category_ids))
+        ))
         AND NOT EXISTS (
           SELECT 1 FROM blocks b
           WHERE b.deleted_at IS NULL

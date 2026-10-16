@@ -6,13 +6,20 @@ import { BusinessConfigService } from '../config/business-config.service.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RATE_LIMITED, RESOURCE_CONFLICT, RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
 import { REDIS_CLIENT } from '../common/redis/redis.module.js';
+import { GeographyService } from '../geography/geography.service.js';
+import { SERVICE_STATES } from '../geography/service-areas.js';
+
+export type AreaMode = 'STATE' | 'LGAS' | 'RADIUS';
 
 const ABSOLUTE_MIN_KM = 1;
 const ABSOLUTE_MAX_KM = 20;
 
 export interface RunnerProfileView {
   transport: TransportMethod;
-  areaCenter: { lat: number; lng: number };
+  areaMode: AreaMode;
+  areaStateIds: string[];
+  areaLgaIds: string[];
+  areaCenter: { lat: number; lng: number } | null;
   areaRadiusKm: number;
   availability: RunnerAvailability;
   excludedCategoryIds: string[];
@@ -20,14 +27,17 @@ export interface RunnerProfileView {
 
 export interface RunnerProfileInput {
   transport: TransportMethod;
-  areaCenter: { lat: number; lng: number };
+  areaMode?: AreaMode;
+  areaStateIds?: string[];
+  areaLgaIds?: string[];
+  areaCenter?: { lat: number; lng: number } | null;
   areaRadiusKm?: number;
   excludedCategoryIds?: string[];
 }
 
 /**
- * The runner profile (Backend PRD 10.1): transport, one circular operating area, availability
- * and category exclusions. The area centre is a private location: it is only ever returned to its
+ * The runner profile: transport, state/LGA coverage or a legacy circle, availability
+ * and category exclusions. A circle's centre is private: it is only ever returned to its
  * owner. No vehicle, licence or ownership is asked for.
  */
 @Injectable()
@@ -35,14 +45,16 @@ export class RunnerProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: BusinessConfigService,
+    private readonly geography: GeographyService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async get(userId: string): Promise<RunnerProfileView> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ transport: TransportMethod; lat: number; lng: number; radius: number; availability: RunnerAvailability; excluded: string[] }>
+      Array<{ transport: TransportMethod; mode: AreaMode; states: string[]; lgas: string[]; lat: number | null; lng: number | null; radius: number; availability: RunnerAvailability; excluded: string[] }>
     >`
       SELECT transport::text AS transport,
+             area_mode AS mode, area_state_ids AS states, area_lga_ids AS lgas,
              ST_Y(area_center::geometry) AS lat,
              ST_X(area_center::geometry) AS lng,
              area_radius_km::float8 AS radius,
@@ -57,7 +69,10 @@ export class RunnerProfileService {
     const row = rows[0];
     return {
       transport: row.transport,
-      areaCenter: { lat: row.lat, lng: row.lng },
+      areaMode: row.mode,
+      areaStateIds: row.states,
+      areaLgaIds: row.lgas,
+      areaCenter: row.lat === null || row.lng === null ? null : { lat: row.lat, lng: row.lng },
       areaRadiusKm: row.radius,
       availability: row.availability,
       excludedCategoryIds: row.excluded,
@@ -66,6 +81,29 @@ export class RunnerProfileService {
 
   /** Create or replace the profile. Availability is never changed here (see `setAvailability`). */
   async upsert(userId: string, input: RunnerProfileInput): Promise<RunnerProfileView> {
+    const mode = input.areaMode ?? 'RADIUS';
+    let states = [...new Set(input.areaStateIds ?? [])];
+    const lgas = mode === 'LGAS' ? [...new Set(input.areaLgaIds ?? [])] : [];
+    const invalid = (message: string, field: string): never => {
+      throw DomainException.of(VALIDATION_ERROR, { message, details: { field } });
+    };
+    const center = mode === 'RADIUS' ? input.areaCenter : null;
+    if (mode === 'RADIUS') {
+      if (!center) invalid('Choose the centre of your operating area.', 'areaCenter');
+      const state = await this.geography.stateForPoint(center!);
+      if (!state) invalid('We could not verify the state of your operating area. Choose the centre again.', 'areaCenter');
+      states = [state!];
+    } else {
+      if (!states.length || states.some((id) => !SERVICE_STATES.some((state) => state.id === id))) {
+        invalid('Choose valid states for your operating area.', 'areaStateIds');
+      }
+      if (mode === 'LGAS' && (!lgas.length || lgas.some((id) => !SERVICE_STATES.some((state) => states.includes(state.id) && state.lgas.some((lga) => lga.id === id))))) {
+        invalid('Choose LGAs belonging to your selected states.', 'areaLgaIds');
+      }
+    }
+    if (!(await this.config.get('INTERSTATE_ERRANDS_ENABLED')) && states.length !== 1) {
+      invalid('For now, choose exactly one state.', 'areaStateIds');
+    }
     const [configMin, configMax, fallback] = await Promise.all([
       this.config.get('RUNNER_AREA_MIN_KM'),
       this.config.get('RUNNER_AREA_MAX_KM'),
@@ -93,16 +131,20 @@ export class RunnerProfileService {
       }
     }
 
-    await this.limitAreaMoves(userId, input.areaCenter);
+    if (center) await this.limitAreaMoves(userId, center);
 
     await this.prisma.$executeRaw`
-      INSERT INTO runner_profiles (user_id, transport, area_center, area_radius_km, excluded_category_ids, updated_at)
+      INSERT INTO runner_profiles (user_id, transport, area_center, area_mode, area_state_ids, area_lga_ids, area_radius_km, excluded_category_ids, updated_at)
       VALUES (${userId}::uuid, ${input.transport}::"TransportMethod",
-              ST_SetSRID(ST_MakePoint(${input.areaCenter.lng}::float8, ${input.areaCenter.lat}::float8), 4326)::geography,
+              ST_SetSRID(ST_MakePoint(${center?.lng ?? null}::float8, ${center?.lat ?? null}::float8), 4326)::geography,
+              ${mode}, ${states}::text[], ${lgas}::text[],
               ${radius}::numeric, ${excluded}::uuid[], now())
       ON CONFLICT (user_id) DO UPDATE
         SET transport = EXCLUDED.transport,
             area_center = EXCLUDED.area_center,
+            area_mode = EXCLUDED.area_mode,
+            area_state_ids = EXCLUDED.area_state_ids,
+            area_lga_ids = EXCLUDED.area_lga_ids,
             area_radius_km = EXCLUDED.area_radius_km,
             excluded_category_ids = EXCLUDED.excluded_category_ids,
             deleted_at = NULL,

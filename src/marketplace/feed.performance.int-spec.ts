@@ -71,14 +71,14 @@ describe.skipIf(!process.env.RUN_PERF)('Feed performance with 50,000 errands (P5
              ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, pub, now()
       FROM seed_errands`;
     await prisma.$executeRaw`
-      INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, source, updated_at)
+      INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, state_id, lga_id, source, updated_at)
       SELECT id, 'ERRAND_PICKUP'::"LocationType", ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
-             ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, 'Area ' || (g % 40), 'Lagos Mainland', 'Lagos', 'MAP_PIN'::"LocationSource", now()
+             ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, 'Area ' || (g % 40), 'Lagos Mainland', 'Lagos', 'ng-lagos', 'ng-lagos:lagos-mainland', 'MAP_PIN'::"LocationSource", now()
       FROM seed_errands`;
     await prisma.$executeRaw`
-      INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, source, updated_at)
+      INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, state_id, lga_id, source, updated_at)
       SELECT id, 'ERRAND_DESTINATION'::"LocationType", ST_SetSRID(ST_MakePoint(lng + 0.01, lat + 0.01), 4326)::geography,
-             ST_SetSRID(ST_MakePoint(lng + 0.01, lat + 0.01), 4326)::geography, 'Area ' || ((g + 7) % 40), 'Lagos Mainland', 'Lagos', 'MAP_PIN'::"LocationSource", now()
+             ST_SetSRID(ST_MakePoint(lng + 0.01, lat + 0.01), 4326)::geography, 'Area ' || ((g + 7) % 40), 'Lagos Mainland', 'Lagos', 'ng-lagos', 'ng-lagos:lagos-mainland', 'MAP_PIN'::"LocationSource", now()
       FROM seed_errands WHERE g % 5 < 3`;
     await prisma.$executeRawUnsafe('ANALYZE errands');
     await prisma.$executeRawUnsafe('ANALYZE errand_locations');

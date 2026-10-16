@@ -1116,7 +1116,10 @@ model RunnerProfile {
   userId              String                               @id @map("user_id") @db.Uuid
   user                User                                 @relation(fields: [userId], references: [id], onDelete: Restrict)
   transport           TransportMethod
-  areaCenter          Unsupported("geography(Point,4326)") @map("area_center")
+  areaCenter          Unsupported("geography(Point,4326)")? @map("area_center")
+  areaMode            String                               @default("RADIUS") @map("area_mode")
+  areaStateIds        String[]                             @default([]) @map("area_state_ids")
+  areaLgaIds          String[]                             @default([]) @map("area_lga_ids")
   areaRadiusKm        Decimal                              @default(5) @map("area_radius_km") @db.Decimal(4, 1)
   availability        RunnerAvailability                   @default(UNAVAILABLE)
   excludedCategoryIds String[]                             @default([]) @map("excluded_category_ids") @db.Uuid
@@ -1274,6 +1277,8 @@ model ErrandLocation {
   area        String
   lga         String?
   state       String?
+  stateId     String?                              @map("state_id")
+  lgaId       String?                              @map("lga_id")
   source      LocationSource
   createdAt   DateTime                             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime                             @updatedAt @map("updated_at") @db.Timestamptz(3)

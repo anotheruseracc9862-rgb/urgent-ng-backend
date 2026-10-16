@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { CursorService } from './pagination/cursor.service.js';
 import { ClockService } from './utils/time.service.js';
+import { GeographyService } from '../geography/geography.service.js';
 
 /**
  * Shared providers every module can inject without importing this module.
@@ -9,7 +10,7 @@ import { ClockService } from './utils/time.service.js';
  */
 @Global()
 @Module({
-  providers: [ClockService, CursorService],
-  exports: [ClockService, CursorService],
+  providers: [ClockService, CursorService, GeographyService],
+  exports: [ClockService, CursorService, GeographyService],
 })
 export class CommonModule {}

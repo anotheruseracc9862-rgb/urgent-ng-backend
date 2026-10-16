@@ -43,8 +43,8 @@ export class LocationPrivacyService {
 
   /**
    * The values to store for a pin. The area, LGA and state come from reverse geocoding; if the
-   * maps provider fails the errand can still be saved, with a generic area (a pin and a landmark
-   * are always enough to publish, Backend PRD 11.1).
+   * maps provider fails the draft can still be saved with a generic area. Publishing requires
+   * a recognised canonical state for every stop; no exact pin is sent to the provider.
    */
   async prepare(input: {
     errandId: string;

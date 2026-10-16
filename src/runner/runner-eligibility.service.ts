@@ -11,6 +11,7 @@ export type EligibilityReason =
   | 'NOT_VERIFIED'
   | 'VERIFICATION_PENDING'
   | 'NO_RUNNER_PROFILE'
+  | 'OPERATING_AREA_REQUIRED'
   | 'UNAVAILABLE'
   | 'RESTRICTED';
 
@@ -68,10 +69,11 @@ export class RunnerEligibilityService {
     const reasons: EligibilityReason[] = [];
 
     const rows = await this.prisma.$queryRaw<
-      Array<{ status: string | null; phone_ok: boolean | null; availability: string | null }>
+      Array<{ status: string | null; phone_ok: boolean | null; availability: string | null; area_confirmed: boolean | null }>
     >`
       SELECT u.status::text AS status,
              (u.phone_verified_at IS NOT NULL) AS phone_ok,
+             (SELECT cardinality(r.area_state_ids) > 0 FROM runner_profiles r WHERE r.user_id = u.id AND r.deleted_at IS NULL) AS area_confirmed,
              (SELECT r.availability::text FROM runner_profiles r WHERE r.user_id = u.id AND r.deleted_at IS NULL) AS availability
       FROM users u
       WHERE u.id = ${userId}::uuid AND u.deleted_at IS NULL
@@ -88,6 +90,7 @@ export class RunnerEligibilityService {
 
     if (user.availability === null) reasons.push('NO_RUNNER_PROFILE');
     else if (user.availability !== 'AVAILABLE') reasons.push('UNAVAILABLE');
+    if (user.availability !== null && !user.area_confirmed) reasons.push('OPERATING_AREA_REQUIRED');
 
     if (await this.restrictions.findActive(userId, 'OFFERING')) reasons.push('RESTRICTED');
 

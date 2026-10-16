@@ -20,6 +20,7 @@ import { ErrandValidatorService } from './errand-validator.service.js';
 import { ErrandViewService } from './errand-view.service.js';
 import { OFFER_RECONFIRMATION_HOOK, type OfferReconfirmationHook } from './offer-reconfirmation.hook.js';
 import type { CreateErrandDto, ErrandDto, ErrandLocationInputDto, PublishErrandDto, UpdateErrandDto } from './errand.dto.js';
+import { resolveState, resolveLga } from '../geography/service-areas.js';
 
 /** Statuses that count as a requester's "open errands" for the limit: published and not yet finished. */
 export const LIVE_STATUSES = ['OPEN', 'RUNNER_SELECTED', 'ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED', 'DISPUTED'] as const;
@@ -228,9 +229,14 @@ export class ErrandService {
       const sent = dto[key];
       if (sent === undefined) continue;
       const current = locationOf(key);
+      const prepared = places[key];
+      const stateId = resolveState(prepared?.state)?.id ?? null;
+      const lgaId = stateId ? resolveLga(stateId, prepared?.lga)?.id ?? null : null;
       if (sent === null) {
         if (current) locationChange[key] = 'CLEAR';
-      } else if (!current || this.locationDiffers(current, sent)) {
+      } else if (!current || this.locationDiffers(current, sent) ||
+        (current.stateId ?? null) !== stateId || (current.lgaId ?? null) !== lgaId) {
+        // Saving the same pin must also confirm legacy/previously unverified geography.
         locationChange[key] = 'SET';
       }
       if (locationChange[key]) changed.push(key);
@@ -241,6 +247,9 @@ export class ErrandService {
     if (dto.dropoffContact !== undefined) sideEffects.push('dropoffContact');
     if (dto.photoMediaIds !== undefined) sideEffects.push('photoMediaIds');
     if (changed.length === 0 && sideEffects.length === 0) {
+      if (status === 'OPEN') {
+        await this.validator.assertPublishable(tx, userId, errandId, await this.validator.dbNow(tx), { checkSchedule: false });
+      }
       return;
     }
 

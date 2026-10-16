@@ -5,13 +5,14 @@ import { BusinessConfigService } from '../config/business-config.service.js';
 import { OfferLimitService } from '../entitlements/offer-limit.service.js';
 import { DelayedJobHelper } from '../queue/delayed-job.helper.js';
 import { NotificationService } from '../notifications/notification.service.js';
+import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 
 /** The rules of PRD 12.5, over aliases e (errand), rp (runner profile) and u (user). */
 const ELIGIBLE = Prisma.sql`
       u.status = 'ACTIVE'::"UserStatus" AND u.deleted_at IS NULL AND u.phone_verified_at IS NOT NULL
       AND u.id <> e.requester_id
       AND rp.availability = 'AVAILABLE'::"RunnerAvailability"
-      AND ST_DWithin(rp.area_center, e.feed_point, rp.area_radius_km::float8 * 1000)
+      AND ${runnerCoverageSql('rp')}
       AND NOT (e.category_id = ANY(rp.excluded_category_ids))
       AND EXISTS (
         SELECT 1 FROM verification_attempts v
@@ -150,6 +151,7 @@ export class NearbyMatchingService {
       WHERE e.id = ${errandId}::uuid AND e.status = 'OPEN'::"ErrandStatus" AND e.deleted_at IS NULL
         AND e.expires_at > clock_timestamp() AND e.feed_point IS NOT NULL
         AND ${ELIGIBLE}
+        AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
       ORDER BY ST_Distance(rp.area_center, e.feed_point), u.id
       LIMIT ${limit}
     `);
@@ -164,6 +166,7 @@ export class NearbyMatchingService {
       JOIN users u ON u.id = rp.user_id
       WHERE e.id = ${errandId}::uuid AND e.status = 'OPEN'::"ErrandStatus" AND e.deleted_at IS NULL
         AND ${ELIGIBLE}
+        AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
     `);
     return rows.length > 0;
   }

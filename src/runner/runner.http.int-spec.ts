@@ -49,6 +49,9 @@ describe('Runner profile and eligibility (Phase 4)', () => {
 
       expect(res.body.data).toEqual({
         transport: 'BICYCLE',
+        areaMode: 'RADIUS',
+        areaStateIds: ['ng-lagos'],
+        areaLgaIds: [],
         areaCenter: { lat: 6.5244, lng: 3.3792 },
         areaRadiusKm: 5,
         availability: 'UNAVAILABLE',

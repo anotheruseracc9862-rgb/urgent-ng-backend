@@ -12,6 +12,7 @@ import { FEED_BOOST_SOURCE, type FeedBoostSource } from './feed-boost.hook.js';
 import { FeedRateLimiter } from './feed-rate-limiter.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
 import { RiskFlagService } from '../risk/risk-flag.service.js';
+import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 import type { FeedItemDto, FeedQueryDto, FeedSort, MapPointDto, MapQueryDto, MarketplaceErrandDto, MarketplaceFilterDto } from './marketplace.dto.js';
 
 /** What a feed row looks like straight from the database. */
@@ -219,7 +220,7 @@ export class MarketplaceFeedService {
       approx: { lat: row.approx_lat, lng: row.approx_lng },
       priority: row.priority,
       suggestedBudgetMinor: row.suggested_budget_minor === null ? null : Number(row.suggested_budget_minor),
-      distance: distanceBucket(row.dist_m ?? 0),
+      distance: row.dist_m === null ? null : distanceBucket(row.dist_m),
       boosted: boosted.has(row.id),
     }));
   }
@@ -258,6 +259,8 @@ export class MarketplaceFeedService {
       LEFT JOIN runner_profiles me ON me.user_id = ${userId}::uuid AND me.deleted_at IS NULL
       ${FEED_JOINS}
       WHERE e.id = ${errandId}::uuid AND ${openErrandVisibleTo(userId)}
+        AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
+        AND ${runnerCoverageSql('me')} AND NOT (e.category_id = ANY(me.excluded_category_ids))
     `);
     const row = rows[0];
     if (!row) {
@@ -285,7 +288,8 @@ export class MarketplaceFeedService {
   private async filters(userId: string, query: MarketplaceFilterDto, extra: { only?: string[]; exclude?: string[] }): Promise<Prisma.Sql> {
     const parts: Prisma.Sql[] = [
       openErrandVisibleTo(userId),
-      Prisma.sql`ST_DWithin(e.feed_point, me.area_center, (LEAST(me.area_radius_km::float8, ${query.radiusKm ?? 20}::float8)) * 1000)`,
+      errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED')),
+      runnerCoverageSql('me', query.radiusKm),
       Prisma.sql`NOT (e.category_id = ANY(me.excluded_category_ids))`,
     ];
     if (query.category?.length) parts.push(Prisma.sql`c.key = ANY(${query.category}::text[])`);
@@ -360,8 +364,8 @@ export class MarketplaceFeedService {
         : sort === 'budget_desc'
           ? Prisma.sql`(budget < ${Number(cursor.sort)}::bigint OR (budget = ${Number(cursor.sort)}::bigint AND ${tie(cursor)}))`
           : sort === 'recommended'
-            ? Prisma.sql`(dist_ring > ${Number(cursor.sort)}::int OR (dist_ring = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`
-            : Prisma.sql`(dist_m > ${Number(cursor.sort)}::int OR (dist_m = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`;
+            ? Prisma.sql`(COALESCE(dist_ring, -1) > ${Number(cursor.sort)}::int OR (COALESCE(dist_ring, -1) = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`
+            : Prisma.sql`(COALESCE(dist_m, -1) > ${Number(cursor.sort)}::int OR (COALESCE(dist_m, -1) = ${Number(cursor.sort)}::int AND ${tie(cursor)}))`;
     const order =
       sort === 'newest'
         ? Prisma.sql`published_at DESC, id DESC`
@@ -397,9 +401,9 @@ export class MarketplaceFeedService {
       case 'budget_desc':
         return Number(last.suggested_budget_minor ?? 0);
       case 'recommended':
-        return Math.floor((last.dist_m ?? 0) / RING_METRES);
+        return last.dist_m === null ? -1 : Math.floor(last.dist_m / RING_METRES);
       default:
-        return last.dist_m ?? 0;
+        return last.dist_m ?? -1;
     }
   }
 

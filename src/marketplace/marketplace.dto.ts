@@ -129,7 +129,7 @@ export class FeedItemDto {
   pickup!: PublicAreaDto | null;
   @ApiProperty({ type: PublicAreaDto, nullable: true })
   destination!: PublicAreaDto | null;
-  /** From the centre of your operating area, rounded into a bucket. Null when you have no operating area. */
+  /** From the centre of a radius, rounded into a bucket. Null for state/LGA coverage (no centre). */
   @ApiProperty({ type: DistanceBucketDto, nullable: true })
   distance!: DistanceBucketDto | null;
   @ApiProperty({ enum: TimeMode, enumName: 'TimeMode' })
@@ -162,8 +162,8 @@ export class MapPointDto {
   priority!: ErrandPriority;
   @ApiProperty({ nullable: true, type: Number })
   suggestedBudgetMinor!: number | null;
-  @ApiProperty({ type: DistanceBucketDto })
-  distance!: DistanceBucketDto;
+  @ApiProperty({ type: DistanceBucketDto, nullable: true })
+  distance!: DistanceBucketDto | null;
   boosted!: boolean;
 }
 
