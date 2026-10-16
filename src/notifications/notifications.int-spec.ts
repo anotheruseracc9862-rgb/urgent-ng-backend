@@ -246,6 +246,55 @@ describe('Notification engine (P8-03)', () => {
   });
 
   describe('the list', () => {
+    it('filters offer and progress topics before pagination, independently of category, unread and ownership', async () => {
+      const user = await signedInUser(app);
+      const stranger = await signedInUser(app);
+      const entries = [
+        ['offer.new', 'MARKETPLACE', false],
+        ['account.password_changed', 'TRANSACTIONAL', false],
+        ['assignment.accepted', 'TRANSACTIONAL', true],
+        ['execution.receipt_added', 'MARKETPLACE', false],
+        ['offer.countered', 'MARKETPLACE', true],
+        ['message.new', 'MESSAGING', false],
+        ['errand.completed.runner', 'TRANSACTIONAL', false],
+        ['errand.nearby', 'MARKETPLACE', false],
+        ['change_request.created', 'TRANSACTIONAL', false],
+        ['payment_agreement.updated', 'MARKETPLACE', false],
+        ['no_show.reported', 'TRANSACTIONAL', false],
+        ['errand.expired', 'MARKETPLACE', false],
+      ] as const;
+      await prisma.notification.createMany({ data: entries.map(([type, category, read], index) => ({
+        userId: user.userId, type, category, title: type, body: 'Notification filter test',
+        createdAt: new Date(Date.now() - index * 1000), readAt: read ? new Date() : null,
+      })) });
+      await prisma.notification.create({ data: {
+        userId: stranger.userId, type: 'offer.new', category: 'MARKETPLACE', title: 'Private offer', body: 'Another user',
+      } });
+
+      const pages = async (topic: string, limit: number) => {
+        const types: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const response = await request(app.getHttpServer()).get(`${API}/notifications`)
+            .query({ topic, limit, ...(cursor ? { cursor } : {}) }).set(...bearer(user.accessToken)).expect(200);
+          expect(response.body.data.length).toBeLessThanOrEqual(limit);
+          types.push(...response.body.data.map((row: { type: string }) => row.type));
+          cursor = response.body.meta.nextCursor;
+        } while (cursor);
+        return types;
+      };
+      expect(await pages('OFFERS', 1)).toEqual(['offer.new', 'offer.countered']);
+      expect(await pages('PROGRESS', 2)).toEqual([
+        'assignment.accepted', 'execution.receipt_added', 'errand.completed.runner',
+        'change_request.created', 'payment_agreement.updated', 'no_show.reported', 'errand.expired',
+      ]);
+      expect((await list(user, '?topic=OFFERS&unread=true')).map((row) => row.type)).toEqual(['offer.new']);
+      expect((await list(user, '?topic=PROGRESS&category=MARKETPLACE')).map((row) => row.type))
+        .toEqual(['execution.receipt_added', 'payment_agreement.updated', 'errand.expired']);
+      expect((await list(user, '?category=TRANSACTIONAL')).map((row) => row.type)).toContain('account.password_changed');
+      await request(app.getHttpServer()).get(`${API}/notifications?topic=UNKNOWN`).set(...bearer(user.accessToken)).expect(400);
+    });
+
     it('lists newest first, counts unread, marks read one by one and all at once, and is private', async () => {
       const s = await selectedScene(app, categoryId);
       await dispatchOutbox(app);

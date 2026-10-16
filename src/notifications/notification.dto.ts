@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsOptional } from 'class-validator';
 import { NotificationCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
@@ -18,6 +18,14 @@ export class NotificationListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(NotificationCategory)
   category?: NotificationCategory;
+
+  @ApiPropertyOptional({
+    enum: ['OFFERS', 'PROGRESS'],
+    description: 'OFFERS includes offer negotiations. PROGRESS includes assignment, execution and errand lifecycle updates, not nearby discovery alerts.',
+  })
+  @IsOptional()
+  @IsIn(['OFFERS', 'PROGRESS'])
+  topic?: 'OFFERS' | 'PROGRESS';
 }
 
 export class UnreadCountQueryDto {

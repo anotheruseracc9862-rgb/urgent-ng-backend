@@ -5,7 +5,7 @@ import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
-import type { NotificationDto } from './notification.dto.js';
+import type { NotificationDto, NotificationListQueryDto } from './notification.dto.js';
 
 const toDto = (row: Notification): NotificationDto => ({
   id: row.id,
@@ -28,7 +28,7 @@ export class NotificationQueryService {
 
   async list(
     userId: string,
-    options: { unread?: boolean; category?: NotificationCategory; cursor?: string; limit?: number },
+    options: NotificationListQueryDto,
   ): Promise<Paginated<NotificationDto>> {
     const limit = options.limit ?? 20;
     const cursor = options.cursor ? this.cursors.decode(options.cursor) : undefined;
@@ -36,6 +36,15 @@ export class NotificationQueryService {
       userId,
       ...(options.unread ? { readAt: null } : {}),
       ...(options.category ? { category: options.category } : {}),
+      ...(options.topic ? {
+        AND: [{
+          OR: (options.topic === 'OFFERS'
+            ? ['offer.']
+            : ['assignment.', 'execution.', 'errand.', 'change_request.', 'payment_agreement.', 'no_show.'])
+            .map((prefix) => ({ type: { startsWith: prefix } })),
+          ...(options.topic === 'PROGRESS' ? { NOT: { type: 'errand.nearby' } } : {}),
+        }],
+      } : {}),
       ...(cursor
         ? { OR: [{ createdAt: { lt: cursor.createdAt as Date } }, { createdAt: cursor.createdAt as Date, id: { lt: cursor.id } }] }
         : {}),
