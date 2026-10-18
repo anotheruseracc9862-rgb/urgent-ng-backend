@@ -23,21 +23,8 @@ const EMPTY: UserStatsView = {
 
 type Executor = Pick<Prisma.TransactionClient, '$executeRaw'>;
 
-/**
- * Derived per-user aggregates (`user_stats`). Everything is computed from source rows and is
- * rebuildable: `recompute` is idempotent and is the only writer. Only published and revealed
- * ratings count (Backend PRD 20.4), so a hidden or removed rating, or one still under blind
- * reveal, is in no figure.
- */
-@Injectable()
-export class UserStatsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly config: BusinessConfigService,
-  ) {}
-
-  /** Rebuild one user's row inside the caller's transaction (or on the plain client). */
-  async recompute(client: Executor, userId: string): Promise<void> {
+/** Shared rebuild for lifecycle handlers and offline demo seeds; never invent aggregate values. */
+export async function recomputeUserStats(client: Executor, userId: string): Promise<void> {
     await client.$executeRaw`
       INSERT INTO user_stats (
         user_id, completed_as_runner, completed_as_requester,
@@ -82,6 +69,22 @@ export class UserStatsService {
         payment_conduct_avg = EXCLUDED.payment_conduct_avg,
         updated_at = clock_timestamp()
     `;
+}
+
+/**
+ * Derived per-user aggregates (`user_stats`). Only published and revealed ratings count
+ * (Backend PRD 20.4); the rebuild is shared with offline tools and remains idempotent.
+ */
+@Injectable()
+export class UserStatsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: BusinessConfigService,
+  ) {}
+
+  /** Rebuild one user's row inside the caller's transaction (or on the plain client). */
+  async recompute(client: Executor, userId: string): Promise<void> {
+    await recomputeUserStats(client, userId);
   }
 
   async get(userId: string): Promise<UserStatsView> {

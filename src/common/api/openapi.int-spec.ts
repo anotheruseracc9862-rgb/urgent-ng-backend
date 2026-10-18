@@ -260,7 +260,7 @@ describe('OpenAPI document', () => {
         .post(`${API}/verification/attempts`)
         .set(...bearer(user.accessToken))
         .set('Idempotency-Key', 'contract-test-key-2')
-        .send({ nin: '12345670000', selfieMediaId: selfie })
+        .send({ nin: '12345670000', selfieMediaId: selfie, identity: { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-21' } })
         .expect(201);
       expectMatches(attempt.body.data, dataSchema('/api/v1/verification/attempts', 'post', '201'), 'verification attempt');
       const one = await get(`/verification/attempts/${attempt.body.data.id}`, user.accessToken).expect(200);

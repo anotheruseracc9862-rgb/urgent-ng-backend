@@ -1,10 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsISO8601, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { IsDefined, IsEnum, IsISO8601, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { GuarantorRelationship, IdDocumentType, VerificationFailureReason, VerificationStatus } from '@prisma/client';
 import { IsNigerianPhone, NormalisePhone } from '../auth/identifier.js';
 
-/** Who the runner says they are. Checked by a person on manual review; never used to match the NIN. */
+/** Who the runner says they are. Compared with the NIN or BVN registry record: a mismatch fails the attempt. */
 export class IdentityDetailsDto {
   @ApiProperty()
   @IsString()
@@ -23,17 +23,19 @@ export class IdentityDetailsDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'dateOfBirth must be YYYY-MM-DD' })
   dateOfBirth!: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MinLength(3)
   @MaxLength(200)
-  addressLine!: string;
+  addressLine?: string;
 
-  @ApiProperty({ description: 'Local government area.' })
+  @ApiPropertyOptional({ description: 'Local government area.' })
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(80)
-  lga!: string;
+  lga?: string;
 }
 
 export class IdDocumentDto {
@@ -66,21 +68,29 @@ export class GuarantorDto {
 
 export class StartVerificationDto {
   /**
-   * The 11-digit National Identification Number. Sent once, held in memory for the provider
-   * call, never stored, logged or returned.
+   * The 11-digit National Identification Number. Send this or `bvn`, not both. Sent once, held in
+   * memory for the provider call, never stored, logged or returned.
    */
+  @ApiPropertyOptional({ description: '11 digits. Send `nin` or `bvn`, not both.' })
+  @ValidateIf((o: StartVerificationDto) => o.bvn === undefined || o.nin !== undefined)
   @Matches(/^\d{11}$/, { message: 'nin must be exactly 11 digits' })
-  nin!: string;
+  nin?: string;
+
+  /** The 11-digit Bank Verification Number. Same handling as the NIN. */
+  @ApiPropertyOptional({ description: '11 digits. Send `nin` or `bvn`, not both.' })
+  @IsOptional()
+  @Matches(/^\d{11}$/, { message: 'bvn must be exactly 11 digits' })
+  bvn?: string;
 
   /** A READY media row with purpose VERIFICATION_INPUT that the caller owns. */
   @IsUUID()
   selfieMediaId!: string;
 
-  @ApiPropertyOptional({ type: IdentityDetailsDto })
-  @IsOptional()
+  @ApiProperty({ type: IdentityDetailsDto, description: 'Must match the name and date of birth on the NIN or BVN record.' })
+  @IsDefined()
   @ValidateNested()
   @Type(() => IdentityDetailsDto)
-  identity?: IdentityDetailsDto;
+  identity!: IdentityDetailsDto;
 
   @ApiPropertyOptional({ type: IdDocumentDto })
   @IsOptional()

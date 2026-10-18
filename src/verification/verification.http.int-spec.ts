@@ -6,7 +6,7 @@ import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, createAdmin, registerUser, seedAdminRoles, seedPolicies, signedInUser, verifyUser, loginMobile } from '../test/auth.helper.js';
 import { fakeStorage, readyMedia } from '../test/media.helper.js';
-import { NIN, fakeKyc, startVerification, verifiedUser, type TestUser } from '../test/verification.helper.js';
+import { IDENTITY, NIN, fakeKyc, startVerification, verifiedUser, type TestUser } from '../test/verification.helper.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { VerificationAdminService } from './verification-admin.service.js';
 import { VerificationExpiryService } from './verification-expiry.service.js';
@@ -259,7 +259,7 @@ describe('Verification (Phase 4)', () => {
       const user = await signedInUser(app);
       const selfie = await readyMedia(app, user.accessToken, 'VERIFICATION_INPUT');
 
-      await request(server()).post(`${API}/verification/attempts`).set(...bearer(user.accessToken)).send({ nin: NIN.ok, selfieMediaId: selfie }).expect(400);
+      await request(server()).post(`${API}/verification/attempts`).set(...bearer(user.accessToken)).send({ nin: NIN.ok, selfieMediaId: selfie, identity: IDENTITY }).expect(400);
     });
 
     it('a non-zero fee asks for payment first (the paid path arrives with billing)', async () => {
@@ -379,6 +379,111 @@ describe('Verification (Phase 4)', () => {
       const res = await startVerification(app, second, NIN.ok).then((r) => r);
 
       expect(res.body.data.status).toBe('VERIFIED');
+    });
+
+    it('the same person under a BVN on a second account fails with DUPLICATE_IDENTITY', async () => {
+      const first = await verifiedUser(app, NIN.ok);
+      const second = await signedInUser(app);
+
+      const res = await startVerification(app, second, NIN.other, { idType: 'BVN' }).then((r) => r);
+
+      expect(res.body.data).toMatchObject({ status: 'FAILED', failureReason: 'DUPLICATE_IDENTITY' });
+      const row = await attemptRow(res.body.data.id);
+      expect(row).toMatchObject({ countsAgainstAllowance: true, idType: 'BVN', identityRefHmac: null, personRefHmac: null });
+      expect(await prisma.verificationAttempt.count({ where: { userId: first.userId, status: 'VERIFIED' } })).toBe(1);
+    });
+
+    it('another person under a BVN is not a duplicate', async () => {
+      await verifiedUser(app, NIN.ok);
+      const second = await signedInUser(app);
+
+      const res = await startVerification(app, second, NIN.wrongName, {
+        idType: 'BVN',
+        identity: { firstName: 'Musa', lastName: 'Ibrahim', dateOfBirth: '1994-03-21' },
+      }).then((r) => r);
+
+      expect(res.body.data.status).toBe('VERIFIED');
+    });
+  });
+
+  describe('NIN or BVN, and the name and date of birth', () => {
+    it('verifies with a BVN: VERIFIED, id type BVN, masked as bvnLast4, the number never stored', async () => {
+      const user = await signedInUser(app);
+
+      const res = await startVerification(app, user, NIN.ok, { idType: 'BVN' }).then((r) => r);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toMatchObject({ status: 'VERIFIED', failureReason: null });
+      const row = await attemptRow(res.body.data.id);
+      expect(row).toMatchObject({ idType: 'BVN', maskedAttributes: { bvnLast4: '8901' } });
+      expect(row.identityRefHmac).toMatch(/^[0-9a-f]{64}$/);
+      expect(row.personRefHmac).toMatch(/^[0-9a-f]{64}$/);
+      expect(fakeKyc(app).getCalls('verifyBvnWithSelfie')).toHaveLength(1);
+      expect(fakeKyc(app).getCalls('verifyNinWithSelfie')).toHaveLength(0);
+      expect(JSON.stringify(fakeKyc(app).getCalls())).not.toContain(NIN.ok);
+    });
+
+    it.each([
+      ['a name that is not on the record', NIN.ok, { firstName: 'Musa', lastName: 'Ibrahim', dateOfBirth: '1994-03-21' }],
+      ['a date of birth that is not on the record', NIN.ok, { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-22' }],
+      ['a record that holds another name', NIN.wrongName, undefined],
+      ['a record that holds another date of birth', NIN.wrongBirthDate, undefined],
+    ])('%s: FAILED / IDENTITY_MISMATCH, counts', async (_name, number, identity) => {
+      const user = await signedInUser(app);
+
+      const res = await startVerification(app, user, number, { identity }).then((r) => r);
+
+      expect(res.body.data).toMatchObject({ status: 'FAILED', failureReason: 'IDENTITY_MISMATCH' });
+      const row = await attemptRow(res.body.data.id);
+      expect(row).toMatchObject({ countsAgainstAllowance: true, identityRefHmac: null, personRefHmac: null });
+    });
+
+    it('a matching face with an unreadable record is PROVIDER_ERROR, never VERIFIED, and does not count', async () => {
+      const user = await signedInUser(app);
+
+      const res = await startVerification(app, user, NIN.noRecord).then((r) => r);
+
+      expect(res.body.data).toMatchObject({ status: 'FAILED', failureReason: 'PROVIDER_ERROR' });
+      expect((await attemptRow(res.body.data.id)).countsAgainstAllowance).toBe(false);
+    });
+
+    it('accepts a typo-level difference and a different name order', async () => {
+      const user = await signedInUser(app);
+
+      const res = await startVerification(app, user, NIN.ok, {
+        identity: { firstName: 'Okafar', lastName: 'Ada Chinwe', dateOfBirth: '1994-03-21' },
+      }).then((r) => r);
+
+      expect(res.body.data.status).toBe('VERIFIED');
+    });
+
+    it('refuses a request with both a NIN and a BVN, with neither, or with a short BVN', async () => {
+      const user = await signedInUser(app);
+      const selfie = await readyMedia(app, user.accessToken, 'VERIFICATION_INPUT');
+      const send = (body: Record<string, unknown>) =>
+        request(server())
+          .post(`${API}/verification/attempts`)
+          .set(...bearer(user.accessToken))
+          .set('Idempotency-Key', randomUUID())
+          .send({ selfieMediaId: selfie, identity: IDENTITY, ...body });
+
+      await send({ nin: NIN.ok, bvn: NIN.other }).expect(400);
+      await send({}).expect(400);
+      await send({ bvn: '123' }).expect(400);
+      expect(await prisma.verificationAttempt.count()).toBe(0);
+    });
+
+    it('refuses a request without the name and date of birth', async () => {
+      const user = await signedInUser(app);
+      const selfie = await readyMedia(app, user.accessToken, 'VERIFICATION_INPUT');
+
+      await request(server())
+        .post(`${API}/verification/attempts`)
+        .set(...bearer(user.accessToken))
+        .set('Idempotency-Key', randomUUID())
+        .send({ nin: NIN.ok, selfieMediaId: selfie })
+        .expect(400);
+      expect(await prisma.verificationAttempt.count()).toBe(0);
     });
   });
 

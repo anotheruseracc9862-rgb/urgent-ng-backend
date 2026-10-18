@@ -1146,6 +1146,8 @@ model VerificationAttempt {
   providerStatus         String?                    @map("provider_status")
   attemptNumber          Int                        @map("attempt_number")
   identityRefHmac        String?                    @map("identity_ref_hmac")
+  idType                 String                     @default("NIN") @map("id_type")
+  personRefHmac          String?                    @map("person_ref_hmac")
   maskedAttributes       Json?                      @map("masked_attributes")
   confidence             Decimal?                   @db.Decimal(5, 2)
   selfieMediaId          String?                    @map("selfie_media_id") @db.Uuid

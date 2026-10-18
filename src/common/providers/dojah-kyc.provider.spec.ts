@@ -69,14 +69,93 @@ describe('DojahKycProvider (contract)', () => {
     expect(seen[0].body).toEqual({ nin: NIN, selfie_image: SELFIE, threshold: 90 });
   });
 
-  it('match = true: VERIFIED with the confidence and masked attributes only', async () => {
-    handler = () => ({ status: 200, body: { entity: { first_name: 'ADA', nin: NIN, selfie_verification: { match: true, confidence_value: 98.2 } } } });
+  it('match = true: VERIFIED with the confidence, masked attributes and the registry name and date of birth', async () => {
+    handler = () => ({
+      status: 200,
+      body: {
+        entity: {
+          first_name: 'ADA',
+          last_name: 'OKAFOR',
+          date_of_birth: '15-Apr-1985',
+          phone_number: '08012345678',
+          nin: NIN,
+          selfie_verification: { match: true, confidence_value: 98.2 },
+        },
+      },
+    });
 
     const result = await verify();
 
-    expect(result).toMatchObject({ outcome: 'VERIFIED', confidence: 98.2, countsAgainstAllowance: true, maskedAttributes: { ninLast4: '8901' } });
+    expect(result).toMatchObject({
+      outcome: 'VERIFIED',
+      confidence: 98.2,
+      countsAgainstAllowance: true,
+      maskedAttributes: { ninLast4: '8901' },
+      identity: { firstName: 'ADA', lastName: 'OKAFOR', dateOfBirth: '1985-04-15' },
+    });
+    // Nothing else from the record leaks: not the number, not the phone.
     expect(JSON.stringify(result)).not.toContain(NIN);
-    expect(JSON.stringify(result)).not.toContain('ADA');
+    expect(JSON.stringify(result)).not.toContain('08012345678');
+  });
+
+  it('match = true with the firstname/surname/birthdate shape reads the same record', async () => {
+    handler = () => ({
+      status: 200,
+      body: { entity: { firstname: 'ADA', surname: 'OKAFOR', birthdate: '10-06-1983', selfie_verification: { match: true, confidence_value: 95 } } },
+    });
+
+    expect(await verify()).toMatchObject({ outcome: 'VERIFIED', identity: { firstName: 'ADA', lastName: 'OKAFOR', dateOfBirth: '1983-06-10' } });
+  });
+
+  it('match = true but no readable name or date: VERIFIED without identity (the service refuses it)', async () => {
+    handler = () => ({ status: 200, body: match(true) });
+
+    const result = await verify();
+
+    expect(result.outcome).toBe('VERIFIED');
+    expect(result.identity).toBeUndefined();
+  });
+
+  describe('BVN', () => {
+    const BVN = '22222222222';
+    const verifyBvn = (p = provider()) => p.verifyBvnWithSelfie({ bvn: BVN, selfieImageBase64: SELFIE, threshold: 90 });
+
+    it('posts to the BVN path with the bvn field and masks as bvnLast4', async () => {
+      handler = () => ({
+        status: 200,
+        body: {
+          entity: {
+            bvn: '2*****41123',
+            first_name: 'JOHN',
+            middle_name: 'DOE',
+            last_name: 'MUSA',
+            date_of_birth: '15-Apr-1985',
+            selfie_verification: { match: true, confidence_value: 99.99 },
+          },
+        },
+      });
+
+      const result = await verifyBvn();
+
+      expect(seen[0].url).toBe('/api/v1/kyc/bvn/verify');
+      expect(seen[0].headers.authorization).toBe('secret-key-xyz');
+      expect(seen[0].body).toEqual({ bvn: BVN, selfie_image: SELFIE, threshold: 90 });
+      expect(result).toMatchObject({
+        outcome: 'VERIFIED',
+        maskedAttributes: { bvnLast4: '2222' },
+        identity: { firstName: 'JOHN', middleName: 'DOE', lastName: 'MUSA', dateOfBirth: '1985-04-15' },
+      });
+      expect(JSON.stringify(result)).not.toContain(BVN);
+    });
+
+    it('maps the same failures as the NIN call', async () => {
+      handler = () => ({ status: 200, body: match(false, 30) });
+      expect(await verifyBvn()).toMatchObject({ failureReason: 'SELFIE_MISMATCH', countsAgainstAllowance: true });
+      handler = () => ({ status: 404 });
+      expect(await verifyBvn()).toMatchObject({ failureReason: 'IDENTITY_MISMATCH', countsAgainstAllowance: true });
+      handler = () => ({ status: 402 });
+      expect(await verifyBvn()).toMatchObject({ failureReason: 'PROVIDER_ERROR', countsAgainstAllowance: false });
+    });
   });
 
   it('match = false: FAILED / SELFIE_MISMATCH, counts', async () => {
@@ -163,7 +242,7 @@ describe('DojahKycProvider (contract)', () => {
   });
 
   describe('same normalised shape as the fake', () => {
-    const allowed = new Set(['outcome', 'failureReason', 'confidence', 'countsAgainstAllowance', 'providerRequestId', 'maskedAttributes']);
+    const allowed = new Set(['outcome', 'failureReason', 'confidence', 'countsAgainstAllowance', 'providerRequestId', 'maskedAttributes', 'identity']);
     const assertShape = (result: KycVerifyResult) => {
       expect(Object.keys(result).filter((key) => !allowed.has(key))).toEqual([]);
       expect(['VERIFIED', 'FAILED']).toContain(result.outcome);

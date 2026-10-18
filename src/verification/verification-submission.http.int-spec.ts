@@ -32,8 +32,8 @@ describe('Verification submission details', () => {
   });
 
   const identity = {
-    firstName: 'Tunde',
-    lastName: 'Okon',
+    firstName: 'Ada',
+    lastName: 'Okafor',
     dateOfBirth: '1994-03-21',
     addressLine: '12 Adeola Odeku Street',
     lga: 'Eti-Osa',
@@ -47,7 +47,7 @@ describe('Verification submission details', () => {
         .post(`${API}/verification/attempts`)
         .set(...bearer(user.accessToken))
         .set('Idempotency-Key', randomUUID())
-        .send({ nin: NIN.ok, selfieMediaId, ...extra });
+        .send({ nin: NIN.ok, selfieMediaId, identity, ...extra });
     };
     return {
       expect: async (status: number) => {
@@ -72,8 +72,8 @@ describe('Verification submission details', () => {
 
     const stored = await app.get(VerificationService).getSubmission(res.body.data.id);
     expect(stored).toMatchObject({
-      firstName: 'Tunde',
-      lastName: 'Okon',
+      firstName: 'Ada',
+      lastName: 'Okafor',
       dateOfBirth: '1994-03-21',
       addressLine: '12 Adeola Odeku Street',
       lga: 'Eti-Osa',
@@ -85,13 +85,21 @@ describe('Verification submission details', () => {
     });
   });
 
-  it('still works with the NIN and the selfie alone', async () => {
+  it('works with only the name and date of birth: no address, ID document or guarantor', async () => {
     const user = await signedInUser(app);
 
-    const res = await submit(user, {}).expect(201);
+    const res = await submit(user, { identity: { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-21' } }).expect(201);
 
     expect(res.body.data.status).toBe('VERIFIED');
-    expect(await app.get(VerificationService).getSubmission(res.body.data.id)).toBeNull();
+    expect(await app.get(VerificationService).getSubmission(res.body.data.id)).toMatchObject({
+      firstName: 'Ada',
+      lastName: 'Okafor',
+      dateOfBirth: '1994-03-21',
+      addressLine: null,
+      lga: null,
+      idDocumentType: null,
+      guarantorName: null,
+    });
   });
 
   it('does not let the details or the guarantor decide the result', async () => {
@@ -136,7 +144,7 @@ describe('Verification submission details', () => {
       .post(`${API}/verification/attempts`)
       .set(...bearer(user.accessToken))
       .set('Idempotency-Key', randomUUID())
-      .send({ nin: NIN.ok, selfieMediaId: selfie, idDocument: { type: 'NIN_SLIP', mediaId: selfie } })
+      .send({ nin: NIN.ok, selfieMediaId: selfie, identity, idDocument: { type: 'NIN_SLIP', mediaId: selfie } })
       .expect(400);
     const stolen = await submit(user, { idDocument: { type: 'NIN_SLIP', mediaId: foreign } });
     expect([400, 404]).toContain(stolen.status);

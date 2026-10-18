@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { readRegistryIdentity } from './dojah-identity.js';
 import type {
   IKycProvider,
+  KycBvnVerifyRequest,
   KycFailureReason,
+  KycIdType,
   KycVerifyRequest,
   KycVerifyResult,
 } from './kyc.provider.js';
@@ -17,18 +20,33 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_DELAYS_MS = [500, 1500];
 
 interface DojahSuccessBody {
-  entity?: { selfie_verification?: { match?: boolean; confidence_value?: number } };
+  entity?: Record<string, unknown> & { selfie_verification?: { match?: boolean; confidence_value?: number } };
 }
 
+interface Lookup {
+  idType: KycIdType;
+  idNumber: string;
+  selfieImageBase64: string;
+  threshold?: number;
+  timeoutMs?: number;
+}
+
+const ENDPOINT: Record<KycIdType, { path: string; field: string; maskKey: string }> = {
+  NIN: { path: '/api/v1/kyc/nin/verify', field: 'nin', maskKey: 'ninLast4' },
+  BVN: { path: '/api/v1/kyc/bvn/verify', field: 'bvn', maskKey: 'bvnLast4' },
+};
+
 /**
- * Real KYC provider: Dojah NIN with selfie (Backend PRD 10.3).
+ * Real KYC provider: Dojah NIN or BVN with selfie (Backend PRD 10.3).
  *
- *   POST {baseUrl}/api/v1/kyc/nin/verify
+ *   POST {baseUrl}/api/v1/kyc/nin/verify   or   /api/v1/kyc/bvn/verify
  *   Authorization: <secret key, sent as is, no "Bearer">    AppId: <app id>
- *   { nin, selfie_image (base64, no data: prefix), threshold }
+ *   { nin | bvn, selfie_image (base64, no data: prefix), threshold }
  *
- * The NIN and the selfie exist only in memory here: they are never logged and never put in
- * a returned value. Everything Dojah returns except the match result is discarded.
+ * The id number and the selfie exist only in memory here: they are never logged and never put in
+ * a returned value. On a selfie match the registry name and date of birth are returned in
+ * `identity` so the verification service can compare them with what the runner typed. Everything
+ * else Dojah returns is discarded.
  */
 @Injectable()
 export class DojahKycProvider implements IKycProvider {
@@ -42,14 +60,24 @@ export class DojahKycProvider implements IKycProvider {
     } = {},
   ) {}
 
-  async verifyNinWithSelfie(request: KycVerifyRequest): Promise<KycVerifyResult> {
-    const maskedAttributes = { ninLast4: request.nin.slice(-4) };
+  verifyNinWithSelfie(request: KycVerifyRequest): Promise<KycVerifyResult> {
+    const { nin, ...rest } = request;
+    return this.verify({ idType: 'NIN', idNumber: nin, ...rest });
+  }
+
+  verifyBvnWithSelfie(request: KycBvnVerifyRequest): Promise<KycVerifyResult> {
+    const { bvn, ...rest } = request;
+    return this.verify({ idType: 'BVN', idNumber: bvn, ...rest });
+  }
+
+  private async verify(lookup: Lookup): Promise<KycVerifyResult> {
+    const maskedAttributes = { [ENDPOINT[lookup.idType].maskKey]: lookup.idNumber.slice(-4) };
     const delays = this.options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
 
     for (let attempt = 0; ; attempt += 1) {
       let response: Response;
       try {
-        response = await this.call(request);
+        response = await this.call(lookup);
       } catch (error) {
         const name = (error as { name?: string }).name;
         if (name === 'TimeoutError' || name === 'AbortError') {
@@ -66,9 +94,10 @@ export class DojahKycProvider implements IKycProvider {
     }
   }
 
-  private call(request: KycVerifyRequest): Promise<Response> {
+  private call(lookup: Lookup): Promise<Response> {
     const doFetch = this.options.fetchImpl ?? fetch;
-    return doFetch(`${this.settings.baseUrl.replace(/\/+$/, '')}/api/v1/kyc/nin/verify`, {
+    const endpoint = ENDPOINT[lookup.idType];
+    return doFetch(`${this.settings.baseUrl.replace(/\/+$/, '')}${endpoint.path}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -76,11 +105,11 @@ export class DojahKycProvider implements IKycProvider {
         AppId: this.settings.appId,
       },
       body: JSON.stringify({
-        nin: request.nin,
-        selfie_image: request.selfieImageBase64,
-        threshold: request.threshold,
+        [endpoint.field]: lookup.idNumber,
+        selfie_image: lookup.selfieImageBase64,
+        threshold: lookup.threshold,
       }),
-      signal: AbortSignal.timeout(request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(lookup.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
   }
 
@@ -96,9 +125,15 @@ export class DojahKycProvider implements IKycProvider {
         return this.failed('PROVIDER_ERROR', false);
       }
       const confidence = typeof selfie.confidence_value === 'number' ? selfie.confidence_value : undefined;
-      return selfie.match
-        ? { outcome: 'VERIFIED', confidence, countsAgainstAllowance: true, ...base }
-        : { outcome: 'FAILED', failureReason: 'SELFIE_MISMATCH', confidence, countsAgainstAllowance: true, ...base };
+      if (!selfie.match) {
+        return { outcome: 'FAILED', failureReason: 'SELFIE_MISMATCH', confidence, countsAgainstAllowance: true, ...base };
+      }
+      const identity = readRegistryIdentity(body.entity);
+      if (!identity) {
+        // Logged without the values. The service refuses to verify without a record to compare.
+        this.logger.warn('Dojah matched the selfie but returned no readable name and date of birth');
+      }
+      return { outcome: 'VERIFIED', confidence, countsAgainstAllowance: true, ...(identity ? { identity } : {}), ...base };
     }
 
     switch (response.status) {

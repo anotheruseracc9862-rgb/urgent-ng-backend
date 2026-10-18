@@ -45,6 +45,7 @@ Three entry points share one codebase (Backend PRD section 5.2):
 | `npm run start:dev` / `start:prod` | `src/main.ts` | HTTP API |
 | `npm run start:worker` | `src/workers/main.ts` | BullMQ processors and background jobs |
 | `npm run start:scheduler` | `src/scheduler/main.ts` | Cron and timer-sweeper jobs (never run in the API process) |
+| `npm run start:all` | all three above | Builds, then runs API, worker and scheduler together in one terminal. For local use and small single-host setups. |
 
 ## Scripts
 
@@ -59,6 +60,58 @@ Three entry points share one codebase (Backend PRD section 5.2):
 - `npm run admin:create -- --email you@urgent.ng --name "Your Name"` creates the first super-admin (run the seed first). The password comes from `ADMIN_PASSWORD` (12+ characters) or is generated and printed once. The admin sets up an authenticator app at the first login.
 - `npm run db:reset` drops and recreates the **development** database from the migrations. It is destructive.
 - `npm run openapi` writes `openapi.json` with the real `/api/v1` paths.
+
+## Local demo accounts and journeys
+
+After applying migrations, run from `backend/`:
+
+```bash
+npm run seed:demo           # everything below, including the baseline seed
+npm run seed:demo:accounts  # just accounts and prerequisites
+npm run seed:demo:errands   # accounts + errands, offers and assignments
+npm run seed:demo:activity  # all stages, including reviews, chat and billing
+```
+
+Sign in with `runner01@demo.urgent.test` or `requester01@demo.urgent.test`,
+password **`UrgentDemo!2026`**. Each group has accounts `01` through `10`:
+
+| Accounts in each group | Operating area |
+|---|---|
+| 01–06 | Yaba, Lagos (01–04 state-wide, runner05 Lagos Mainland LGA, runner06 10 km radius) |
+| 07–08 | Wuse, FCT |
+| 09–10 | Bodija, Oyo |
+
+All 20 have verified email, phone and synthetic local identity checks. Runners
+are available and have their operating areas configured. The script prints
+each account's name, email and national-format phone. Set `DEMO_SEED_PASSWORD`
+(12+ characters) before the first run to choose a different initial password;
+custom passwords are not printed.
+
+The dataset contains 110 errands: 40 completed, 20 open (ASAP and scheduled),
+10 drafts, 10 awaiting runner acceptance, 10 at different execution stages,
+10 cancelled and 10 expired. It includes 100 offers, 60 assignments, payment
+agreements, status histories, execution events and pickup/delivery checkpoints.
+There are 60 bilateral reviews with derived profile statistics, 100 chats with
+200 messages, saved errands and 80 in-app notifications. Each account has four
+completed jobs, including one left unreviewed so you can submit a fresh review.
+Try `runner06` to send a new offer on `requester01`'s open errand; `runner01`
+already has an offer on it. Use separate browser profiles for both sides.
+
+Billing examples include active Pro (`runner01`), expired Pro (`runner02`) and
+an active boost (`requester01`). These are explicitly synthetic `LOCAL_DEMO`
+payments: no money is charged, no payment authorization is stored and automatic
+renewal is disabled. No real identity verification, email/SMS/push delivery,
+media upload or vendor request is performed. In-app notifications are already
+delivered, and no outbox jobs are queued by the seed.
+
+The scripts accept only local development/test databases and never reset data.
+Stable IDs prevent duplicates; existing accounts, passwords, profile edits,
+errand progress, read messages/notifications and reviews are preserved on rerun.
+An identifier collision with an unrelated or renamed account aborts the demo
+transaction. Time-bound fixtures deliberately age normally: acceptance windows,
+open errands, boosts and subscriptions are **not refreshed** on rerun. Create
+new errands through the app when those expire. Never use these public demo
+credentials or synthetic verification/payment records in a deployed database.
 
 ## Testing safely
 

@@ -7,7 +7,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { OutboxService } from '../queue/outbox.service.js';
 import { MediaService } from '../media/media.service.js';
 import { PricingService } from '../config/pricing.service.js';
-import { KYC_PROVIDER, type IKycProvider, type KycVerifyResult } from '../common/providers/kyc.provider.js';
+import { KYC_PROVIDER, type IKycProvider, type KycIdType, type KycVerifyResult } from '../common/providers/kyc.provider.js';
 import { STORAGE_PROVIDER, type IStorageProvider } from '../common/providers/storage.provider.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
 import { hmacSign } from '../common/utils/crypto.helper.js';
@@ -24,13 +24,17 @@ import type { RequestContext } from '../auth/auth-audit.service.js';
 import { toAttemptView, VerificationStatusService, type AttemptView } from './verification-status.service.js';
 import { isIdentityConflict } from './unique-violation.js';
 import { displayStatus, type DisplayStatus } from './verification.state.js';
+import { identityMatches, personKey } from './identity-match.js';
 import type { GuarantorDto, IdDocumentDto, IdentityDetailsDto, VerificationSubmissionDto } from './verification.dto.js';
 
 const MINIMUM_AGE_YEARS = 18;
 
-/** What the runner told us beside the NIN and the selfie, checked and ready to store. */
+/** The text hashed into `identity_ref_hmac`. NIN keeps its original `nin:` prefix so old hashes stay valid. */
+const idHashPrefix: Record<KycIdType, string> = { NIN: 'nin', BVN: 'bvn' };
+
+/** What the runner told us beside the NIN or BVN and the selfie, checked and ready to store. */
 interface SubmissionDetails {
-  identity?: IdentityDetailsDto;
+  identity: IdentityDetailsDto;
   idDocument?: { type: IdDocumentDto['type']; mediaId: string | null };
   guarantor?: GuarantorDto;
 }
@@ -59,10 +63,12 @@ interface Allowance {
 }
 
 /**
- * Runner identity verification (Backend PRD 10.2 to 10.4): NIN plus selfie plus a verified
- * phone. The NIN is held in memory for the provider call only: it is never stored, logged or
- * returned. What is kept: provider reference, result, failure reason, masked attributes and a
- * keyed hash of the identity (one verified account per identity).
+ * Runner identity verification (Backend PRD 10.2 to 10.4): NIN or BVN, plus selfie, plus a
+ * verified phone. The NIN or BVN is held in memory for the provider call only: it is never stored,
+ * logged or returned. The registry name and date of birth that come back are compared with what
+ * the runner typed and then dropped. What is kept: provider reference, result, failure reason,
+ * masked attributes and keyed hashes of the identity (one verified account per identity, also
+ * across NIN and BVN).
  */
 @Injectable()
 export class VerificationService {
@@ -135,9 +141,18 @@ export class VerificationService {
    */
   async startAttempt(
     userId: string,
-    input: { nin: string; selfieMediaId: string; identity?: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
+    input: { nin?: string; bvn?: string; selfieMediaId: string; identity: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
     ctx: RequestContext = {},
   ): Promise<AttemptView> {
+    if ((input.nin === undefined) === (input.bvn === undefined)) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: 'Send either a NIN or a BVN.',
+        details: { field: 'nin' },
+      });
+    }
+    const idType: KycIdType = input.nin === undefined ? 'BVN' : 'NIN';
+    const idNumber = (input.nin ?? input.bvn) as string;
+
     const user = await this.prisma.client.user.findUnique({
       where: { id: userId },
       select: { phoneVerifiedAt: true, phoneE164: true },
@@ -150,10 +165,10 @@ export class VerificationService {
     }
     const selfie = await this.media.requireReadyOwned(userId, input.selfieMediaId, 'VERIFICATION_INPUT');
     const details = await this.checkDetails(userId, user.phoneE164, selfie.id, input);
-    const attemptId = await this.open(userId, selfie.id, details);
+    const attemptId = await this.open(userId, selfie.id, idType, details);
 
-    const result = await this.callProvider(selfie.storageKey, input.nin);
-    return this.complete(attemptId, userId, result, input.nin, ctx);
+    const result = await this.callProvider(selfie.storageKey, idType, idNumber);
+    return this.complete(attemptId, userId, result, idType, idNumber, details.identity, ctx);
   }
 
   /**
@@ -235,27 +250,23 @@ export class VerificationService {
     };
   }
 
-  /** Validate the optional details. A date of birth under 18 or a guarantor who is the runner is refused. */
+  /** Validate the details. A date of birth under 18 or a guarantor who is the runner is refused. */
   private async checkDetails(
     userId: string,
     ownPhone: string | null,
     selfieMediaId: string,
-    input: { identity?: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
+    input: { identity: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
   ): Promise<SubmissionDetails> {
-    const details: SubmissionDetails = {};
-
-    if (input.identity) {
-      const born = new Date(`${input.identity.dateOfBirth}T00:00:00.000Z`);
-      const now = new Date();
-      const cutoff = new Date(Date.UTC(now.getUTCFullYear() - MINIMUM_AGE_YEARS, now.getUTCMonth(), now.getUTCDate()));
-      if (Number.isNaN(born.getTime()) || born.getTime() > cutoff.getTime()) {
-        throw DomainException.of(VALIDATION_ERROR, {
-          message: `You must be at least ${MINIMUM_AGE_YEARS} years old to run errands.`,
-          details: { field: 'identity.dateOfBirth' },
-        });
-      }
-      details.identity = input.identity;
+    const born = new Date(`${input.identity.dateOfBirth}T00:00:00.000Z`);
+    const now = new Date();
+    const cutoff = new Date(Date.UTC(now.getUTCFullYear() - MINIMUM_AGE_YEARS, now.getUTCMonth(), now.getUTCDate()));
+    if (Number.isNaN(born.getTime()) || born.getTime() > cutoff.getTime()) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: `You must be at least ${MINIMUM_AGE_YEARS} years old to run errands.`,
+        details: { field: 'identity.dateOfBirth' },
+      });
     }
+    const details: SubmissionDetails = { identity: input.identity };
 
     if (input.idDocument) {
       let mediaId: string | null = null;
@@ -285,7 +296,7 @@ export class VerificationService {
   }
 
   /** Create the PENDING row. One attempt in flight per user, enforced by a lock and by the database. */
-  private async open(userId: string, selfieMediaId: string, details: SubmissionDetails = {}): Promise<string> {
+  private async open(userId: string, selfieMediaId: string, idType: KycIdType, details: SubmissionDetails): Promise<string> {
     const fee = await this.verificationFee();
     const provider = this.appConfig.get<string>('providers.kyc') === 'real' ? 'dojah' : 'fake';
 
@@ -322,36 +333,34 @@ export class VerificationService {
       }
 
       const rows = await tx.$queryRaw<Array<{ id: string }>>`
-        INSERT INTO verification_attempts (user_id, provider, status, attempt_number, selfie_media_id, started_at, updated_at)
+        INSERT INTO verification_attempts (user_id, provider, status, attempt_number, id_type, selfie_media_id, started_at, updated_at)
         VALUES (${userId}::uuid, ${provider}, 'PENDING'::"VerificationStatus", ${state[0].attempts + 1},
-                ${selfieMediaId}::uuid, now(), now())
+                ${idType}, ${selfieMediaId}::uuid, now(), now())
         RETURNING id
       `;
       const attemptId = rows[0].id;
-      if (details.identity || details.idDocument || details.guarantor) {
-        await tx.verificationSubmission.create({
-          data: {
-            attemptId,
-            userId,
-            firstName: details.identity?.firstName.trim() ?? null,
-            lastName: details.identity?.lastName.trim() ?? null,
-            dateOfBirth: details.identity ? new Date(`${details.identity.dateOfBirth}T00:00:00.000Z`) : null,
-            addressLine: details.identity?.addressLine.trim() ?? null,
-            lga: details.identity?.lga.trim() ?? null,
-            idDocumentType: details.idDocument?.type ?? null,
-            idDocumentMediaId: details.idDocument?.mediaId ?? null,
-            guarantorName: details.guarantor?.fullName.trim() ?? null,
-            guarantorRelation: details.guarantor?.relationship ?? null,
-            guarantorPhone: details.guarantor?.phone ?? null,
-          },
-        });
-      }
+      await tx.verificationSubmission.create({
+        data: {
+          attemptId,
+          userId,
+          firstName: details.identity.firstName.trim(),
+          lastName: details.identity.lastName.trim(),
+          dateOfBirth: new Date(`${details.identity.dateOfBirth}T00:00:00.000Z`),
+          addressLine: details.identity.addressLine?.trim() ?? null,
+          lga: details.identity.lga?.trim() ?? null,
+          idDocumentType: details.idDocument?.type ?? null,
+          idDocumentMediaId: details.idDocument?.mediaId ?? null,
+          guarantorName: details.guarantor?.fullName.trim() ?? null,
+          guarantorRelation: details.guarantor?.relationship ?? null,
+          guarantorPhone: details.guarantor?.phone ?? null,
+        },
+      });
       return attemptId;
     });
   }
 
   /** Call the provider within the configured timeout. Never throws: any fault becomes PROVIDER_ERROR. */
-  private async callProvider(selfieKey: string, nin: string): Promise<KycVerifyResult> {
+  private async callProvider(selfieKey: string, idType: KycIdType, idNumber: string): Promise<KycVerifyResult> {
     const [threshold, timeoutSeconds] = await Promise.all([
       this.config.get('KYC_SELFIE_MATCH_THRESHOLD'),
       this.config.get('KYC_REQUEST_TIMEOUT_SECONDS'),
@@ -366,8 +375,11 @@ export class VerificationService {
           timeoutMs,
         );
       });
+      const selfieImageBase64 = selfie.toString('base64');
       return await Promise.race([
-        this.kyc.verifyNinWithSelfie({ nin, selfieImageBase64: selfie.toString('base64'), threshold, timeoutMs }),
+        idType === 'BVN'
+          ? this.kyc.verifyBvnWithSelfie({ bvn: idNumber, selfieImageBase64, threshold, timeoutMs })
+          : this.kyc.verifyNinWithSelfie({ nin: idNumber, selfieImageBase64, threshold, timeoutMs }),
         timeout,
       ]);
     } catch (error) {
@@ -384,29 +396,53 @@ export class VerificationService {
     attemptId: string,
     userId: string,
     result: KycVerifyResult,
-    nin: string,
+    idType: KycIdType,
+    idNumber: string,
+    typed: IdentityDetailsDto,
     ctx: RequestContext,
   ): Promise<AttemptView> {
     let outcome: KycVerifyResult = result;
     let identityHmac: string | null = null;
+    let personHmac: string | null = null;
 
     if (result.outcome === 'VERIFIED') {
-      // The NIN is hashed here and dropped; the hash alone identifies the person.
-      identityHmac = hmacSign(`nin:${nin}`, this.appConfig.getOrThrow<string>('security.hmacSecret'));
-      const taken = await this.prisma.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM verification_attempts
-        WHERE identity_ref_hmac = ${identityHmac} AND status = 'VERIFIED'::"VerificationStatus"
-          AND deleted_at IS NULL AND user_id <> ${userId}::uuid
-        LIMIT 1
-      `;
-      if (taken.length > 0) {
-        outcome = { outcome: 'FAILED', failureReason: 'DUPLICATE_IDENTITY', countsAgainstAllowance: true };
-        identityHmac = null;
+      const registry = result.identity;
+      if (!registry) {
+        // The face matched but there is no record to compare the typed details with. Do not verify.
+        this.logger.error(`ALERT: verification attempt ${attemptId}: provider returned no readable name and date of birth`);
+        outcome = { outcome: 'FAILED', failureReason: 'PROVIDER_ERROR', countsAgainstAllowance: false, providerRequestId: result.providerRequestId };
+      } else if (!identityMatches(typed, registry)) {
+        outcome = {
+          outcome: 'FAILED',
+          failureReason: 'IDENTITY_MISMATCH',
+          countsAgainstAllowance: true,
+          providerRequestId: result.providerRequestId,
+          maskedAttributes: result.maskedAttributes,
+        };
+      } else {
+        // The id number is hashed here and dropped; the hash alone identifies the person.
+        const secret = this.appConfig.getOrThrow<string>('security.hmacSecret');
+        identityHmac = hmacSign(`${idHashPrefix[idType]}:${idNumber}`, secret);
+        personHmac = hmacSign(personKey(registry), secret);
+        // The same person under the other id type (NIN here, BVN there) has a different id hash,
+        // so the person hash is compared too, but only across id types: two different people can
+        // share a name and a birthday.
+        const taken = await this.prisma.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM verification_attempts
+          WHERE status = 'VERIFIED'::"VerificationStatus" AND deleted_at IS NULL AND user_id <> ${userId}::uuid
+            AND (identity_ref_hmac = ${identityHmac} OR (person_ref_hmac = ${personHmac} AND id_type <> ${idType}))
+          LIMIT 1
+        `;
+        if (taken.length > 0) {
+          outcome = { outcome: 'FAILED', failureReason: 'DUPLICATE_IDENTITY', countsAgainstAllowance: true };
+          identityHmac = null;
+          personHmac = null;
+        }
       }
     }
 
     try {
-      await this.write(attemptId, userId, outcome, identityHmac, ctx);
+      await this.write(attemptId, userId, outcome, identityHmac, personHmac, ctx);
     } catch (error) {
       if (!isIdentityConflict(error)) {
         throw error;
@@ -416,6 +452,7 @@ export class VerificationService {
         attemptId,
         userId,
         { outcome: 'FAILED', failureReason: 'DUPLICATE_IDENTITY', countsAgainstAllowance: true },
+        null,
         null,
         ctx,
       );
@@ -430,6 +467,7 @@ export class VerificationService {
     userId: string,
     outcome: KycVerifyResult,
     identityHmac: string | null,
+    personHmac: string | null,
     ctx: RequestContext,
   ): Promise<void> {
     const validityDays = await this.config.get('VERIFICATION_VALIDITY_DAYS');
@@ -446,6 +484,7 @@ export class VerificationService {
             provider_status = ${verified ? 'match' : (reason as string)},
             provider_request_id = ${outcome.providerRequestId ?? null},
             identity_ref_hmac = ${identityHmac},
+            person_ref_hmac = ${personHmac},
             masked_attributes = ${masked}::jsonb,
             confidence = ${outcome.confidence ?? null}::numeric,
             counts_against_allowance = ${outcome.countsAgainstAllowance},

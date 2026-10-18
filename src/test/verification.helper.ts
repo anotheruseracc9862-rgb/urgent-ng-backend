@@ -20,21 +20,30 @@ export const NIN = {
   notFound: '12345671111',
   timeout: '12345678888',
   providerError: '12345679999',
+  /** Verified by the face, but the registry holds another person's name. */
+  wrongName: '12345672222',
+  /** Verified by the face, but the registry holds another date of birth. */
+  wrongBirthDate: '12345673333',
+  /** Verified by the face, but the registry record cannot be read. */
+  noRecord: '12345674444',
 };
 
-/** POST /verification/attempts with a fresh READY selfie (or the one given). */
+/** The name and date of birth the fake provider returns for a number (see FAKE_REGISTRY_IDENTITY). */
+export const IDENTITY = { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-21' };
+
+/** POST /verification/attempts with a fresh READY selfie (or the one given). Sends a NIN, or a BVN with `idType: 'BVN'`. */
 export async function startVerification(
   app: INestApplication,
   user: TestUser,
-  nin: string,
-  options: { selfieMediaId?: string; idempotencyKey?: string } = {},
+  idNumber: string,
+  options: { selfieMediaId?: string; idempotencyKey?: string; idType?: 'NIN' | 'BVN'; identity?: Record<string, unknown> } = {},
 ) {
   const selfieMediaId = options.selfieMediaId ?? (await readyMedia(app, user.accessToken, 'VERIFICATION_INPUT'));
   return request(app.getHttpServer())
     .post(`${API}/verification/attempts`)
     .set(...bearer(user.accessToken))
     .set('Idempotency-Key', options.idempotencyKey ?? randomUUID())
-    .send({ nin, selfieMediaId });
+    .send({ [options.idType === 'BVN' ? 'bvn' : 'nin']: idNumber, selfieMediaId, identity: options.identity ?? IDENTITY });
 }
 
 /** A user whose verification succeeded. */
