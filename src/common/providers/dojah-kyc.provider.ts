@@ -138,13 +138,23 @@ export class DojahKycProvider implements IKycProvider {
 
     switch (response.status) {
       case 404:
-        return { outcome: 'FAILED', failureReason: 'IDENTITY_MISMATCH', countsAgainstAllowance: true, ...base };
+        return { outcome: 'FAILED', failureReason: 'IDENTITY_MISMATCH', failureDetail: 'ID_NOT_FOUND', countsAgainstAllowance: true, ...base };
       case 400: {
         const message = await this.errorText(response);
+        // Dojah answers 400 "BVN Not Found" for a BVN it does not know (a NIN gets a 404).
+        if (/not found|wrong (nin|bvn)/i.test(message)) {
+          return { outcome: 'FAILED', failureReason: 'IDENTITY_MISMATCH', failureDetail: 'ID_NOT_FOUND', countsAgainstAllowance: true, ...base };
+        }
         const reason: KycFailureReason = /image|selfie|photo|base64/i.test(message)
           ? 'INSUFFICIENT_DATA'
           : 'DOCUMENT_INVALID';
-        return { outcome: 'FAILED', failureReason: reason, countsAgainstAllowance: true, ...base };
+        return {
+          outcome: 'FAILED',
+          failureReason: reason,
+          failureDetail: reason === 'DOCUMENT_INVALID' ? ('ID_INVALID' as const) : ('SELFIE_UNUSABLE' as const),
+          countsAgainstAllowance: true,
+          ...base,
+        };
       }
       case 401:
       case 402:

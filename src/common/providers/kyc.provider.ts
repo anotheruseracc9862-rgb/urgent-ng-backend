@@ -16,6 +16,13 @@ export type KycFailureReason =
   /** Set by the verification service when the identity is already verified on another account. */
   | 'DUPLICATE_IDENTITY';
 
+/**
+ * Which part of a FAILED result went wrong, when the reason alone is too broad. Safe to show the
+ * runner: it says what to re-check, never what the registry holds.
+ */
+export const KYC_FAILURE_DETAILS = ['ID_NOT_FOUND', 'ID_INVALID', 'SELFIE_UNUSABLE', 'NAME_MISMATCH', 'DOB_MISMATCH', 'NAME_AND_DOB_MISMATCH'] as const;
+export type KycFailureDetail = (typeof KYC_FAILURE_DETAILS)[number];
+
 export type KycIdType = 'NIN' | 'BVN';
 
 interface KycVerifyBase {
@@ -52,6 +59,7 @@ export interface KycRegistryIdentity {
 export interface KycVerifyResult {
   outcome: 'VERIFIED' | 'FAILED';
   failureReason?: KycFailureReason;
+  failureDetail?: KycFailureDetail;
   /** Selfie match confidence, 0 to 100, when the provider returned one. */
   confidence?: number;
   /** False for provider-caused failures: the runner keeps the attempt. */

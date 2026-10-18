@@ -24,7 +24,7 @@ import type { RequestContext } from '../auth/auth-audit.service.js';
 import { toAttemptView, VerificationStatusService, type AttemptView } from './verification-status.service.js';
 import { isIdentityConflict } from './unique-violation.js';
 import { displayStatus, type DisplayStatus } from './verification.state.js';
-import { identityMatches, personKey } from './identity-match.js';
+import { identityMismatch, personKey, sameFullName } from './identity-match.js';
 import type { GuarantorDto, IdDocumentDto, IdentityDetailsDto, VerificationSubmissionDto } from './verification.dto.js';
 
 const MINIMUM_AGE_YEARS = 18;
@@ -155,7 +155,7 @@ export class VerificationService {
 
     const user = await this.prisma.client.user.findUnique({
       where: { id: userId },
-      select: { phoneVerifiedAt: true, phoneE164: true },
+      select: { phoneVerifiedAt: true, phoneE164: true, firstName: true, lastName: true },
     });
     if (!user?.phoneVerifiedAt) {
       throw DomainException.of(FORBIDDEN, {
@@ -164,7 +164,7 @@ export class VerificationService {
       });
     }
     const selfie = await this.media.requireReadyOwned(userId, input.selfieMediaId, 'VERIFICATION_INPUT');
-    const details = await this.checkDetails(userId, user.phoneE164, selfie.id, input);
+    const details = await this.checkDetails(userId, user.phoneE164, `${user.firstName} ${user.lastName}`, selfie.id, input);
     const attemptId = await this.open(userId, selfie.id, idType, details);
 
     const result = await this.callProvider(selfie.storageKey, idType, idNumber);
@@ -254,6 +254,7 @@ export class VerificationService {
   private async checkDetails(
     userId: string,
     ownPhone: string | null,
+    accountName: string,
     selfieMediaId: string,
     input: { identity: IdentityDetailsDto; idDocument?: IdDocumentDto; guarantor?: GuarantorDto },
   ): Promise<SubmissionDetails> {
@@ -288,6 +289,13 @@ export class VerificationService {
         throw DomainException.of(VALIDATION_ERROR, {
           message: 'The guarantor needs a phone number of their own.',
           details: { field: 'guarantor.phone' },
+        });
+      }
+      const typedName = `${input.identity.firstName} ${input.identity.lastName}`;
+      if (sameFullName(input.guarantor.fullName, typedName) || sameFullName(input.guarantor.fullName, accountName)) {
+        throw DomainException.of(VALIDATION_ERROR, {
+          message: 'The guarantor must be someone other than you.',
+          details: { field: 'guarantor.fullName' },
         });
       }
       details.guarantor = input.guarantor;
@@ -411,10 +419,11 @@ export class VerificationService {
         // The face matched but there is no record to compare the typed details with. Do not verify.
         this.logger.error(`ALERT: verification attempt ${attemptId}: provider returned no readable name and date of birth`);
         outcome = { outcome: 'FAILED', failureReason: 'PROVIDER_ERROR', countsAgainstAllowance: false, providerRequestId: result.providerRequestId };
-      } else if (!identityMatches(typed, registry)) {
+      } else if (identityMismatch(typed, registry)) {
         outcome = {
           outcome: 'FAILED',
           failureReason: 'IDENTITY_MISMATCH',
+          failureDetail: identityMismatch(typed, registry) ?? undefined,
           countsAgainstAllowance: true,
           providerRequestId: result.providerRequestId,
           maskedAttributes: result.maskedAttributes,
@@ -481,7 +490,7 @@ export class VerificationService {
         UPDATE verification_attempts
         SET status = ${status}::"VerificationStatus",
             failure_reason = ${reason}::"VerificationFailureReason",
-            provider_status = ${verified ? 'match' : (reason as string)},
+            provider_status = ${verified ? 'match' : (outcome.failureDetail ?? (reason as string))},
             provider_request_id = ${outcome.providerRequestId ?? null},
             identity_ref_hmac = ${identityHmac},
             person_ref_hmac = ${personHmac},
@@ -514,7 +523,11 @@ export class VerificationService {
         reasonCode: reason ?? undefined,
         requestId: ctx.requestId,
         ip: ctx.ip,
-        metadata: { attemptNumber: rows[0].attempt_number, countsAgainstAllowance: outcome.countsAgainstAllowance },
+        metadata: {
+          attemptNumber: rows[0].attempt_number,
+          countsAgainstAllowance: outcome.countsAgainstAllowance,
+          ...(outcome.failureDetail ? { failureDetail: outcome.failureDetail } : {}),
+        },
       });
     });
 

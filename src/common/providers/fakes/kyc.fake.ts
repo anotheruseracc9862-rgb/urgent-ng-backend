@@ -77,6 +77,7 @@ export class FakeKycProvider extends BaseFake implements IKycProvider {
         return {
           outcome: 'FAILED',
           failureReason: 'IDENTITY_MISMATCH',
+          failureDetail: 'ID_NOT_FOUND',
           countsAgainstAllowance: true,
           providerRequestId,
           maskedAttributes,

@@ -164,18 +164,24 @@ describe('DojahKycProvider (contract)', () => {
     expect(await verify()).toMatchObject({ outcome: 'FAILED', failureReason: 'SELFIE_MISMATCH', confidence: 41, countsAgainstAllowance: true });
   });
 
-  it('404: FAILED / IDENTITY_MISMATCH, counts', async () => {
+  it('404: FAILED / IDENTITY_MISMATCH with detail ID_NOT_FOUND, counts', async () => {
     handler = () => ({ status: 404, body: { error: 'Record not found' } });
 
-    expect(await verify()).toMatchObject({ outcome: 'FAILED', failureReason: 'IDENTITY_MISMATCH', countsAgainstAllowance: true });
+    expect(await verify()).toMatchObject({ outcome: 'FAILED', failureReason: 'IDENTITY_MISMATCH', failureDetail: 'ID_NOT_FOUND', countsAgainstAllowance: true });
   });
 
   it('400 about the NIN: DOCUMENT_INVALID; 400 about the image: INSUFFICIENT_DATA; both count', async () => {
     handler = () => ({ status: 400, body: { error: 'Invalid NIN' } });
-    expect(await verify()).toMatchObject({ failureReason: 'DOCUMENT_INVALID', countsAgainstAllowance: true });
+    expect(await verify()).toMatchObject({ failureReason: 'DOCUMENT_INVALID', failureDetail: 'ID_INVALID', countsAgainstAllowance: true });
 
     handler = () => ({ status: 400, body: { error: 'selfie_image is not a valid base64 image' } });
-    expect(await verify()).toMatchObject({ failureReason: 'INSUFFICIENT_DATA', countsAgainstAllowance: true });
+    expect(await verify()).toMatchObject({ failureReason: 'INSUFFICIENT_DATA', failureDetail: 'SELFIE_UNUSABLE', countsAgainstAllowance: true });
+  });
+
+  it('400 "BVN Not Found": FAILED / IDENTITY_MISMATCH with detail ID_NOT_FOUND, counts', async () => {
+    handler = () => ({ status: 400, body: { error: 'BVN Not Found' } });
+
+    expect(await verify()).toMatchObject({ failureReason: 'IDENTITY_MISMATCH', failureDetail: 'ID_NOT_FOUND', countsAgainstAllowance: true });
   });
 
   it.each([401, 402])('%s: PROVIDER_ERROR, does not count', async (status) => {
@@ -242,7 +248,7 @@ describe('DojahKycProvider (contract)', () => {
   });
 
   describe('same normalised shape as the fake', () => {
-    const allowed = new Set(['outcome', 'failureReason', 'confidence', 'countsAgainstAllowance', 'providerRequestId', 'maskedAttributes', 'identity']);
+    const allowed = new Set(['outcome', 'failureReason', 'failureDetail', 'confidence', 'countsAgainstAllowance', 'providerRequestId', 'maskedAttributes', 'identity']);
     const assertShape = (result: KycVerifyResult) => {
       expect(Object.keys(result).filter((key) => !allowed.has(key))).toEqual([]);
       expect(['VERIFIED', 'FAILED']).toContain(result.outcome);

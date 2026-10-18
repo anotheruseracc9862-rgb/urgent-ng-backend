@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { identityMatches, namesMatch, nameTokens, personKey } from './identity-match.js';
+import { identityMatches, namesMatch, nameTokens, personKey, sameFullName } from './identity-match.js';
 
 const registry = { firstName: 'ADA', middleName: 'CHINWE', lastName: 'OKAFOR', dateOfBirth: '1994-03-21' };
 
@@ -47,5 +47,16 @@ describe('personKey', () => {
   });
   it('differs by date of birth', () => {
     expect(personKey(registry)).not.toBe(personKey({ ...registry, dateOfBirth: '1994-03-22' }));
+  });
+});
+
+describe('sameFullName', () => {
+  it('matches the same name in any order, case or with a middle name', () => {
+    expect(sameFullName('Ada Okafor', 'okafor ada')).toBe(true);
+    expect(sameFullName('Ada Okafor', 'Ada Chinwe Okafor')).toBe(true);
+  });
+  it('does not match different people or a single shared word', () => {
+    expect(sameFullName('Ngozi Okafor', 'Ada Okafor')).toBe(false);
+    expect(sameFullName('Ada', 'Ada Okafor')).toBe(false);
   });
 });

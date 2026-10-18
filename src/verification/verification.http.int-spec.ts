@@ -310,7 +310,7 @@ describe('Verification (Phase 4)', () => {
       const view = await get(`/verification/attempts/${res.body.data.id}`, user).expect(200);
 
       expect(Object.keys(view.body.data).sort()).toEqual(
-        ['attemptNumber', 'completedAt', 'displayStatus', 'expiresAt', 'failureReason', 'id', 'startedAt', 'status'].sort(),
+        ['attemptNumber', 'completedAt', 'displayStatus', 'expiresAt', 'failureDetail', 'failureReason', 'id', 'startedAt', 'status'].sort(),
       );
     });
   });
@@ -424,16 +424,18 @@ describe('Verification (Phase 4)', () => {
     });
 
     it.each([
-      ['a name that is not on the record', NIN.ok, { firstName: 'Musa', lastName: 'Ibrahim', dateOfBirth: '1994-03-21' }],
-      ['a date of birth that is not on the record', NIN.ok, { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-22' }],
-      ['a record that holds another name', NIN.wrongName, undefined],
-      ['a record that holds another date of birth', NIN.wrongBirthDate, undefined],
-    ])('%s: FAILED / IDENTITY_MISMATCH, counts', async (_name, number, identity) => {
+      ['a name that is not on the record', NIN.ok, { firstName: 'Musa', lastName: 'Ibrahim', dateOfBirth: '1994-03-21' }, 'NAME_MISMATCH'],
+      ['a date of birth that is not on the record', NIN.ok, { firstName: 'Ada', lastName: 'Okafor', dateOfBirth: '1994-03-22' }, 'DOB_MISMATCH'],
+      ['a name and a date of birth that are both wrong', NIN.ok, { firstName: 'Musa', lastName: 'Ibrahim', dateOfBirth: '1990-01-01' }, 'NAME_AND_DOB_MISMATCH'],
+      ['a record that holds another name', NIN.wrongName, undefined, 'NAME_MISMATCH'],
+      ['a record that holds another date of birth', NIN.wrongBirthDate, undefined, 'DOB_MISMATCH'],
+      ['a number the registry does not know', NIN.notFound, undefined, 'ID_NOT_FOUND'],
+    ])('%s: FAILED / IDENTITY_MISMATCH (%s), counts', async (_name, number, identity, detail) => {
       const user = await signedInUser(app);
 
       const res = await startVerification(app, user, number, { identity }).then((r) => r);
 
-      expect(res.body.data).toMatchObject({ status: 'FAILED', failureReason: 'IDENTITY_MISMATCH' });
+      expect(res.body.data).toMatchObject({ status: 'FAILED', failureReason: 'IDENTITY_MISMATCH', failureDetail: detail });
       const row = await attemptRow(res.body.data.id);
       expect(row).toMatchObject({ countsAgainstAllowance: true, identityRefHmac: null, personRefHmac: null });
     });

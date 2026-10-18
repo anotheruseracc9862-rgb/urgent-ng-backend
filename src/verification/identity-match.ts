@@ -86,6 +86,27 @@ export function namesMatch(typed: Pick<TypedIdentity, 'firstName' | 'lastName'>,
   );
 }
 
+/**
+ * True when two full names are the same person's name: the shorter name has at least two words
+ * and every one of them is a word of the longer name ("Ada Okafor" and "Okafor Ada Chinwe").
+ * A single word is not enough to call two names the same.
+ */
+export function sameFullName(a: string, b: string): boolean {
+  const first = nameTokens(a);
+  const second = nameTokens(b);
+  const [small, large] = first.length <= second.length ? [first, second] : [second, first];
+  return small.length >= 2 && small.every((token) => hasMatch(token, large));
+}
+
+/** Which of the typed details the registry record disagrees with, or null when both agree. */
+export function identityMismatch(typed: TypedIdentity, registry: KycRegistryIdentity): 'NAME_MISMATCH' | 'DOB_MISMATCH' | 'NAME_AND_DOB_MISMATCH' | null {
+  const name = namesMatch(typed, registry);
+  const dob = typed.dateOfBirth === registry.dateOfBirth;
+  if (name && dob) return null;
+  if (!name && !dob) return 'NAME_AND_DOB_MISMATCH';
+  return name ? 'DOB_MISMATCH' : 'NAME_MISMATCH';
+}
+
 export function identityMatches(typed: TypedIdentity, registry: KycRegistryIdentity): boolean {
   return typed.dateOfBirth === registry.dateOfBirth && namesMatch(typed, registry);
 }

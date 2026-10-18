@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { VerificationAttempt, VerificationFailureReason, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
+import { KYC_FAILURE_DETAILS, type KycFailureDetail } from '../common/providers/kyc.provider.js';
 import { displayStatus, type DisplayStatus } from './verification.state.js';
 
 export interface AttemptView {
@@ -8,6 +9,8 @@ export interface AttemptView {
   status: VerificationStatus;
   displayStatus: DisplayStatus;
   failureReason: VerificationFailureReason | null;
+  /** What to re-check when `failureReason` is broad: the name, the date of birth, the ID number. */
+  failureDetail: KycFailureDetail | null;
   attemptNumber: number;
   startedAt: Date;
   completedAt: Date | null;
@@ -15,11 +18,18 @@ export interface AttemptView {
 }
 
 /** The runner-facing view of an attempt. Never includes the identity hash, masked attributes or the selfie. */
+/** The finer reason stored in `provider_status` on a failed attempt, when it is one a runner may see. */
+const failureDetailOf = (attempt: VerificationAttempt): KycFailureDetail | null =>
+  attempt.status === 'FAILED' && (KYC_FAILURE_DETAILS as readonly string[]).includes(attempt.providerStatus ?? '')
+    ? (attempt.providerStatus as KycFailureDetail)
+    : null;
+
 export const toAttemptView = (attempt: VerificationAttempt): AttemptView => ({
   id: attempt.id,
   status: attempt.status,
   displayStatus: displayStatus(attempt.status),
   failureReason: attempt.failureReason,
+  failureDetail: failureDetailOf(attempt),
   attemptNumber: attempt.attemptNumber,
   startedAt: attempt.startedAt,
   completedAt: attempt.completedAt,

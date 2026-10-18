@@ -134,6 +134,18 @@ describe('Verification submission details', () => {
     expect(own.body.error.details.field).toBe('guarantor.phone');
   });
 
+  it('refuses a guarantor with the same name as the runner, in any order or case', async () => {
+    const user = await signedInUser(app);
+
+    for (const fullName of ['Ada Okafor', 'okafor ada', 'Ada Chinwe Okafor']) {
+      const same = await submit(user, {
+        guarantor: { fullName, relationship: 'FAMILY', phone: nextPhone() },
+      }).expect(400);
+      expect(same.body.error.details.field).toBe('guarantor.fullName');
+    }
+    await submit(user, { guarantor: { fullName: 'Ngozi Okafor', relationship: 'FAMILY', phone: nextPhone() } }).expect(201);
+  });
+
   it('refuses an ID document photo that is the selfie, or that belongs to someone else', async () => {
     const user = await signedInUser(app);
     const other = await signedInUser(app);

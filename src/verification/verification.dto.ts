@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import { IsDefined, IsEnum, IsISO8601, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { GuarantorRelationship, IdDocumentType, VerificationFailureReason, VerificationStatus } from '@prisma/client';
 import { IsNigerianPhone, NormalisePhone } from '../auth/identifier.js';
+import { KYC_FAILURE_DETAILS, type KycFailureDetail } from '../common/providers/kyc.provider.js';
 
 /** Who the runner says they are. Compared with the NIN or BVN registry record: a mismatch fails the attempt. */
 export class IdentityDetailsDto {
@@ -131,6 +132,9 @@ export class VerificationAttemptDto {
   displayStatus!: string;
   @ApiProperty({ enum: VerificationFailureReason, enumName: 'VerificationFailureReason', nullable: true })
   failureReason!: VerificationFailureReason | null;
+  /** What to re-check when `failureReason` is broad. Null when there is nothing more specific. */
+  @ApiProperty({ enum: KYC_FAILURE_DETAILS, enumName: 'VerificationFailureDetail', nullable: true })
+  failureDetail!: KycFailureDetail | null;
   attemptNumber!: number;
   @ApiProperty({ type: String, format: 'date-time' })
   startedAt!: Date;
