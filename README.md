@@ -70,6 +70,7 @@ npm run seed:demo           # everything below, including the baseline seed
 npm run seed:demo:accounts  # just accounts and prerequisites
 npm run seed:demo:errands   # accounts + errands, offers and assignments
 npm run seed:demo:activity  # all stages, including reviews, chat and billing
+npm run seed:demo -- --stage locations # spread untouched older OPEN/DRAFT demo locations only
 ```
 
 Sign in with `runner01@demo.urgent.test` or `requester01@demo.urgent.test`,
@@ -80,6 +81,14 @@ password **`UrgentDemo!2026`**. Each group has accounts `01` through `10`:
 | 01–06 | Yaba, Lagos (01–04 state-wide, runner05 Lagos Mainland LGA, runner06 10 km radius) |
 | 07–08 | Wuse, FCT |
 | 09–10 | Bodija, Oyo |
+
+New errands rotate through neighbourhoods in each state (including Yaba,
+Surulere, Ikeja, Gbagada, Maryland and Ilupeju in Lagos), with distinct pickup
+and destination areas. Marketplace pins still use the normal privacy grid and
+private offsets, never exact coordinates. The opt-in `locations` stage updates
+only known legacy fixtures whose original content, coordinates, versions and
+OPEN/DRAFT status are unchanged. It skips assigned, progressed and edited jobs;
+it does not refresh expiry dates or reset offers, accounts or history.
 
 All 20 have verified email, phone and synthetic local identity checks. Runners
 are available and have their operating areas configured. The script prints

@@ -3,7 +3,68 @@ import configuration from '../../src/config/configuration.js';
 import { DEFAULTS } from '../../src/config/business-config.defaults.js';
 import { encrypt } from '../../src/common/utils/crypto.helper.js';
 import { approximatePoint } from '../../src/errands/location-privacy.js';
-import { activeScenario, completedScenarios, demoId, demoRequesters, errandId, minutes, runnerFor, type DemoContext, type DemoUser } from './demo-data.js';
+import { activeScenario, completedScenarios, demoErrandRoute, demoId, demoRequesters, errandId, minutes, runnerFor, type DemoContext, type DemoUser } from './demo-data.js';
+
+const titles: Record<string, string> = {
+  'completed-1': 'Deliver a birthday parcel', 'completed-2': 'Collect a pharmacy order', 'completed-3': 'Deliver office documents', 'completed-unreviewed': 'Collect a laundry order',
+  draft: 'Pick up groceries for the weekend', open: 'Collect a small parcel', 'open-scheduled': 'Deliver a document envelope',
+  pending: 'Pick up a lunch order', active: 'Deliver a sealed package', cancelled: 'Collect a forgotten charger', expired: 'Pick up a bakery order',
+};
+
+async function writeDemoLocations({ tx, now }: DemoContext, requester: DemoUser, scenario: string) {
+  const id = errandId(requester, scenario);
+  const route = demoErrandRoute(requester, scenario);
+  const settings = configuration();
+  for (const type of ['ERRAND_PICKUP', 'ERRAND_DESTINATION'] as const) {
+    const location = type === 'ERRAND_PICKUP' ? route.pickup : route.destination;
+    const { point } = location;
+    const approx = approximatePoint(point, id, type, settings.security.hmacSecret, { gridMeters: DEFAULTS.APPROX_GRID_METERS, maxOffsetMeters: DEFAULTS.APPROX_MAX_OFFSET_METERS });
+    await tx.$executeRaw`
+      INSERT INTO errand_locations (id, errand_id, type, exact_point, approx_point, address_text, landmark, area, lga, state, state_id, lga_id, source, updated_at)
+      VALUES (${demoId(`location:${id}:${type}`)}::uuid, ${id}::uuid, ${type}::"LocationType",
+        ST_SetSRID(ST_MakePoint(${point.lng}::float8,${point.lat}::float8),4326)::geography,
+        ST_SetSRID(ST_MakePoint(${approx.lng}::float8,${approx.lat}::float8),4326)::geography,
+        ${`Demo address, ${location.area}`}, 'Meet outside the shop entrance', ${location.area}, ${location.lga}, ${requester.region.name}, ${requester.region.stateId}, ${location.lgaId}, 'MAP_PIN'::"LocationSource", ${now})
+      ON CONFLICT (id) DO UPDATE SET exact_point = EXCLUDED.exact_point, approx_point = EXCLUDED.approx_point,
+        address_text = EXCLUDED.address_text, area = EXCLUDED.area, lga = EXCLUDED.lga, lga_id = EXCLUDED.lga_id, updated_at = EXCLUDED.updated_at
+    `;
+    if (type === 'ERRAND_PICKUP') await tx.$executeRaw`UPDATE errands SET feed_point = ST_SetSRID(ST_MakePoint(${approx.lng}::float8,${approx.lat}::float8),4326)::geography WHERE id = ${id}::uuid`;
+  }
+}
+
+/** Explicit opt-in: relocate only unchanged legacy OPEN/DRAFT fixtures, never active/history jobs. */
+export async function refreshDemoLocations(context: DemoContext): Promise<number> {
+  let refreshed = 0;
+  for (const requester of demoRequesters) {
+    const region = requester.region;
+    for (const scenario of ['open', 'open-scheduled', 'draft']) {
+      const id = errandId(requester, scenario);
+      const draft = scenario === 'draft';
+      const originalDescription = `${requester.name.split(' ')[0]} needs help with a small local errand in ${region.area}. This is a synthetic demo job for testing.`;
+      const rows = await context.tx.$queryRaw<Array<{ id: string }>>`
+        SELECT e.id FROM errands e WHERE e.id = ${id}::uuid AND e.requester_id = ${requester.id}::uuid
+          AND e.status::text = ${draft ? 'DRAFT' : 'OPEN'} AND e.version = ${draft ? 0 : 1} AND e.material_version = ${draft ? 0 : 1}
+          AND e.title = ${`${titles[scenario]} in ${region.area}`} AND e.description = ${originalDescription}
+          AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.errand_id = e.id)
+          AND (SELECT count(*) FROM errand_locations l WHERE l.errand_id = e.id
+            AND l.address_text = ${`Demo address, ${region.area}`} AND l.area = ${region.area}
+            AND l.lga_id = ${region.lgaId} AND l.source = 'MAP_PIN'
+            AND ((l.type = 'ERRAND_PICKUP' AND ST_Equals(l.exact_point::geometry, ST_SetSRID(ST_MakePoint(${region.pickup.lng}::float8, ${region.pickup.lat}::float8),4326)))
+              OR (l.type = 'ERRAND_DESTINATION' AND ST_Equals(l.exact_point::geometry, ST_SetSRID(ST_MakePoint(${region.destination.lng}::float8, ${region.destination.lat}::float8),4326))))) = 2
+        FOR UPDATE OF e
+      `;
+      if (!rows.length) continue;
+      await writeDemoLocations(context, requester, scenario);
+      const { pickup } = demoErrandRoute(requester, scenario);
+      await context.tx.errand.update({ where: { id }, data: {
+        title: `${titles[scenario]} in ${pickup.area}`,
+        description: `${requester.name.split(' ')[0]} needs help with a small local errand in ${pickup.area}. This is a synthetic demo job for testing.`,
+      } });
+      refreshed++;
+    }
+  }
+  return refreshed;
+}
 
 async function seedOffer(context: DemoContext, id: string, requester: DemoUser, runner: DemoUser, selected: boolean, createdAt: Date, amountMinor: bigint) {
   const offerId = demoId(`offer:${id}:${runner.id}`);
@@ -60,20 +121,15 @@ async function seedErrand(context: DemoContext, requester: DemoUser, scenario: s
   const version = ['DRAFT', 'OPEN', 'RUNNER_SELECTED', 'ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DELIVERED', 'COMPLETED'].indexOf(status);
   const publishedAt = minutes(now, completed ? -(offset + 1) * 24 * 60 - 120 : status === 'EXPIRED' ? -2 * 24 * 60 : status === 'RUNNER_SELECTED' ? -5 : -100);
   const scheduled = scenario === 'open-scheduled';
-  const region = requester.region;
-  const titles: Record<string, string> = {
-    'completed-1': 'Deliver a birthday parcel', 'completed-2': 'Collect a pharmacy order', 'completed-3': 'Deliver office documents', 'completed-unreviewed': 'Collect a laundry order',
-    draft: 'Pick up groceries for the weekend', open: 'Collect a small parcel', 'open-scheduled': 'Deliver a document envelope',
-    pending: 'Pick up a lunch order', active: 'Deliver a sealed package', cancelled: 'Collect a forgotten charger', expired: 'Pick up a bakery order',
-  };
+  const { pickup } = demoErrandRoute(requester, scenario);
   const amount = BigInt(250000 + requester.index * 15000 + offset * 10000);
   await tx.$executeRaw`
     INSERT INTO errands (id, requester_id, category_id, title, description, instructions, status, priority, time_mode, scheduled_at,
       suggested_budget_minor, item_size, prohibited_items_confirmed_at, prohibited_policy_version, published_at, expires_at,
       delivered_at, completed_at, auto_complete_at, cancelled_at, cancellation_reason, cancelled_by, cancelled_by_type,
       feed_point, offer_count, material_version, version, created_at, updated_at)
-    VALUES (${id}::uuid, ${requester.id}::uuid, ${categoryId}::uuid, ${`${titles[scenario]} in ${region.area}`},
-      ${`${requester.name.split(' ')[0]} needs help with a small local errand in ${region.area}. This is a synthetic demo job for testing.`},
+    VALUES (${id}::uuid, ${requester.id}::uuid, ${categoryId}::uuid, ${`${titles[scenario]} in ${pickup.area}`},
+      ${`${requester.name.split(' ')[0]} needs help with a small local errand in ${pickup.area}. This is a synthetic demo job for testing.`},
       'Please keep the package sealed and message me when you arrive.', ${status}::"ErrandStatus",
       ${scheduled ? 'STANDARD' : 'URGENT'}::"ErrandPriority", ${scheduled ? 'SCHEDULED' : 'ASAP'}::"TimeMode", ${scheduled ? minutes(now, 180) : null}::timestamptz,
       ${amount}::bigint, 'SMALL'::"ItemSize", ${draft ? null : publishedAt}::timestamptz, ${draft ? null : '1.0'}, ${draft ? null : publishedAt}::timestamptz,
@@ -82,22 +138,11 @@ async function seedErrand(context: DemoContext, requester: DemoUser, scenario: s
       ${status === 'DELIVERED' ? minutes(publishedAt, 65 + DEFAULTS.DELIVERY_AUTO_COMPLETION_HOURS * 60) : null}::timestamptz, ${status === 'CANCELLED' ? minutes(publishedAt, 15) : null}::timestamptz,
       ${status === 'CANCELLED' ? 'REQUESTER_CANCELLED' : null}::"ErrandCancellationReason", ${status === 'CANCELLED' ? requester.id : null}::uuid,
       ${status === 'CANCELLED' ? 'USER' : null}::"AuditActorType",
-      ST_SetSRID(ST_MakePoint(${region.pickup.lng}::float8, ${region.pickup.lat}::float8),4326)::geography,
+      ST_SetSRID(ST_MakePoint(${pickup.point.lng}::float8, ${pickup.point.lat}::float8),4326)::geography,
       ${status === 'OPEN' ? 2 : 0}, ${draft ? 0 : 1}, ${version < 0 ? 2 : version}, ${minutes(publishedAt, -10)}, ${now})
   `;
+  await writeDemoLocations(context, requester, scenario);
   const settings = configuration();
-  for (const type of ['ERRAND_PICKUP', 'ERRAND_DESTINATION'] as const) {
-    const point = type === 'ERRAND_PICKUP' ? region.pickup : region.destination;
-    const approx = approximatePoint(point, id, type, settings.security.hmacSecret, { gridMeters: DEFAULTS.APPROX_GRID_METERS, maxOffsetMeters: DEFAULTS.APPROX_MAX_OFFSET_METERS });
-    await tx.$executeRaw`
-      INSERT INTO errand_locations (id, errand_id, type, exact_point, approx_point, address_text, landmark, area, lga, state, state_id, lga_id, source, updated_at)
-      VALUES (${demoId(`location:${id}:${type}`)}::uuid, ${id}::uuid, ${type}::"LocationType",
-        ST_SetSRID(ST_MakePoint(${point.lng}::float8,${point.lat}::float8),4326)::geography,
-        ST_SetSRID(ST_MakePoint(${approx.lng}::float8,${approx.lat}::float8),4326)::geography,
-        ${`Demo address, ${region.area}`}, 'Meet outside the shop entrance', ${region.area}, ${region.lga}, ${region.name}, ${region.stateId}, ${region.lgaId}, 'MAP_PIN'::"LocationSource", ${now})
-    `;
-    if (type === 'ERRAND_PICKUP') await tx.$executeRaw`UPDATE errands SET feed_point = ST_SetSRID(ST_MakePoint(${approx.lng}::float8,${approx.lat}::float8),4326)::geography WHERE id = ${id}::uuid`;
-  }
   const seal = (field: string, value: string) => encrypt(value, settings.security.dataEncryptionKey, { aad: `errand:${id}:${field}` });
   await tx.errandContact.create({ data: { errandId: id, encryptionKeyId: 'primary', pickupName: seal('pickup_name', 'Demo shop attendant'), pickupPhone: seal('pickup_phone', requester.phone), dropoffName: seal('dropoff_name', requester.name), dropoffPhone: seal('dropoff_phone', requester.phone) } });
   await tx.errandStatusHistory.create({ data: { id: demoId(`history:${id}:DRAFT`), errandId: id, toStatus: 'DRAFT', actorType: 'USER', actorId: requester.id, reason: 'Local demo draft', version: 0, createdAt: minutes(publishedAt, -10) } });
