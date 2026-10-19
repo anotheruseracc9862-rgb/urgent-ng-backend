@@ -315,9 +315,10 @@ describe('Demo list features (HTTP)', () => {
       const all = await get(open.requester, '/conversations').expect(200);
       const search = await get(open.requester, '/conversations?q=bake').expect(200);
 
-      expect(offers.body.data.map((c: { errandId: string }) => c.errandId)).toEqual([open.errandId]);
+      // A conversation is hidden until the runner accepts, so an errand that only has offers is not listed.
+      expect(offers.body.data).toHaveLength(0);
       expect(activeTab.body.data.map((c: { errandId: string }) => c.errandId)).toEqual([active.errandId]);
-      expect(all.body.data).toHaveLength(2);
+      expect(all.body.data.map((c: { errandId: string }) => c.errandId)).toEqual([active.errandId]);
       expect(search.body.data.map((c: { errandId: string }) => c.errandId)).toEqual([active.errandId]);
       expect((await get(open.requester, '/conversations?filter=CLOSED').expect(200)).body.data).toHaveLength(0);
     });

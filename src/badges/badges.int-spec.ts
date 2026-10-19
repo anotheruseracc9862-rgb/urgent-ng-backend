@@ -13,7 +13,7 @@ import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { insertErrand, seedCategories } from '../test/errand.helper.js';
 import { submitOffer } from '../test/offer.helper.js';
-import { acceptAssignment, cancelAssignment, completedFor, completedScene, offerScene, selectRunner } from '../test/assignment.helper.js';
+import { acceptAssignment, acceptedScene, cancelAssignment, completedFor, completedScene, offerScene, selectRunner } from '../test/assignment.helper.js';
 import { dispatchOutbox } from '../test/events.helper.js';
 import { BadgeService } from './badge.service.js';
 import { BadgeRecomputeSweeper } from '../scheduler/badge-recompute.sweeper.js';
@@ -217,7 +217,7 @@ describe('Badges (P9-05)', () => {
   describe('responsiveness', () => {
     it('FAST_RESPONDER needs a measured, quick reply', async () => {
       await setConfig('BADGE_FAST_RESPONDER_MIN_SAMPLES', 1);
-      const s = await offerScene(app, categoryId);
+      const s = await acceptedScene(app, categoryId);
       const conversations = await request(app.getHttpServer()).get(`${API}/conversations`).set(...bearer(s.requester.accessToken)).expect(200);
       const id = conversations.body.data[0].id as string;
       const say = (user: Authed, body: string) =>

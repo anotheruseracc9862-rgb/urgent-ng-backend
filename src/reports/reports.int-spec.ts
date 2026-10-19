@@ -111,7 +111,7 @@ describe('Reports (P9-03)', () => {
     });
 
     it('reports a message from a conversation the reporter is in', async () => {
-      const s = await offerScene(app, categoryId);
+      const s = await acceptedScene(app, categoryId);
       const conversations = await request(app.getHttpServer()).get(`${API}/conversations`).set(...bearer(s.requester.accessToken)).expect(200);
       const conversationId = conversations.body.data[0].id as string;
       const sent = await request(app.getHttpServer())
