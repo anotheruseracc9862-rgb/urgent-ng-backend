@@ -22,6 +22,8 @@ export type ReadOnlyReason = 'BLOCKED' | 'ERRAND_ENDED' | 'NO_ACTIVE_OFFER' | 'N
 export interface ConversationState {
   canSend: boolean;
   readOnlyReason: ReadOnlyReason | null;
+  /** When chat closes after a completed errand; null while the errand is not completed. */
+  closesAt?: Date | null;
 }
 
 export interface ConversationRow {
@@ -102,7 +104,7 @@ export class ConversationService {
   async stateOf(client: Client, conversation: ConversationRow): Promise<ConversationState> {
     const days = await this.config.get('CHAT_POST_COMPLETION_DAYS');
     const rows = await client.$queryRaw<
-      Array<{ errand_status: string; active_offer: boolean; live_assignment: boolean; accepted_assignment: boolean; completed_in_window: boolean; completed_any: boolean }>
+      Array<{ errand_status: string; active_offer: boolean; live_assignment: boolean; accepted_assignment: boolean; completed_in_window: boolean; completed_any: boolean; completed_at: Date | null }>
     >`
       SELECT e.status::text AS errand_status,
         EXISTS (SELECT 1 FROM offers o WHERE o.errand_id = ${conversation.errandId}::uuid AND o.runner_id = ${conversation.runnerId}::uuid
@@ -115,7 +117,9 @@ export class ConversationService {
                   AND a.status = 'COMPLETED'::"AssignmentStatus" AND a.completed_at > now() - make_interval(days => ${days}::int)
                   AND a.deleted_at IS NULL) AS completed_in_window,
         EXISTS (SELECT 1 FROM assignments a WHERE a.errand_id = ${conversation.errandId}::uuid AND a.runner_id = ${conversation.runnerId}::uuid
-                  AND a.status = 'COMPLETED'::"AssignmentStatus" AND a.deleted_at IS NULL) AS completed_any
+                  AND a.status = 'COMPLETED'::"AssignmentStatus" AND a.deleted_at IS NULL) AS completed_any,
+        (SELECT max(a.completed_at) FROM assignments a WHERE a.errand_id = ${conversation.errandId}::uuid AND a.runner_id = ${conversation.runnerId}::uuid
+                  AND a.status = 'COMPLETED'::"AssignmentStatus" AND a.deleted_at IS NULL) AS completed_at
       FROM errands e WHERE e.id = ${conversation.errandId}::uuid
     `;
     const row = rows[0];
@@ -129,7 +133,8 @@ export class ConversationService {
       return { canSend: false, readOnlyReason: 'ERRAND_ENDED' };
     }
     if (row.accepted_assignment || row.completed_in_window) {
-      return { canSend: true, readOnlyReason: null };
+      const closesAt = row.completed_at ? new Date(row.completed_at.getTime() + days * 24 * 60 * 60 * 1000) : null;
+      return { canSend: true, readOnlyReason: null, closesAt };
     }
     if (row.completed_any) return { canSend: false, readOnlyReason: 'COMPLETION_WINDOW_ENDED' };
     // Not assigned yet: a live offer or a selection waiting for the runner's answer.
@@ -252,6 +257,7 @@ export class ConversationService {
         muted: row.muted,
         canSend: state.canSend,
         readOnlyReason: state.readOnlyReason,
+        chatClosesAt: state.closesAt ?? null,
         createdAt: row.created_at,
       });
     }

@@ -161,6 +161,9 @@ export class ConversationDto {
   @ApiProperty({ nullable: true, enum: ['BLOCKED', 'ERRAND_ENDED', 'NO_ACTIVE_OFFER', 'NOT_ASSIGNED', 'COMPLETION_WINDOW_ENDED'] })
   readOnlyReason!: string | null;
 
+  @ApiProperty({ type: Date, nullable: true, description: 'When chat closes, once the errand is completed. Null before that.' })
+  chatClosesAt!: Date | null;
+
   @ApiProperty({ type: Date })
   createdAt!: Date;
 }
