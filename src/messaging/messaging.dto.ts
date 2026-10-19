@@ -158,7 +158,7 @@ export class ConversationDto {
   @ApiProperty({ description: 'Whether this user can send a message now.' })
   canSend!: boolean;
 
-  @ApiProperty({ nullable: true, enum: ['BLOCKED', 'ERRAND_ENDED', 'NO_ACTIVE_OFFER', 'COMPLETION_WINDOW_ENDED'] })
+  @ApiProperty({ nullable: true, enum: ['BLOCKED', 'ERRAND_ENDED', 'NO_ACTIVE_OFFER', 'NOT_ASSIGNED', 'COMPLETION_WINDOW_ENDED'] })
   readOnlyReason!: string | null;
 
   @ApiProperty({ type: Date })

@@ -17,7 +17,7 @@ const FILTER_STATUSES: Record<ConversationFilter, string[] | undefined> = {
   CLOSED: ['COMPLETED', 'CANCELLED', 'EXPIRED'],
 };
 
-export type ReadOnlyReason = 'BLOCKED' | 'ERRAND_ENDED' | 'NO_ACTIVE_OFFER' | 'COMPLETION_WINDOW_ENDED';
+export type ReadOnlyReason = 'BLOCKED' | 'ERRAND_ENDED' | 'NO_ACTIVE_OFFER' | 'NOT_ASSIGNED' | 'COMPLETION_WINDOW_ENDED';
 
 export interface ConversationState {
   canSend: boolean;
@@ -35,8 +35,9 @@ type Client = Prisma.TransactionClient | PrismaService;
 
 /**
  * Conversations (Backend PRD 18.1). One per (errand, runner), created inside the transaction of
- * the runner's first offer, so price and timing can be discussed before selection. The two
- * parties are the requester and that runner, and nobody else can read or write.
+ * the runner's first offer so it can be linked, but it stays closed and hidden until the runner
+ * accepts the assignment: before that, price and timing go through the offer's note and counters.
+ * The two parties are the requester and that runner, and nobody else can read or write.
  */
 @Injectable()
 export class ConversationService {
@@ -93,21 +94,23 @@ export class ConversationService {
 
   /**
    * Whether messages may be sent now, derived from the current state of the offer, assignment and
-   * errand (Backend PRD 18.1): enabled while the runner's offer is live or the assignment is
-   * live, disabled when the offer closed without selection, when the errand was cancelled or
-   * expired, and `CHAT_POST_COMPLETION_DAYS` after completion. A block in either direction also
+   * errand (Backend PRD 18.1): enabled once the runner has accepted the assignment, disabled
+   * before that (`NOT_ASSIGNED`), when the errand was cancelled or expired, when the assignment
+   * ended, and `CHAT_POST_COMPLETION_DAYS` after completion. A block in either direction also
    * stops it.
    */
   async stateOf(client: Client, conversation: ConversationRow): Promise<ConversationState> {
     const days = await this.config.get('CHAT_POST_COMPLETION_DAYS');
     const rows = await client.$queryRaw<
-      Array<{ errand_status: string; active_offer: boolean; live_assignment: boolean; completed_in_window: boolean; completed_any: boolean }>
+      Array<{ errand_status: string; active_offer: boolean; live_assignment: boolean; accepted_assignment: boolean; completed_in_window: boolean; completed_any: boolean }>
     >`
       SELECT e.status::text AS errand_status,
         EXISTS (SELECT 1 FROM offers o WHERE o.errand_id = ${conversation.errandId}::uuid AND o.runner_id = ${conversation.runnerId}::uuid
                   AND o.status = 'ACTIVE'::"OfferStatus" AND o.deleted_at IS NULL) AS active_offer,
         EXISTS (SELECT 1 FROM assignments a WHERE a.errand_id = ${conversation.errandId}::uuid AND a.runner_id = ${conversation.runnerId}::uuid
                   AND a.status IN ('PENDING_ACCEPTANCE'::"AssignmentStatus", 'ACCEPTED'::"AssignmentStatus") AND a.deleted_at IS NULL) AS live_assignment,
+        EXISTS (SELECT 1 FROM assignments a WHERE a.errand_id = ${conversation.errandId}::uuid AND a.runner_id = ${conversation.runnerId}::uuid
+                  AND a.status = 'ACCEPTED'::"AssignmentStatus" AND a.deleted_at IS NULL) AS accepted_assignment,
         EXISTS (SELECT 1 FROM assignments a WHERE a.errand_id = ${conversation.errandId}::uuid AND a.runner_id = ${conversation.runnerId}::uuid
                   AND a.status = 'COMPLETED'::"AssignmentStatus" AND a.completed_at > now() - make_interval(days => ${days}::int)
                   AND a.deleted_at IS NULL) AS completed_in_window,
@@ -125,10 +128,12 @@ export class ConversationService {
     if (row.errand_status === 'CANCELLED' || row.errand_status === 'EXPIRED') {
       return { canSend: false, readOnlyReason: 'ERRAND_ENDED' };
     }
-    if (row.live_assignment || row.active_offer || row.completed_in_window) {
+    if (row.accepted_assignment || row.completed_in_window) {
       return { canSend: true, readOnlyReason: null };
     }
-    return { canSend: false, readOnlyReason: row.completed_any ? 'COMPLETION_WINDOW_ENDED' : 'NO_ACTIVE_OFFER' };
+    if (row.completed_any) return { canSend: false, readOnlyReason: 'COMPLETION_WINDOW_ENDED' };
+    // Not assigned yet: a live offer or a selection waiting for the runner's answer.
+    return { canSend: false, readOnlyReason: row.active_offer || row.live_assignment ? 'NOT_ASSIGNED' : 'NO_ACTIVE_OFFER' };
   }
 
   async list(
@@ -205,6 +210,9 @@ export class ConversationService {
       LEFT JOIN profiles pr ON pr.user_id = o.id AND pr.deleted_at IS NULL
       LEFT JOIN user_stats us ON us.user_id = o.id
       WHERE c.deleted_at IS NULL AND (c.requester_id = ${userId}::uuid OR c.runner_id = ${userId}::uuid)
+        -- A conversation exists to the people in it only once the runner has accepted the errand.
+        AND EXISTS (SELECT 1 FROM assignments ac WHERE ac.errand_id = c.errand_id AND ac.runner_id = c.runner_id
+                      AND ac.accepted_at IS NOT NULL AND ac.deleted_at IS NULL)
         ${statusClause}
         ${searchClause}
         AND (${cursor ? cursor.createdAt : null}::timestamptz IS NULL

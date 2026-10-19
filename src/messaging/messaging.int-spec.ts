@@ -47,16 +47,26 @@ describe('Messaging (P8-01)', () => {
     const res = await get(user, '/conversations').expect(200);
     return res.body.data as Array<{ id: string; errandId: string; unreadCount: number; canSend: boolean; readOnlyReason: string | null; muted: boolean; counterpart: { userId: string } }>;
   }
+  /** Chat opens only once the runner has accepted the errand. */
   async function chat() {
-    const s = await offerScene(app, categoryId);
+    const s = await acceptedScene(app, categoryId);
     const [conversation] = await conversationOf(s.requester);
     return { ...s, conversationId: conversation.id };
   }
+  /** The conversation row exists from the first offer, but nobody can see or use it before acceptance. */
+  const rowFor = (s: { errandId: string; runner: Authed }) => prisma.conversation.findFirstOrThrow({ where: { errandId: s.errandId, runnerId: s.runner.userId } });
 
   describe('conversations', () => {
-    it('open with the first offer, for both parties, and are linked from the offer', async () => {
-      const s = await offerScene(app, categoryId);
+    it('stay closed and hidden until the runner accepts, then open for both parties and link from the offer', async () => {
+      const offered = await offerScene(app, categoryId);
+      expect(await conversationOf(offered.requester)).toHaveLength(0);
+      expect(await conversationOf(offered.runner)).toHaveLength(0);
+      const row = await rowFor(offered);
+      expect((await text(offered.runner, row.id, 'Hello')).body.error.details.reason).toBe('NOT_ASSIGNED');
+      expect((await text(offered.requester, row.id, 'Hello')).body.error.code).toBe('CONVERSATION_READ_ONLY');
+      expect(await prisma.message.count()).toBe(0);
 
+      const s = await acceptedScene(app, categoryId);
       const requesterSide = await conversationOf(s.requester);
       const runnerSide = await conversationOf(s.runner);
 
@@ -69,17 +79,29 @@ describe('Messaging (P8-01)', () => {
       expect(offer.conversationId).toBe(requesterSide[0].id);
     });
 
+    it('stay closed while several runners offer, so a requester is never messaged by more than the chosen one', async () => {
+      const first = await offerScene(app, categoryId);
+      const { addOffer } = await import('../test/assignment.helper.js');
+      const second = await addOffer(app, first.errandId);
+
+      expect(await conversationOf(first.requester)).toHaveLength(0);
+      expect(await prisma.conversation.count({ where: { errandId: first.errandId } })).toBe(2);
+      for (const runner of [first.runner, second.runner]) {
+        const row = await prisma.conversation.findFirstOrThrow({ where: { errandId: first.errandId, runnerId: runner.userId } });
+        expect((await text(runner, row.id, 'Hi')).body.error.details.reason).toBe('NOT_ASSIGNED');
+      }
+      expect(await prisma.message.count()).toBe(0);
+    });
+
     it('a runner who withdraws and offers again keeps the same conversation', async () => {
       const s = await offerScene(app, categoryId);
-      const [first] = await conversationOf(s.requester);
+      const first = await rowFor(s);
       await offerAction(app, s.runner, 'post', s.offerId, 'withdraw').expect(200);
       const { submitOffer } = await import('../test/offer.helper.js');
       await submitOffer(app, s.runner, s.errandId).expect(201);
 
-      const all = await conversationOf(s.requester);
-
-      expect(all).toHaveLength(1);
-      expect(all[0].id).toBe(first.id);
+      expect(await prisma.conversation.count({ where: { errandId: s.errandId } })).toBe(1);
+      expect((await rowFor(s)).id).toBe(first.id);
     });
 
     it('carry what a list row and a detail pane need: preview, role, errand status and the offer amount', async () => {
@@ -89,13 +111,13 @@ describe('Messaging (P8-01)', () => {
       const [row] = await conversationOf(s.requester) as unknown as Array<Record<string, any>>;
 
       expect(row.lastMessagePreview).toBe('I can do it today');
-      expect(row.errandStatus).toBe('OPEN');
+      expect(row.errandStatus).toBe('ACCEPTED');
       expect(row.counterpart).toMatchObject({ userId: s.runner.userId, role: 'RUNNER' });
       expect(row.counterpart.firstName).toEqual(expect.any(String));
-      expect(row.amountKind).toBe('OFFER');
+      expect(row.amountKind).toBe('AGREED');
       expect(row.amountMinor).toBeGreaterThan(0);
       expect(row).toHaveProperty('pickupArea');
-      expect(row.assignmentId).toBeNull();
+      expect(row.assignmentId).toEqual(expect.any(String));
 
       const [runnerRow] = await conversationOf(s.runner) as unknown as Array<Record<string, any>>;
       expect(runnerRow.counterpart.role).toBe('REQUESTER');
@@ -199,35 +221,36 @@ describe('Messaging (P8-01)', () => {
   });
 
   describe('read-only rules (PRD 18.1)', () => {
-    it('a withdrawn offer closes sending, history stays readable', async () => {
-      const s = await chat();
-      await text(s.requester, s.conversationId, 'Price ok?').expect(201);
-      await offerAction(app, s.runner, 'post', s.offerId, 'withdraw').expect(200);
+    it('before acceptance sending is closed with NOT_ASSIGNED, whatever the offer is doing', async () => {
+      const s = await offerScene(app, categoryId);
+      const row = await rowFor(s);
 
-      const res = await text(s.requester, s.conversationId, 'Hello?');
+      const res = await text(s.requester, row.id, 'Price ok?');
 
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('CONVERSATION_READ_ONLY');
-      expect(res.body.error.details.reason).toBe('NO_ACTIVE_OFFER');
-      expect((await conversationOf(s.requester))[0]).toMatchObject({ canSend: false, readOnlyReason: 'NO_ACTIVE_OFFER' });
-      expect((await get(s.requester, `/conversations/${s.conversationId}/messages`).expect(200)).body.data).toHaveLength(1);
+      expect(res.body.error.details.reason).toBe('NOT_ASSIGNED');
+
+      await offerAction(app, s.runner, 'post', s.offerId, 'withdraw').expect(200);
+      expect((await text(s.requester, row.id, 'Hello?')).body.error.details.reason).toBe('NO_ACTIVE_OFFER');
     });
 
     it('a cancelled errand closes it', async () => {
-      const s = await chat();
+      const s = await offerScene(app, categoryId);
+      const row = await rowFor(s);
       await request(app.getHttpServer())
         .post(`${API}/errands/${s.errandId}/cancel`)
         .set(...bearer(s.requester.accessToken))
         .send({ reason: 'REQUESTER_CANCELLED' })
         .expect(200);
 
-      const res = await text(s.runner, s.conversationId, 'Still there?');
+      const res = await text(s.runner, row.id, 'Still there?');
 
       expect(res.body.error.code).toBe('CONVERSATION_READ_ONLY');
       expect(res.body.error.details.reason).toBe('ERRAND_ENDED');
     });
 
-    it('stays open through selection and execution, and for 7 days after completion', async () => {
+    it('stays open through acceptance and execution, and for 7 days after completion', async () => {
       const s = await acceptedScene(app, categoryId);
       const [conversation] = await conversationOf(s.requester);
       await text(s.requester, conversation.id, 'Gate code is 4410').expect(201);
@@ -244,14 +267,15 @@ describe('Messaging (P8-01)', () => {
       expect(late.body.error.details.reason).toBe('COMPLETION_WINDOW_ENDED');
     });
 
-    it('a pending selection keeps it open; a declined selection closes it', async () => {
+    it('a pending selection keeps it closed; a declined selection keeps it closed', async () => {
       const s = await selectedScene(app, categoryId);
-      const [conversation] = await conversationOf(s.requester);
-      await text(s.runner, conversation.id, 'On my way to accept').expect(201);
+      const row = await rowFor(s);
+      expect((await text(s.runner, row.id, 'On my way to accept')).body.error.details.reason).toBe('NOT_ASSIGNED');
 
       await request(app.getHttpServer()).post(`${API}/assignments/${s.assignmentId}/decline`).set(...bearer(s.runner.accessToken)).send({}).expect(200);
 
-      expect((await text(s.runner, conversation.id, 'Sorry')).body.error.code).toBe('CONVERSATION_READ_ONLY');
+      expect((await text(s.runner, row.id, 'Sorry')).body.error.code).toBe('CONVERSATION_READ_ONLY');
+      expect(await conversationOf(s.requester)).toHaveLength(0);
     });
 
     it('an accepted assignment cancelled by the runner closes it until they offer again', async () => {

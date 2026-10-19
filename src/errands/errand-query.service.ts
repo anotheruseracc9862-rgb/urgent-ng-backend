@@ -57,7 +57,8 @@ export class ErrandQueryService {
               WHEN e.status IN ('ACCEPTED', 'IN_PROGRESS', 'PICKED_UP', 'DISPUTED') THEN 1
               ELSE 0 END)::double precision`
           : Prisma.sql`0::double precision`;
-    const timeColumn = sort === 'NEEDS_ATTENTION' ? Prisma.sql`e.updated_at` : Prisma.sql`e.created_at`;
+    // "Recent" means last activity (an edit, a new offer, a status change), not when the errand was created.
+    const timeColumn = sort === 'HIGHEST_AMOUNT' ? Prisma.sql`e.created_at` : Prisma.sql`e.updated_at`;
 
     const conditions: Prisma.Sql[] = [Prisma.sql`e.requester_id = ${userId}::uuid`, Prisma.sql`e.deleted_at IS NULL`];
     if (options.tab === 'ATTENTION') {

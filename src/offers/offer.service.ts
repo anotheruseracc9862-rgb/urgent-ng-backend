@@ -4,6 +4,7 @@ import type { NegotiationMessageType, Offer, OfferCloseReason, OfferStatus } fro
 import { PrismaService } from '../database/prisma.service.js';
 import { lockRow } from '../database/lock-row.helper.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
+import { assertNoContactDetails } from '../common/moderation/contact-details.js';
 import {
   ERRAND_INVALID_STATE,
   FORBIDDEN,
@@ -103,6 +104,7 @@ export class OfferService {
       });
     }
     await this.assertTermsInBounds(amountMinor, durationMinutes);
+    assertNoContactDetails(input.message, 'message');
     await this.eligibility.assertCanOffer(runnerId);
     // Everything that needs the pool is read before the transaction: parallel submits hold every
     // connection while they wait on the counter lock, and must not need another one.
@@ -188,7 +190,7 @@ export class OfferService {
           durationMinutes,
           message: input.message,
         });
-        await tx.$executeRaw`UPDATE errands SET offer_count = offer_count + 1 WHERE id = ${errandId}::uuid`;
+        await tx.$executeRaw`UPDATE errands SET offer_count = offer_count + 1, updated_at = now() WHERE id = ${errandId}::uuid`;
         // The conversation opens with the first offer, in the same transaction (Backend PRD 18.1).
         const conversationId = await this.conversations.ensureForOffer(tx, {
           errandId,
@@ -674,6 +676,7 @@ export class OfferService {
     /** True for a counter-offer, which uses up a negotiation round. A runner's edit does not. */
     countsAsRound = false,
   ): Promise<Offer> {
+    assertNoContactDetails(input.message, 'message');
     const updated = await tx.offer.update({
       where: { id: offer.id },
       data: {

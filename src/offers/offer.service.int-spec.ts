@@ -40,6 +40,19 @@ describe('Offers: submit, lifecycle, list (P6-04, P6-06)', () => {
   const counterOf = async (userId: string) => (await prisma.offerDailyCounter.findMany({ where: { userId } })).reduce((n, c) => n + c.count, 0);
 
   describe('POST /errands/:id/offers', () => {
+    it('refuses a note that carries a phone number or email, and stores nothing', async () => {
+      const requester = await signedInUser(app);
+      const runner = await readyRunner(app);
+      const errandId = await openErrandFor(requester.userId);
+
+      const phone = await submitOffer(app, runner, errandId, { message: 'call me on 0814 787 7487' }).expect(400);
+      expect(phone.body.error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'message', reason: 'CONTACT_DETAILS_BEFORE_ACCEPTANCE' } });
+      await submitOffer(app, runner, errandId, { message: 'mail ade@example.com' }).expect(400);
+      expect(await prisma.offer.count({ where: { errandId } })).toBe(0);
+
+      await submitOffer(app, runner, errandId, { message: 'I can do it for 5k in 3 hours' }).expect(201);
+    });
+
     it('creates the offer, its first negotiation event, an outbox event and bumps offer_count', async () => {
       const requester = await signedInUser(app);
       const runner = await readyRunner(app);
