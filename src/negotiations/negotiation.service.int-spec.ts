@@ -85,6 +85,32 @@ describe('Negotiation (P6-05)', () => {
     expect(count).toBe(1);
   });
 
+  it('stops counters after the round limit: then it is accept or decline, and edits never count', async () => {
+    const { requester, runner, offer } = await setup();
+
+    // A runner's edit before any counter is not a round.
+    await offerAction(app, runner, 'patch', offer.id, '', { amountMinor: 49_000, durationMinutes: 30 }).expect(200);
+    let negotiation = (await offerAction(app, runner, 'get', offer.id, '')).body.data;
+    expect(negotiation).toMatchObject({ roundsUsed: 0, roundsLimit: 6 });
+
+    // Six counters, alternating, starting with the requester.
+    for (let round = 1; round <= 6; round += 1) {
+      const actor = round % 2 === 1 ? requester : runner;
+      await offerAction(app, actor, 'post', offer.id, 'counter', { amountMinor: 48_000 - round * 500, durationMinutes: 30 }).expect(200);
+    }
+    negotiation = (await offerAction(app, requester, 'get', offer.id, '')).body.data;
+    expect(negotiation).toMatchObject({ roundsUsed: 6, roundsLimit: 6, awaitingParty: 'REQUESTER' });
+
+    // The seventh counter is refused with the reason, and nothing changes.
+    const refused = await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatchObject({ code: 'OFFER_ROUND_LIMIT_REACHED', details: { roundsUsed: 6, roundsLimit: 6 } });
+    expect((await prisma.offer.findUniqueOrThrow({ where: { id: offer.id } })).counterRounds).toBe(6);
+
+    // The requester can still decline. (Selecting the runner at these terms is covered by the selection tests.)
+    await offerAction(app, requester, 'post', offer.id, 'reject', { expectedVersion: negotiation.version }).expect(200);
+  });
+
   it('keeps counters inside the amount and duration bounds', async () => {
     const { requester, offer } = await setup();
     expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 1, durationMinutes: 30 })).status).toBe(400);

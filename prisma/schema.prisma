@@ -1383,6 +1383,7 @@ model Offer {
   needsReconfirmation     Boolean            @default(false) @map("needs_reconfirmation")
   conversationId          String?            @map("conversation_id") @db.Uuid
   version                 Int                @default(0)
+  counterRounds           Int                @default(0) @map("counter_rounds")
   selectedAt              DateTime?          @map("selected_at") @db.Timestamptz(3)
   withdrawnAt             DateTime?          @map("withdrawn_at") @db.Timestamptz(3)
   closedAt                DateTime?          @map("closed_at") @db.Timestamptz(3)

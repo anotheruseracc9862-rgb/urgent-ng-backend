@@ -24,7 +24,7 @@ export const submitOffer = (app: INestApplication, runner: Authed, errandId: str
 export const offerAction = (
   app: INestApplication,
   user: Authed,
-  method: 'post' | 'patch',
+  method: 'post' | 'patch' | 'get',
   offerId: string,
   action: string,
   body: Record<string, unknown> = {},

@@ -189,6 +189,12 @@ export class OfferNegotiationDto {
   @ApiProperty()
   errandTitle!: string;
 
+  @ApiProperty({ description: 'Counter-offers made so far, by both sides together.' })
+  roundsUsed!: number;
+
+  @ApiProperty({ description: 'Counter-offers this negotiation allows. After that the only moves are accept or decline.' })
+  roundsLimit!: number;
+
   @ApiProperty({ type: () => NegotiationEventDto, isArray: true })
   history!: NegotiationEventDto[];
 }

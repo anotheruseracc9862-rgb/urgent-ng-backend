@@ -55,6 +55,7 @@ export const ERROR_CATALOGUE: Record<ErrorCode, ErrorCatalogueEntry> = {
   [Codes.OFFER_VERSION_MISMATCH]: { status: HttpStatus.CONFLICT, message: 'The offer changed. Review the latest version.' },
   [Codes.OFFER_NEEDS_RECONFIRMATION]: { status: HttpStatus.CONFLICT, message: 'The runner must reconfirm this offer.' },
   [Codes.OFFER_AWAITING_RUNNER]: { status: HttpStatus.CONFLICT, message: 'This offer is waiting for the runner to respond.' },
+  [Codes.OFFER_ROUND_LIMIT_REACHED]: { status: HttpStatus.CONFLICT, message: 'The counter-offer limit for this negotiation is reached. Accept or decline the latest terms.' },
   [Codes.OFFER_DAILY_LIMIT_REACHED]: { status: HttpStatus.TOO_MANY_REQUESTS, message: "You have reached today's offer limit." },
 
   [Codes.ASSIGNMENT_INVALID_STATE]: { status: HttpStatus.CONFLICT, message: 'This assignment cannot be changed in its current state.' },

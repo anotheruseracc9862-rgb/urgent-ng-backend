@@ -12,6 +12,7 @@ import {
   OFFER_INVALID_STATE,
   OFFER_NEEDS_RECONFIRMATION,
   OFFER_NOT_ELIGIBLE,
+  OFFER_ROUND_LIMIT_REACHED,
   OFFER_VERSION_MISMATCH,
   RESOURCE_NOT_FOUND,
   VALIDATION_ERROR,
@@ -227,6 +228,9 @@ export class OfferService {
     message: string | null;
     assignmentId: string | null;
     errandTitle: string;
+    /** Counter-offers used so far, and how many this negotiation allows. */
+    roundsUsed: number;
+    roundsLimit: number;
     history: Array<{
       id: string;
       type: NegotiationMessageType;
@@ -265,6 +269,8 @@ export class OfferService {
       message: offer.message,
       assignmentId: offer.assignments[0]?.id ?? null,
       errandTitle: offer.errand.title,
+      roundsUsed: offer.counterRounds,
+      roundsLimit: await this.config.get('MAX_NEGOTIATION_ROUNDS'),
       history: offer.negotiationEvents.map((event) => ({
         id: event.id,
         type: event.messageType,
@@ -308,9 +314,15 @@ export class OfferService {
           details: { offerId, awaitingParty: offer.awaitingParty, actor: party },
         });
       }
+      const roundsLimit = await this.config.get('MAX_NEGOTIATION_ROUNDS');
+      if (offer.counterRounds >= roundsLimit) {
+        throw DomainException.of(OFFER_ROUND_LIMIT_REACHED, {
+          details: { offerId, roundsUsed: offer.counterRounds, roundsLimit },
+        });
+      }
       await this.assertErrandOpen(tx, offer.errandId);
       await this.assertTermsInBounds(input.amountMinor, input.durationMinutes);
-      return this.applyTerms(tx, offer, userId, input, party === 'RUNNER' ? 'REQUESTER' : 'RUNNER');
+      return this.applyTerms(tx, offer, userId, input, party === 'RUNNER' ? 'REQUESTER' : 'RUNNER', true);
     });
   }
 
@@ -659,6 +671,8 @@ export class OfferService {
     actorId: string,
     input: OfferTermsInput,
     next: Party,
+    /** True for a counter-offer, which uses up a negotiation round. A runner's edit does not. */
+    countsAsRound = false,
   ): Promise<Offer> {
     const updated = await tx.offer.update({
       where: { id: offer.id },
@@ -667,6 +681,7 @@ export class OfferService {
         durationMinutes: input.durationMinutes,
         message: input.message ?? offer.message,
         awaitingParty: next,
+        ...(countsAsRound ? { counterRounds: { increment: 1 } } : {}),
         version: { increment: 1 },
       },
     });

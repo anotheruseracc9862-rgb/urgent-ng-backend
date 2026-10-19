@@ -53,6 +53,7 @@ Every error answer has the shape `{ "error": { "code", "message", "details"? }, 
 | 409 | `OFFER_AWAITING_RUNNER` | This offer is waiting for the runner to respond. |
 | 409 | `OFFER_INVALID_STATE` | This offer cannot be changed in its current state. |
 | 409 | `OFFER_NEEDS_RECONFIRMATION` | The runner must reconfirm this offer. |
+| 409 | `OFFER_ROUND_LIMIT_REACHED` | The counter-offer limit for this negotiation is reached. Accept or decline the latest terms. |
 | 409 | `OFFER_VERSION_MISMATCH` | The offer changed. Review the latest version. |
 | 409 | `RATING_ALREADY_SUBMITTED` | You have already rated this errand. |
 | 409 | `RESOURCE_CONFLICT` | The request conflicts with the current state. |

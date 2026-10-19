@@ -14,6 +14,8 @@ export interface BusinessConfig {
   ASSIGNMENT_ACCEPTANCE_MINUTES: number;
   DELIVERY_AUTO_COMPLETION_HOURS: number;
   MAX_OFFER_PER_RUNNER_PER_ERRAND: number;
+  /** Counter-offers allowed in one negotiation, both sides together. Then it is accept or decline. */
+  MAX_NEGOTIATION_ROUNDS: number;
   OFFER_MIN_AMOUNT: number;
   OFFER_MAX_AMOUNT: number;
   OFFER_DURATION_MIN_MINUTES: number;
@@ -182,6 +184,7 @@ export const DEFAULTS: BusinessConfig = {
   ASSIGNMENT_ACCEPTANCE_MINUTES: 30,
   DELIVERY_AUTO_COMPLETION_HOURS: 24,
   MAX_OFFER_PER_RUNNER_PER_ERRAND: 1,
+  MAX_NEGOTIATION_ROUNDS: 6,
   OFFER_MIN_AMOUNT: 20000, // ₦200 in kobo
   OFFER_MAX_AMOUNT: 50000000, // ₦500,000 in kobo
   OFFER_DURATION_MIN_MINUTES: 5,
