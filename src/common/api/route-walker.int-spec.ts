@@ -37,6 +37,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'GET /reference/policies': 'public policy documents',
   'GET /reference/popular-categories': 'public reference data',
   'GET /reference/prohibited-items': 'public reference data',
+  'GET /reference/service-areas': 'public reference data (states and the interstate flag)',
   'GET /reference/policies/{type}': 'public policy documents',
   'GET /billing/products/public': 'public price list',
   'GET /shared/{token}': 'read-only trusted-contact link (the unguessable token is the credential)',

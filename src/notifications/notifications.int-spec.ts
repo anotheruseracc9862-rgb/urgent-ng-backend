@@ -19,6 +19,7 @@ import type { FakePushProvider } from '../common/providers/fakes/push.fake.js';
 import type { FakeEmailProvider } from '../common/providers/fakes/email.fake.js';
 import { DeviceService } from '../auth/device.service.js';
 import { NotificationPreferenceService } from '../auth/notification-preference.service.js';
+import { NotificationService } from './notification.service.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
 
@@ -128,6 +129,84 @@ describe('Notification engine (P8-03)', () => {
       expect(email().getCalls('send')).toHaveLength(1);
       const channels = (await deliveries(notices[0].id)).map((d) => [d.channel, d.status]);
       expect(channels).toEqual(expect.arrayContaining([['IN_APP', 'SENT'], ['EMAIL', 'SENT']]));
+    });
+  });
+
+  describe('the email is the designed one', () => {
+    const sentEmail = () => email().getCalls('send')[0].args[0] as { to: string; subject: string; html: string; text: string };
+
+    it('a receipt goes out in the Urgent.ng layout, written from the values it was sent with, in HTML and plain text', async () => {
+      const user = await signedInUser(app, { email: 'musa.runner@example.com' });
+      await prisma.$executeRaw`UPDATE users SET email_verified_at = now() WHERE id = ${user.userId}::uuid`;
+
+      await app.get(NotificationService).notify({
+        userId: user.userId,
+        template: 'billing.receipt',
+        vars: { product: 'Runner Pro', amount: '₦3,000.00', vat: '₦209.30', reference: 'UG-20261018-4471' },
+        data: { orderId: 'order-1' },
+        dedupeKey: 'order:order-1:receipt',
+      });
+
+      const message = sentEmail();
+      expect(message.to).toBe('musa.runner@example.com');
+      expect(message.subject).toBe('Your Urgent.ng receipt: Runner Pro');
+      expect(message.html).toContain('<!doctype html>');
+      expect(message.html).toContain('Thanks, your payment went through');
+      expect(message.html).toContain('UG-20261018-4471');
+      expect(message.html).toContain('₦209.30');
+      expect(message.html).toContain('/assets/email/logo.png');
+      expect(message.html).toContain('/profile/orders');
+      expect(message.text).toContain('Reference: UG-20261018-4471');
+      expect(message.text).not.toContain('<');
+    });
+
+    it('greets the person by first name', async () => {
+      const user = await signedInUser(app, { email: 'ada.email@example.com' });
+      await prisma.$executeRaw`UPDATE users SET email_verified_at = now(), first_name = 'Ada' WHERE id = ${user.userId}::uuid`;
+
+      await app.get(NotificationService).notify({
+        userId: user.userId, template: 'account.password_changed', vars: {}, data: {}, dedupeKey: 'pw:1',
+      });
+
+      expect(sentEmail().html).toContain('Hi Ada, the password on your Urgent.ng account was changed.');
+      expect(sentEmail().html).toContain('Secure my account');
+    });
+
+    it('the values kept for the email never reach the app, the live feed or the phone', async () => {
+      const user = await signedInUser(app, { email: 'private.values@example.com' });
+      await prisma.$executeRaw`UPDATE users SET email_verified_at = now() WHERE id = ${user.userId}::uuid`;
+      await registerDevice(user);
+
+      await app.get(NotificationService).notify({
+        userId: user.userId,
+        template: 'billing.receipt',
+        vars: { product: 'Runner Pro', amount: '₦3,000.00', vat: '₦209.30', reference: 'UG-SECRET-1' },
+        data: { orderId: 'order-2' },
+        dedupeKey: 'order:order-2:receipt',
+      });
+
+      const [notice] = await ofType(user, 'billing.receipt');
+      expect(notice.data).toEqual({ orderId: 'order-2', type: 'billing.receipt' });
+      // (The reference is in the in-app text itself, so check the data the app is handed, not the whole row.)
+      expect(JSON.stringify(notice.data)).not.toContain('UG-SECRET-1');
+      const pushed = push().getCalls('send')[0]?.args[0] as { data: Record<string, string> } | undefined;
+      expect(pushed).toBeDefined();
+      expect(Object.keys(pushed!.data).sort()).toEqual(['orderId', 'type']);
+      // It is stored, though, so a retry after a failed send can still write the email.
+      const stored = await prisma.notification.findUniqueOrThrow({ where: { id: notice.id } });
+      expect((stored.data as Record<string, unknown>).emailVars).toMatchObject({ reference: 'UG-SECRET-1' });
+    });
+
+    it('a service notice written with markup is sent as text, not as markup', async () => {
+      const user = await signedInUser(app, { email: 'notice.reader@example.com' });
+      await prisma.$executeRaw`UPDATE users SET email_verified_at = now() WHERE id = ${user.userId}::uuid`;
+
+      await app.get(NotificationService).notify({
+        userId: user.userId, template: 'system.announcement', vars: { message: '<script>alert(1)</script> Maintenance on Sunday' }, data: {}, dedupeKey: 'ann:1',
+      });
+
+      expect(sentEmail().html).not.toContain('<script>alert(1)</script>');
+      expect(sentEmail().html).toContain('&lt;script&gt;alert(1)&lt;/script&gt; Maintenance on Sunday');
     });
   });
 

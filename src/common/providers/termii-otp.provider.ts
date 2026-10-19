@@ -1,6 +1,9 @@
 import { ProviderError } from './provider.error.js';
 import type { IOtpProvider, OtpDeliveryResult } from './otp.provider.js';
 import type { IEmailProvider } from './email.provider.js';
+import { renderEmail } from '../../notifications/email/email-layout.js';
+import { emailBrand } from '../../notifications/email/email-brand.js';
+import { otpEmail } from '../../notifications/email/email-messages.js';
 
 export interface TermiiSettings {
   apiKey: string;
@@ -71,12 +74,8 @@ export class TermiiOtpProvider implements IOtpProvider {
     if (!this.email) {
       return { success: false, error: 'Email delivery is not configured.' };
     }
-    const result = await this.email.send({
-      to: email,
-      subject: 'Your Urgent.ng code',
-      text: message(code),
-      html: `<p>Your Urgent.ng code is <strong style="font-size:20px;letter-spacing:2px">${code}</strong>.</p><p>Do not share it with anyone. If you did not ask for it, ignore this email.</p>`,
-    });
+    const message = renderEmail(otpEmail(code), emailBrand());
+    const result = await this.email.send({ to: email, subject: message.subject, text: message.text, html: message.html });
     return { success: result.success, messageId: result.messageId, error: result.error };
   }
 }

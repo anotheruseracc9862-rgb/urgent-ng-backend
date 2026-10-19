@@ -6,7 +6,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import express from 'express';
+import { fileURLToPath } from 'node:url';
 import type { AppConfig } from './config/configuration.js';
+
+/** `backend/assets`, next to `src` and `dist`: the files the backend itself hands out, such as the email logo. */
+const ASSETS_DIR = fileURLToPath(new URL('../assets', import.meta.url));
 
 /**
  * Global HTTP configuration shared by the real server (main.ts) and the e2e
@@ -35,6 +40,17 @@ export function configureApp(app: INestApplication): void {
     origin: config.getOrThrow('corsOrigins'),
     credentials: true,
   });
+
+  // Public images for emails: no login, long cache. Cross-origin on purpose, so a mail app that loads
+  // the image straight from here (not through its own proxy) is allowed to show it.
+  app.use(
+    '/assets',
+    (_request: unknown, response: { setHeader: (name: string, value: string) => void }, next: () => void) => {
+      response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      next();
+    },
+    express.static(ASSETS_DIR, { maxAge: '7d', index: false, dotfiles: 'ignore' }),
+  );
 
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });

@@ -59,6 +59,16 @@ export class EnvironmentVariables {
   @IsString()
   CORS_ORIGINS: string = 'http://localhost:4001,http://localhost:4002';
 
+  /** The public address of the web app. Links in emails start here. */
+  @ValidateIf(isProduction)
+  @Matches(/^https:\/\//, { message: 'WEB_APP_URL must be the public https address of the web app in production' })
+  WEB_APP_URL?: string;
+
+  /** The public address of this backend. The email logo is served from it. */
+  @ValidateIf(isProduction)
+  @Matches(/^https:\/\//, { message: 'API_PUBLIC_URL must be the public https address of this backend in production' })
+  API_PUBLIC_URL?: string;
+
   @ValidateIf(isProduction)
   @IsString()
   @MinLength(32, {

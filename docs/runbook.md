@@ -54,6 +54,20 @@ All the periods are business configuration (`MESSAGE_RETENTION_MONTHS`, `NOTIFIC
 
 Rows of soft-deletable and never-deleted tables are never removed. A database trigger refuses a `DELETE` on them; only the transient tables above can lose rows.
 
+## Email design
+
+Every email (one-time codes, account notices, receipts, the admin invitation) is built by one layout, `src/notifications/email/email-layout.ts`, and worded in `email-messages.ts`. The design is prototyped in `demo/email-templates.html`: change it there first, then port it. Each email is sent as HTML with a plain-text twin.
+
+| Setting | What it does | In production |
+|---|---|---|
+| `WEB_APP_URL` | Links in emails (buttons, help centre) start here. | Required, `https://`. |
+| `API_PUBLIC_URL` | The logo is served by this backend at `<API_PUBLIC_URL>/assets/email/logo.png`. | Required, `https://`. |
+| `EMAIL_LOGO_URL` | Optional: use another absolute image instead. | Optional. |
+
+**The logo ships with the backend.** The file is `assets/email/logo.png`, next to `src` and `dist`, and `/assets` serves that folder without a login. **Deploy the `assets` folder with `dist`**, or emails show a broken image. Mail apps cache it, so changing the file takes a while to show. A different file name is a different address.
+
+To see an email without sending one, render it from the specs in `email-messages.ts` with `buildEmail`, as the tests do.
+
 ## Common tasks
 
 **Check what is running.** `GET /api/v1/health` (the API), `GET /api/v1/admin/ops/sweepers` (the scheduler), `GET /api/v1/admin/ops/queues` (the worker).

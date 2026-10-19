@@ -8,9 +8,15 @@ import { DeviceService } from '../auth/device.service.js';
 import { REDIS_CLIENT } from '../common/redis/redis.module.js';
 import { PUSH_PROVIDER, type IPushProvider } from '../common/providers/push.provider.js';
 import { EMAIL_PROVIDER, type IEmailProvider } from '../common/providers/email.provider.js';
+import { renderEmail } from './email/email-layout.js';
+import { emailBrand } from './email/email-brand.js';
+import { notificationEmail } from './email/email-messages.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { TEMPLATE_DEFAULTS, render } from './notification-templates.js';
 import type { NotificationIntent } from './notification-rules.js';
+
+/** Where an account email's values are kept inside a notification's `data`. Never sent to push or the app. */
+export const EMAIL_VARS_KEY = 'emailVars';
 
 /** Attempts per channel before a delivery is left FAILED (the in-app notification always stays). */
 export const MAX_DELIVERY_ATTEMPTS = 3;
@@ -75,11 +81,14 @@ export class NotificationService {
     const title = render(template.title, intent.vars);
     const body = render(template.body, intent.vars);
     const data = { ...intent.data, type: intent.template };
+    // The values an account email is written from (a receipt's amount and reference) are kept with the
+    // notification for the email only. Push and the live feed get `data` without them.
+    const stored = template.email ? { ...data, [EMAIL_VARS_KEY]: intent.vars } : data;
 
     const inserted = await this.prisma.$queryRaw<Array<{ id: string }>>`
       INSERT INTO notifications (user_id, category, type, title, body, data, dedupe_key)
       VALUES (${intent.userId}::uuid, ${template.category}::"NotificationCategory", ${intent.template}, ${title}, ${body},
-              ${JSON.stringify(data)}::jsonb, ${intent.dedupeKey})
+              ${JSON.stringify(stored)}::jsonb, ${intent.dedupeKey})
       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
       RETURNING id::text
     `;
@@ -161,9 +170,9 @@ export class NotificationService {
    */
   async deliverPending(notificationId: string): Promise<void> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ id: string; channel: NotificationChannel; attempts: number; user_id: string; title: string; body: string; data: Record<string, unknown> }>
+      Array<{ id: string; channel: NotificationChannel; attempts: number; user_id: string; type: string; title: string; body: string; data: Record<string, unknown> }>
     >`
-      SELECT d.id::text, d.channel::text AS channel, d.attempts, n.user_id::text, n.title, n.body, n.data
+      SELECT d.id::text, d.channel::text AS channel, d.attempts, n.user_id::text, n.type, n.title, n.body, n.data
       FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id
       WHERE d.notification_id = ${notificationId}::uuid AND d.status IN ('QUEUED', 'FAILED') AND d.attempts < ${MAX_DELIVERY_ATTEMPTS}
       ORDER BY d.channel
@@ -196,6 +205,7 @@ export class NotificationService {
     }
     const data: Record<string, string> = {};
     for (const [key, value] of Object.entries(row.data)) {
+      if (key === EMAIL_VARS_KEY) continue;
       if (value !== null && value !== undefined) data[key] = String(value);
     }
     let sent: string | undefined;
@@ -219,12 +229,21 @@ export class NotificationService {
     return { status: 'FAILED', error: lastError };
   }
 
-  private async sendEmail(row: { user_id: string; title: string; body: string }): Promise<DeliveryOutcome> {
-    const address = await this.verifiedEmail(row.user_id);
-    if (!address) {
+  private async sendEmail(row: { user_id: string; type: string; title: string; body: string; data: Record<string, unknown> }): Promise<DeliveryOutcome> {
+    const recipient = await this.emailRecipient(row.user_id);
+    if (!recipient) {
       return { status: 'SUPPRESSED', suppressedReason: 'NO_EMAIL' };
     }
-    const result = await this.email.send({ to: address, subject: row.title, text: row.body, html: `<p>${escapeHtml(row.body)}</p>` });
+    const stored = row.data[EMAIL_VARS_KEY];
+    const vars: Record<string, string> =
+      stored && typeof stored === 'object'
+        ? Object.fromEntries(Object.entries(stored as Record<string, unknown>).filter(([, value]) => typeof value === 'string')) as Record<string, string>
+        : {};
+    const message = renderEmail(
+      notificationEmail({ type: row.type, title: row.title, body: row.body, firstName: recipient.firstName, vars }, emailBrand()),
+      emailBrand(),
+    );
+    const result = await this.email.send({ to: recipient.address, subject: message.subject, text: message.text, html: message.html });
     return result.success ? { status: 'SENT', providerRef: result.messageId } : { status: 'FAILED', error: result.error ?? 'email failed' };
   }
 
@@ -253,10 +272,15 @@ export class NotificationService {
   }
 
   private async verifiedEmail(userId: string): Promise<string | null> {
-    const rows = await this.prisma.$queryRaw<Array<{ email: string | null; verified: boolean }>>`
-      SELECT email, (email_verified_at IS NOT NULL) AS verified FROM users WHERE id = ${userId}::uuid AND deleted_at IS NULL
+    return (await this.emailRecipient(userId))?.address ?? null;
+  }
+
+  /** The address to write to, and the first name to greet by. Null when there is no verified email. */
+  private async emailRecipient(userId: string): Promise<{ address: string; firstName: string | null } | null> {
+    const rows = await this.prisma.$queryRaw<Array<{ email: string | null; verified: boolean; first_name: string | null }>>`
+      SELECT email, (email_verified_at IS NOT NULL) AS verified, first_name FROM users WHERE id = ${userId}::uuid AND deleted_at IS NULL
     `;
-    return rows[0]?.email && rows[0].verified ? rows[0].email : null;
+    return rows[0]?.email && rows[0].verified ? { address: rows[0].email, firstName: rows[0].first_name } : null;
   }
 
   /** The user's own quiet hours, or the default. Marketplace push only (Backend PRD 19.2). */
@@ -294,9 +318,5 @@ interface DeliveryOutcome {
   providerRef?: string;
   error?: string;
   suppressedReason?: string;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 }
 

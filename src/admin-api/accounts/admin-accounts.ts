@@ -27,6 +27,9 @@ import { AdminActionDto } from '../../admin/framework/admin-reasons.js';
 import { ApprovalService } from '../../admin/framework/approval.service.js';
 import { AdminPager, likePattern } from '../common/admin-page.js';
 import { AnyObjectDto } from '../common/any-object.dto.js';
+import { renderEmail } from '../../notifications/email/email-layout.js';
+import { emailBrand } from '../../notifications/email/email-brand.js';
+import { adminInviteEmail } from '../../notifications/email/email-messages.js';
 
 const INVITE_HOURS = 72;
 const SUPER_ADMIN = 'SUPER_ADMIN';
@@ -158,13 +161,9 @@ export class AdminAccountsService {
     `;
     const base = this.appConfig.get<string>('ADMIN_APP_URL') ?? process.env.ADMIN_APP_URL ?? '';
     const link = base ? `${base.replace(/\/$/, '')}/accept-invite?token=${token}` : null;
+    const message = renderEmail(adminInviteEmail({ link, token, hours: INVITE_HOURS }), emailBrand());
     await this.email
-      .send({
-        to: email,
-        subject: 'You have been invited to the Urgent.ng admin console',
-        text: `Open the admin console and accept your invitation within ${INVITE_HOURS} hours.\n${link ?? `Invitation code: ${token}`}`,
-        html: `<p>Accept your invitation within ${INVITE_HOURS} hours.</p><p>${link ? `<a href="${link}">Accept the invitation</a>` : `Invitation code: <code>${token}</code>`}</p>`,
-      })
+      .send({ to: email, subject: message.subject, text: message.text, html: message.html })
       .catch(() => undefined);
     return { adminId: created[0].id, inviteToken: token, expiresAt: created[0].expires, emailed: true };
   }

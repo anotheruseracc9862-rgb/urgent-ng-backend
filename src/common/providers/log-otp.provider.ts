@@ -1,6 +1,10 @@
 import { Logger } from '@nestjs/common';
 import type { IOtpProvider, OtpDeliveryResult } from './otp.provider.js';
 import type { IEmailProvider } from './email.provider.js';
+import { renderEmail } from '../../notifications/email/email-layout.js';
+import { emailBrand } from '../../notifications/email/email-brand.js';
+import { otpEmail } from '../../notifications/email/email-messages.js';
+
 
 /**
  * One-time codes for an environment that has no SMS vendor yet (development only): the code is
@@ -25,12 +29,8 @@ export class LogOtpProvider implements IOtpProvider {
       this.logger.warn(`[no email vendor] one-time code for ${email}: ${code}`);
       return { success: true, messageId: `log-email-${Date.now()}` };
     }
-    const result = await this.email.send({
-      to: email,
-      subject: 'Your Urgent.ng code',
-      text: `Your Urgent.ng code is ${code}. Do not share it with anyone.`,
-      html: `<p>Your Urgent.ng code is <strong style="font-size:20px;letter-spacing:2px">${code}</strong>.</p><p>Do not share it with anyone.</p>`,
-    });
+    const message = renderEmail(otpEmail(code), emailBrand());
+    const result = await this.email.send({ to: email, subject: message.subject, text: message.text, html: message.html });
     return { success: result.success, messageId: result.messageId, error: result.error };
   }
 }

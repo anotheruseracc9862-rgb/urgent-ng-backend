@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Notification, NotificationCategory, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
+import { EMAIL_VARS_KEY } from './notification.service.js';
 import { CursorService } from '../common/pagination/cursor.service.js';
 import { Paginated } from '../common/pagination/paginated.js';
 import { DomainException } from '../common/exceptions/domain.exception.js';
@@ -13,10 +14,16 @@ const toDto = (row: Notification): NotificationDto => ({
   type: row.type,
   title: row.title,
   body: row.body,
-  data: row.data as Record<string, unknown>,
+  data: withoutEmailVars(row.data as Record<string, unknown>),
   readAt: row.readAt,
   createdAt: row.createdAt,
 });
+
+/** A notification's `data` as the app sees it: without the values an email is written from. */
+function withoutEmailVars(data: Record<string, unknown>): Record<string, unknown> {
+  const { [EMAIL_VARS_KEY]: _omitted, ...rest } = data;
+  return rest;
+}
 
 /** The signed-in user's own notification list. Nobody else's row is ever visible. */
 @Injectable()

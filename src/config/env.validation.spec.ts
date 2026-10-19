@@ -8,6 +8,8 @@ const valid = {
 
 const longSecret = 'x'.repeat(32);
 const productionSecrets = {
+  WEB_APP_URL: 'https://urgent.ng',
+  API_PUBLIC_URL: 'https://api.urgent.ng',
   JWT_SECRET: longSecret,
   JWT_REFRESH_SECRET: longSecret,
   DATA_ENCRYPTION_KEY: longSecret,

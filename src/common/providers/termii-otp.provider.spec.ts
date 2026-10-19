@@ -11,10 +11,10 @@ function setup(responses: Array<{ status?: number; json?: unknown; throws?: Erro
     if (next.throws) throw next.throws;
     return new Response(JSON.stringify(next.json ?? {}), { status: next.status ?? 200 });
   }) as unknown as typeof fetch;
-  const sent: Array<{ to: string; subject: string; text?: string }> = [];
+  const sent: Array<{ to: string; subject: string; text?: string; html?: string }> = [];
   const email: IEmailProvider = {
     send: async (e) => {
-      sent.push({ to: e.to, subject: e.subject, text: e.text });
+      sent.push({ to: e.to, subject: e.subject, text: e.text, html: e.html });
       return { success: true, messageId: 'e1' };
     },
     sendMultiple: async () => [],
@@ -41,8 +41,12 @@ describe('TermiiOtpProvider', () => {
   it('sends the email code through the email provider', async () => {
     const { otp, sent } = setup([]);
     expect(await otp.sendEmail('ada@example.com', '654321')).toMatchObject({ success: true });
-    expect(sent[0]).toMatchObject({ to: 'ada@example.com', subject: 'Your Urgent.ng code' });
+    expect(sent[0]).toMatchObject({ to: 'ada@example.com', subject: 'Your Urgent.ng code: 654 321' });
     expect(sent[0].text).toContain('654321');
+    // The designed email: the code in its box, the logo from this backend.
+    expect(sent[0].html as string).toContain('Your one-time code');
+    expect(sent[0].html as string).toContain('654321');
+    expect(sent[0].html as string).toContain('/assets/email/logo.png');
   });
 
   it('reports email as not configured when there is no email provider', async () => {
