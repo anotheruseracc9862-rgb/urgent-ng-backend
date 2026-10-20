@@ -180,13 +180,16 @@ export class ErrandQueryService {
           rating_avg: number | null;
           rating_count: number;
           completed: number;
+          is_pro: boolean;
         }>
       >`
         SELECT DISTINCT ON (a.errand_id)
                a.errand_id::text, a.id::text AS assignment_id, cv.id::text AS conversation_id,
                a.agreed_amount_minor AS amount, u.first_name, u.last_name, pr.photo_media_id::text AS photo,
                us.runner_rating_avg::float8 AS rating_avg, COALESCE(us.runner_rating_count, 0)::int AS rating_count,
-               COALESCE(us.completed_as_runner, 0)::int AS completed
+               COALESCE(us.completed_as_runner, 0)::int AS completed,
+               EXISTS (SELECT 1 FROM entitlements en WHERE en.user_id = u.id AND en.type = 'RUNNER_PRO'::"EntitlementType" AND en.revoked_at IS NULL
+                 AND en.valid_from <= clock_timestamp() AND (en.valid_until IS NULL OR en.valid_until > clock_timestamp())) AS is_pro
         FROM assignments a
         JOIN users u ON u.id = a.runner_id
         LEFT JOIN profiles pr ON pr.user_id = u.id AND pr.deleted_at IS NULL
@@ -241,6 +244,7 @@ export class ErrandQueryService {
               rating: assignment.rating_avg,
               ratingCount: assignment.rating_count,
               completedErrands: assignment.completed,
+              isPro: assignment.is_pro,
             }
           : null,
         agreedAmountMinor: assignment ? Number(assignment.amount) : null,

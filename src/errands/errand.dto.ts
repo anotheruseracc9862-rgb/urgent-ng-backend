@@ -395,6 +395,8 @@ export class ErrandRunnerSummaryDto {
   ratingCount!: number;
   @ApiProperty({ description: 'Errands this runner has completed.' })
   completedErrands!: number;
+  @ApiProperty({ description: 'The runner has an active Runner Pro entitlement right now.' })
+  isPro!: boolean;
 }
 
 export class ErrandSummaryDto {

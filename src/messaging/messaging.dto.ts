@@ -110,6 +110,8 @@ export class ConversationCounterpartDto {
   rating!: number | null;
   @ApiProperty()
   ratingCount!: number;
+  @ApiProperty({ description: 'The other person is a runner with an active Runner Pro entitlement right now.' })
+  isPro!: boolean;
 }
 
 export class ConversationDto {

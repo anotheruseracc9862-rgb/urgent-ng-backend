@@ -171,6 +171,7 @@ export class ConversationService {
         other_role: 'REQUESTER' | 'RUNNER';
         other_rating_avg: number | null;
         other_rating_count: number;
+        other_is_pro: boolean;
         last_preview: string | null;
         errand_status: string;
         pickup_area: string | null;
@@ -190,6 +191,8 @@ export class ConversationService {
              CASE WHEN c.requester_id = ${userId}::uuid THEN 'RUNNER' ELSE 'REQUESTER' END AS other_role,
              CASE WHEN c.requester_id = ${userId}::uuid THEN us.runner_rating_avg ELSE us.requester_rating_avg END::float8 AS other_rating_avg,
              COALESCE(CASE WHEN c.requester_id = ${userId}::uuid THEN us.runner_rating_count ELSE us.requester_rating_count END, 0)::int AS other_rating_count,
+             EXISTS (SELECT 1 FROM entitlements en WHERE en.user_id = o.id AND en.type = 'RUNNER_PRO'::"EntitlementType" AND en.revoked_at IS NULL
+                 AND en.valid_from <= clock_timestamp() AND (en.valid_until IS NULL OR en.valid_until > clock_timestamp())) AS other_is_pro,
              (SELECT CASE WHEN lm.type = 'IMAGE'::"MessageType" THEN 'Photo' ELSE left(COALESCE(lm.body, ''), 120) END
                 FROM messages lm
                WHERE lm.conversation_id = c.id AND lm.status <> 'REMOVED'::"MessageStatus" AND lm.deleted_at IS NULL
@@ -244,6 +247,7 @@ export class ConversationService {
           role: row.other_role,
           rating: row.other_rating_avg !== null && row.other_rating_count >= ratingMin ? Number(row.other_rating_avg) : null,
           ratingCount: row.other_rating_count,
+          isPro: row.other_is_pro,
         },
         lastMessagePreview: row.last_preview,
         errandStatus: row.errand_status,
