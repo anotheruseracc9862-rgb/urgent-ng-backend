@@ -228,6 +228,10 @@ describe('My account, blocking, devices and consent (HTTP)', () => {
       expect(marketing.every((p: { enabled: boolean }) => p.enabled === false)).toBe(true);
       const messaging = res.body.data.filter((p: { category: string }) => p.category === 'MESSAGING');
       expect(messaging.every((p: { enabled: boolean }) => p.enabled === true)).toBe(true);
+      // Push is on by default for new messages and for errands near the person.
+      for (const category of ['MESSAGING', 'MARKETPLACE']) {
+        expect(res.body.data.find((p: { category: string; channel: string }) => p.category === category && p.channel === 'PUSH').enabled).toBe(true);
+      }
     });
 
     it('saves changes and keeps them', async () => {
@@ -247,6 +251,25 @@ describe('My account, blocking, devices and consent (HTTP)', () => {
       expect(find('MARKETPLACE', 'EMAIL')).toBe(true);
       expect(find('MARKETING', 'EMAIL')).toBe(true);
       expect(await prisma.notificationPreference.count({ where: { userId: user.userId } })).toBe(2);
+    });
+
+    it('keeps transactional and safety notices on even if an old row says off, so the whole matrix can be saved back', async () => {
+      const user = await signedInUser(app);
+      await prisma.notificationPreference.createMany({
+        data: [
+          { userId: user.userId, category: 'SAFETY', channel: 'PUSH', enabled: false },
+          { userId: user.userId, category: 'TRANSACTIONAL', channel: 'EMAIL', enabled: false },
+        ],
+      });
+
+      const before = await get('/me/notification-preferences', user.accessToken).expect(200);
+      const find = (rows: Array<{ category: string; channel: string; enabled: boolean }>, category: string, channel: string) =>
+        rows.find((p) => p.category === category && p.channel === channel)!.enabled;
+      expect(find(before.body.data, 'SAFETY', 'PUSH')).toBe(true);
+      expect(find(before.body.data, 'TRANSACTIONAL', 'EMAIL')).toBe(true);
+
+      // The settings page echoes what it was given. That must be accepted.
+      await put('/me/notification-preferences', user.accessToken).send({ preferences: before.body.data }).expect(200);
     });
 
     it('does not let transactional or safety notices be switched off', async () => {

@@ -43,7 +43,11 @@ export class NotificationPreferenceService {
         matrix.push({
           category,
           channel,
-          enabled: byKey.get(`${category}:${channel}`) ?? category !== NotificationCategory.MARKETING,
+          // Account, payment and safety notices are always on, whatever an old row says. The settings
+          // page sends the whole matrix back, so a stale `false` here would make every save fail, and
+          // the notification engine reads this same matrix, so it would also mute notices that must
+          // reach the person.
+          enabled: ALWAYS_ON.includes(category) || (byKey.get(`${category}:${channel}`) ?? category !== NotificationCategory.MARKETING),
         });
       }
     }
