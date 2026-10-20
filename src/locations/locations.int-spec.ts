@@ -148,7 +148,9 @@ describe('Runner location (P9-07)', () => {
       await share(s.runner, s.assignmentId, { ...LAGOS, capturedAt: new Date(Date.now() + 3_600_000).toISOString() }).expect(200);
 
       const row = await prisma.locationRecord.findFirstOrThrow();
-      expect(row.capturedAt.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+      // The stored time is the server's, never the device's: it is not later than the database clock now.
+      const [{ now }] = await prisma.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+      expect(row.capturedAt.getTime()).toBeLessThanOrEqual(now.getTime() + 1000);
       await age(s.assignmentId, 60);
       const old = await share(s.runner, s.assignmentId, { lat: 6.6, lng: 3.5, capturedAt: new Date(Date.now() - 3_600_000).toISOString() });
       expect(old.status).toBe(400);

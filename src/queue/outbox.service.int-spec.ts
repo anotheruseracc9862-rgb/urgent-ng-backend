@@ -154,8 +154,10 @@ describe('OutboxService (Integration)', () => {
       const afterSecond = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
 
       expect(afterSecond.attempts).toBe(2);
-      const firstDelay = afterFirst.availableAt.getTime() - Date.now();
-      const secondDelay = afterSecond.availableAt.getTime() - Date.now();
+      // Measured on the database clock, the one the retry time is set and checked against.
+      const [{ now }] = await prisma.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+      const firstDelay = afterFirst.availableAt.getTime() - now.getTime();
+      const secondDelay = afterSecond.availableAt.getTime() - now.getTime();
       expect(firstDelay).toBeLessThanOrEqual(1000);
       expect(secondDelay).toBeGreaterThan(1000);
       expect(secondDelay).toBeLessThanOrEqual(2000);

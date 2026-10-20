@@ -126,7 +126,8 @@ describe('BaseSweeper (integration)', () => {
 
     it('should skip recent rows not yet due', async () => {
       const userId = '123e4567-e89b-12d3-a456-426614174000';
-      const createdAt = new Date(); // Just now
+      // Just now on the database clock, the one the sweeper's "due" cutoff is measured against.
+      const [{ now: createdAt }] = await prisma.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
 
       await prisma.idempotencyKey.create({
         data: {

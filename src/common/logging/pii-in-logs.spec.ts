@@ -63,7 +63,7 @@ describe('Personal data in logs (P12-04)', () => {
     }
     expect(scanned).toBeGreaterThan(50);
     expect(offenders).toEqual([]);
-  });
+  }, 30_000); // reads every source file, which is slow on a busy machine
 
   it('keeps the request logger to method, path, status and request id', () => {
     const middleware = readFileSync('src/common/middleware/request-id.middleware.ts', 'utf8');

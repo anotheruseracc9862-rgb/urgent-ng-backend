@@ -232,18 +232,19 @@ export class OutboxService implements OnModuleDestroy {
       return;
     }
 
-    // 1s, 2s, 4s ... capped at 5 minutes
+    // 1s, 2s, 4s ... capped at 5 minutes. The retry time comes from the database clock, the same
+    // clock the publisher compares it with (`available_at <= NOW()`), so a server whose clock is
+    // a little off retries on time instead of early or late.
     const backoffMs = Math.min(2 ** (attempts - 1) * 1000, 5 * 60 * 1000);
-    await this.prisma.outboxEvent.update({
-      where: { id: event.id },
-      data: {
-        status: OutboxStatus.FAILED,
-        attempts,
-        lastError: errorMessage,
-        availableAt: new Date(Date.now() + backoffMs),
-        processingStartedAt: null,
-      },
-    });
+    await this.prisma.$executeRaw`
+      UPDATE outbox_events
+      SET status = 'FAILED'::"OutboxStatus",
+          attempts = ${attempts},
+          last_error = ${errorMessage},
+          available_at = NOW() + make_interval(secs => ${backoffMs / 1000}::double precision),
+          processing_started_at = NULL
+      WHERE id = ${event.id}::uuid
+    `;
     this.logger.warn(
       `Event ${event.id} failed (attempt ${attempts}), retry in ${backoffMs}ms`,
     );
