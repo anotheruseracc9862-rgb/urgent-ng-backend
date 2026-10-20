@@ -78,10 +78,31 @@ export class AdminAuthService {
       throw DomainException.of(INVALID_CREDENTIALS);
     }
 
+    if (!this.mfaRequired()) {
+      // Temporary switch (ADMIN_MFA_REQUIRED=false): password alone completes the login. The TOTP
+      // flow below stays intact and returns as soon as the switch is removed.
+      return { status: 'AUTHENTICATED', ...(await this.completeLogin(admin.id, admin.email, ctx)) };
+    }
+
     return {
       status: admin.mfaEnabled ? 'MFA_REQUIRED' : 'MFA_ENROLMENT_REQUIRED',
       mfaToken: await this.sessions.signMfaToken(admin.id),
     };
+  }
+
+  /** MFA is on unless ADMIN_MFA_REQUIRED is explicitly "false". */
+  private mfaRequired(): boolean {
+    return this.config.get<string>('ADMIN_MFA_REQUIRED') !== 'false';
+  }
+
+  private async completeLogin(adminId: string, email: string, ctx: AdminRequestContext): Promise<{ admin: AdminView; tokens: AdminTokenPair }> {
+    await this.prisma.$executeRaw`
+      UPDATE admins SET failed_login_count = 0, first_failed_login_at = NULL, locked_until = NULL, last_login_at = now()
+      WHERE id = ${adminId}::uuid
+    `;
+    const tokens = await this.sessions.create(adminId, ctx);
+    await this.events.record({ event: 'LOGIN_SUCCESS', adminId, email, ctx });
+    return { admin: await this.admins.view(adminId), tokens };
   }
 
   /** First login: create (or re-issue) the TOTP secret. Refused once MFA is enabled. */
@@ -128,14 +149,7 @@ export class AdminAuthService {
       await this.prisma.$executeRaw`UPDATE admins SET mfa_enabled = true WHERE id = ${admin.id}::uuid`;
       await this.events.record({ event: 'MFA_ENROLLED', adminId: admin.id, email: admin.email, ctx });
     }
-    await this.prisma.$executeRaw`
-      UPDATE admins SET failed_login_count = 0, first_failed_login_at = NULL, locked_until = NULL, last_login_at = now()
-      WHERE id = ${admin.id}::uuid
-    `;
-
-    const tokens = await this.sessions.create(admin.id, ctx);
-    await this.events.record({ event: 'LOGIN_SUCCESS', adminId: admin.id, email: admin.email, ctx });
-    return { admin: await this.admins.view(admin.id), tokens };
+    return this.completeLogin(admin.id, admin.email, ctx);
   }
 
   async refresh(refreshToken: string, ctx: AdminRequestContext): Promise<AdminTokenPair> {

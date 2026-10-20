@@ -35,8 +35,16 @@ export class AdminAuthController {
   @RateLimit('auth')
   @ApiEnveloped(AR.AdminLoginStepDto)
   @ApiErrors(400, 401, 429)
-  login(@Body() dto: AdminLoginDto, @ReqCtx() ctx: AdminRequestContext) {
-    return this.auth.login(dto.email, dto.password, ctx);
+  async login(
+    @Body() dto: AdminLoginDto,
+    @ReqCtx() ctx: AdminRequestContext,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.auth.login(dto.email, dto.password, ctx);
+    if (result.status !== 'AUTHENTICATED') return result;
+    // Only when ADMIN_MFA_REQUIRED=false: the password alone starts the session.
+    setAdminCookies(res, result.tokens);
+    return { status: result.status, admin: result.admin, expiresIn: result.tokens.expiresIn, refreshToken: result.tokens.refreshToken, accessToken: result.tokens.accessToken };
   }
 
   /** First login: get the TOTP secret to put in an authenticator app. */
