@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { DomainException } from '../../common/exceptions/domain.exception.js';
@@ -21,6 +22,7 @@ export class AdminAuthGuard implements CanActivate {
   constructor(
     private readonly sessions: AdminSessionService,
     private readonly admins: AdminUserService,
+    private readonly config: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -33,7 +35,9 @@ export class AdminAuthGuard implements CanActivate {
     const payload = await this.sessions.verifyAccessToken(token);
 
     const admin = await this.admins.findById(payload.sub);
-    if (!admin || admin.status !== 'ACTIVE' || !admin.mfaEnabled) {
+    // ADMIN_MFA_REQUIRED=false is the temporary switch that lets an admin without TOTP in.
+    const mfaRequired = this.config.get<string>('ADMIN_MFA_REQUIRED') !== 'false';
+    if (!admin || admin.status !== 'ACTIVE' || (mfaRequired && !admin.mfaEnabled)) {
       throw DomainException.of(AUTH_REQUIRED);
     }
     if (!(await this.sessions.isFamilyActive(payload.sid, admin.id))) {
