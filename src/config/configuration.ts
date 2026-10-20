@@ -84,6 +84,28 @@ const isProduction = process.env.NODE_ENV === 'production';
 const devSecret = (name: string) =>
   isProduction ? '' : `development-only-${name}-not-for-production`;
 
+/** Where the local web and admin apps run when no address is configured. */
+const DEV_ORIGINS = ['http://localhost:4001', 'http://localhost:4002'];
+
+/**
+ * The browser origins allowed to call the API: the web app and the admin app, taken from their public
+ * addresses (WEB_APP_URL, ADMIN_APP_URL). Outside production the local apps are allowed as well, so
+ * development needs no setup.
+ */
+export function corsOriginsFrom(env: Record<string, string | undefined>): string[] {
+  const origins = new Set<string>();
+  for (const value of [env.WEB_APP_URL, env.ADMIN_APP_URL]) {
+    if (!value?.trim()) continue;
+    try {
+      origins.add(new URL(value.trim()).origin);
+    } catch {
+      // A malformed address is reported by the environment check in production; here it adds nothing.
+    }
+  }
+  if (env.NODE_ENV !== 'production') for (const origin of DEV_ORIGINS) origins.add(origin);
+  return [...origins];
+}
+
 export default (): AppConfig => {
   const jwtSecret = process.env.JWT_SECRET || devSecret('jwt-secret');
   return {
@@ -93,10 +115,7 @@ export default (): AppConfig => {
       : 'development',
   port: Number.parseInt(process.env.PORT ?? '4000', 10),
   trustProxyHops: Number.parseInt(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'), 10),
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:4001,http://localhost:4002')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean),
+  corsOrigins: corsOriginsFrom(process.env),
   database: {
     url: process.env.DATABASE_URL ?? '',
   },

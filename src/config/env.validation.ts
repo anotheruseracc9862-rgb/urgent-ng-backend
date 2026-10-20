@@ -56,13 +56,15 @@ export class EnvironmentVariables {
   })
   REDIS_URL: string = 'redis://localhost:6379';
 
-  @IsString()
-  CORS_ORIGINS: string = 'http://localhost:4001,http://localhost:4002';
-
   /** The public address of the web app. Links in emails start here. */
   @ValidateIf(isProduction)
   @Matches(/^https:\/\//, { message: 'WEB_APP_URL must be the public https address of the web app in production' })
   WEB_APP_URL?: string;
+
+  /** The public address of the admin app. Admin invitation links start here, and its origin may call the API. */
+  @ValidateIf((env: EnvironmentVariables) => isProduction(env) && Boolean(env.ADMIN_APP_URL))
+  @Matches(/^https:\/\//, { message: 'ADMIN_APP_URL must be the public https address of the admin app in production' })
+  ADMIN_APP_URL?: string;
 
   /** The public address of this backend. The email logo is served from it. */
   @ValidateIf(isProduction)
