@@ -17,6 +17,7 @@ describe('billing rules (Backend PRD 22)', () => {
   it('uses the account email, or a stable placeholder for a phone-only account', () => {
     expect(gatewayEmail({ id: 'u1', email: 'ada@example.com' })).toBe('ada@example.com');
     expect(gatewayEmail({ id: 'u1', email: null })).toBe('u1@pay.urgent.ng');
+    expect(gatewayEmail({ id: 'u1', email: 'runner@demo.urgent.test' })).toBe('u1@pay.urgent.ng');
   });
 
   it('starts a Pro period now, or extends the one still running', () => {

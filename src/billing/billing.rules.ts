@@ -25,9 +25,17 @@ export function paymentReference(orderId: string, random: string): string {
   return `UNG-${orderId.replace(/-/g, '').slice(-12)}-${random}`;
 }
 
-/** The email the gateway needs for a customer. A phone-only account gets a stable placeholder address. */
+/** Top-level domains reserved for tests and examples (RFC 2606 / 6761). The gateway refuses them as invalid. */
+const RESERVED_EMAIL_TLDS = new Set(['test', 'example', 'invalid', 'localhost']);
+
+/**
+ * The email the gateway needs for a customer. A phone-only account, or one whose address uses a
+ * reserved test domain (such as the local demo accounts), gets a stable placeholder address.
+ */
 export function gatewayEmail(user: { id: string; email: string | null }): string {
-  return user.email ?? `${user.id}@pay.urgent.ng`;
+  const tld = user.email?.split('@').pop()?.split('.').pop()?.toLowerCase();
+  if (user.email && tld && !RESERVED_EMAIL_TLDS.has(tld)) return user.email;
+  return `${user.id}@pay.urgent.ng`;
 }
 
 /** Runner Pro period arithmetic in whole days, on timestamps handed in by the caller. */
