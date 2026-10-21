@@ -282,7 +282,6 @@ export class ErrandService {
       if (locationChange[key] === 'SET' && places[key]) await this.locations.upsert(tx, places[key]);
       if (locationChange[key] === 'CLEAR') await this.locations.remove(tx, errandId, LOCATION_TYPE[key]);
     }
-    if (Object.keys(locationChange).length > 0) await this.locations.refreshFeedPoint(tx, errandId);
     if (dto.pickupContact !== undefined) await this.contacts.save(tx, errandId, 'pickup', dto.pickupContact);
     if (dto.dropoffContact !== undefined) await this.contacts.save(tx, errandId, 'dropoff', dto.dropoffContact);
     if (dto.photoMediaIds !== undefined) await this.photos.set(tx, userId, errandId, dto.photoMediaIds);
@@ -295,7 +294,12 @@ export class ErrandService {
       if (scheduleChanged) {
         await this.recomputeExpiry(tx, errandId, before.extendedAt ?? before.publishedAt ?? now);
       }
-    } else if (changed.includes('title') || changed.includes('description') || changed.includes('instructions')) {
+    }
+    // After the completeness check, not before: an open errand must always have a feed point, so
+    // refreshing it while a place is missing would fail in the database (a 500) before the person
+    // is told, clearly, what to add. A refused edit rolls back with everything above it.
+    if (Object.keys(locationChange).length > 0) await this.locations.refreshFeedPoint(tx, errandId);
+    if (status === 'DRAFT' && (changed.includes('title') || changed.includes('description') || changed.includes('instructions'))) {
       // A draft may be incomplete, but a clearly prohibited item is refused as soon as it is typed.
       const after = await this.view.findWithCategory(tx, errandId);
       await this.validator.assertNoProhibitedText(after.title, after.description, after.instructions);
