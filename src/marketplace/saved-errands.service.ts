@@ -8,6 +8,7 @@ import { RESOURCE_NOT_FOUND } from '../common/constants/error-codes.js';
 import { RunnerEligibilityService } from '../runner/runner-eligibility.service.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { FEED_COLUMNS, FEED_JOINS, openErrandVisibleTo, toFeedItem, type FeedRow } from './marketplace-feed.service.js';
+import { attachMyOffers } from './my-offers.js';
 import type { SavedErrandItemDto } from './marketplace.dto.js';
 import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 
@@ -93,8 +94,10 @@ export class SavedErrandsService {
     const page = hasNextPage ? rows.slice(0, limit) : rows;
     const last = page[page.length - 1];
     const ratingMin = await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE');
+    const items = page.map((row) => ({ ...toFeedItem(row, false, ratingMin), status: row.status, savedAt: row.saved_at }));
+    await attachMyOffers(this.prisma, userId, items);
     return new Paginated(
-      page.map((row) => ({ ...toFeedItem(row, false, ratingMin), status: row.status, savedAt: row.saved_at })),
+      items,
       {
         hasNextPage,
         ...(hasNextPage && last

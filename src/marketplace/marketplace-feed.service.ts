@@ -12,6 +12,7 @@ import { FEED_BOOST_SOURCE, type FeedBoostSource } from './feed-boost.hook.js';
 import { FeedRateLimiter } from './feed-rate-limiter.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
 import { RiskFlagService } from '../risk/risk-flag.service.js';
+import { attachMyOffers } from './my-offers.js';
 import { errandGeographySql, runnerCoverageSql } from '../geography/geography.service.js';
 import type { FeedItemDto, FeedQueryDto, FeedSort, MapPointDto, MapQueryDto, MarketplaceErrandDto, MarketplaceFilterDto } from './marketplace.dto.js';
 
@@ -99,6 +100,7 @@ export function toFeedItem(row: FeedRow, boosted = false, ratingMinCount = 3): F
     offerCount: row.offer_count,
     boosted,
     saved: row.saved,
+    myOffer: null,
   } as FeedItemDto;
 }
 
@@ -159,8 +161,10 @@ export class MarketplaceFeedService {
     // The size of the whole result, so the app can say "See all 42". Only the first page asks.
     const total = cursor ? undefined : await this.countVisible(userId, query);
 
+    const items = [...pinned.map((row) => toFeedItem(row, true, ratingMin)), ...page.map((row) => toFeedItem(row, false, ratingMin))];
+    await attachMyOffers(this.prisma, userId, items);
     return new Paginated(
-      [...pinned.map((row) => toFeedItem(row, true, ratingMin)), ...page.map((row) => toFeedItem(row, false, ratingMin))],
+      items,
       {
         hasNextPage,
         ...(total === undefined ? {} : { total }),
@@ -272,6 +276,7 @@ export class MarketplaceFeedService {
     const base = toFeedItem(row, (await this.boosts.activeBoostedErrandIds()).includes(row.id), await this.config.get('RATING_MIN_COUNT_FOR_AVERAGE'));
     const point = (lat: number | null, lng: number | null, place: { area: string; lga: string | null; state: string | null } | null) =>
       place && lat !== null && lng !== null ? { ...place, approx: { lat, lng } } : null;
+    await attachMyOffers(this.prisma, userId, [base]);
     return {
       ...base,
       instructions: row.instructions,

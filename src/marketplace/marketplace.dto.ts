@@ -120,6 +120,17 @@ export class RequesterSummaryDto {
   badges!: string[];
 }
 
+/** The viewer's own live offer on an errand, so a card can say "Offer sent" without opening it. */
+export class MyOfferDto {
+  id!: string;
+  amountMinor!: number;
+  durationMinutes!: number;
+  @ApiProperty({ enum: ['RUNNER', 'REQUESTER', 'NONE'], description: 'Whose move it is. RUNNER: a counter came in and the runner is next.' })
+  awaitingParty!: 'RUNNER' | 'REQUESTER' | 'NONE';
+  @ApiProperty({ description: 'The errand changed and the runner must confirm the offer still stands.' })
+  needsReconfirmation!: boolean;
+}
+
 /** One entry of the feed. Never carries an exact address, coordinates or a contact (Backend PRD 12.2). */
 export class FeedItemDto {
   id!: string;
@@ -150,6 +161,8 @@ export class FeedItemDto {
   /** A boosted errand is pinned above the normal results (Backend PRD 12.4). */
   boosted!: boolean;
   saved!: boolean;
+  @ApiProperty({ type: MyOfferDto, nullable: true, description: 'The viewer\'s own active offer on this errand, or null.' })
+  myOffer!: MyOfferDto | null;
 }
 
 export class MapPointDto {

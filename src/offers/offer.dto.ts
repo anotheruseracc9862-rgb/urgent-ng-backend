@@ -115,7 +115,7 @@ export class NegotiationEventDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty({ enum: ['INITIAL_OFFER', 'COUNTER_OFFER', 'ACCEPT', 'REJECT', 'WITHDRAW', 'SYSTEM_EVENT'] })
+  @ApiProperty({ enum: ['INITIAL_OFFER', 'COUNTER_OFFER', 'OFFER_EDIT', 'ACCEPT', 'REJECT', 'WITHDRAW', 'SYSTEM_EVENT'] })
   type!: string;
 
   @ApiProperty()

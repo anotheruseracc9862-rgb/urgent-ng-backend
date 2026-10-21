@@ -694,7 +694,7 @@ export class OfferService {
         version: { increment: 1 },
       },
     });
-    await this.recordEvent(tx, updated, actorId, 'COUNTER_OFFER', updated.version, {
+    await this.recordEvent(tx, updated, actorId, countsAsRound ? 'COUNTER_OFFER' : 'OFFER_EDIT', updated.version, {
       amountMinor: input.amountMinor,
       durationMinutes: input.durationMinutes,
       message: input.message,

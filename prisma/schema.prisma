@@ -118,6 +118,8 @@ enum OfferAwaitingParty {
 enum NegotiationMessageType {
   INITIAL_OFFER
   COUNTER_OFFER
+  /// The runner changed their own offer while it waited on the requester. Not a counter: no round is used.
+  OFFER_EDIT
   ACCEPT
   REJECT
   WITHDRAW
