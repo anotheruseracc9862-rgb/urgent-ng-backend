@@ -140,7 +140,7 @@ describe('Negotiation (P6-05)', () => {
     expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 })).status).toBe(409);
   });
 
-  it('a withdrawn offer is recorded, still counts for the day, and cannot be revived', async () => {
+  it('a withdrawn offer is recorded, still counts for the day, cannot be revived and cannot be made again', async () => {
     const { runner, requester, errandId, offer } = await setup();
 
     const res = await offerAction(app, runner, 'post', offer.id, 'withdraw').expect(200);
@@ -152,9 +152,9 @@ describe('Negotiation (P6-05)', () => {
     expect((await events(offer.id)).at(-1)?.type).toBe('WITHDRAW');
     expect((await offerAction(app, requester, 'post', offer.id, 'counter', { amountMinor: 40_000, durationMinutes: 30 })).status).toBe(409);
     expect((await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0)).toBe(1);
-    // resubmitting works but is a second counted offer
-    await submitOffer(app, runner, errandId).expect(201);
-    expect((await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0)).toBe(2);
+    // one offer per runner per errand: a new one is refused, and the refusal costs nothing
+    await submitOffer(app, runner, errandId).expect(403);
+    expect((await prisma.offerDailyCounter.findMany({ where: { userId: runner.userId } })).reduce((n, c) => n + c.count, 0)).toBe(1);
   });
 
   it('answers a stranger exactly like a missing offer', async () => {

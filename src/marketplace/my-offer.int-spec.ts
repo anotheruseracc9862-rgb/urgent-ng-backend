@@ -42,7 +42,7 @@ describe('My offer on the marketplace', () => {
     const scene = await offerScene(app, categoryId);
 
     const item = (await feed(scene.runner)).find((candidate) => candidate.id === scene.errandId);
-    expect(item?.myOffer).toEqual({ id: scene.offerId, amountMinor: 50_000, durationMinutes: 30, awaitingParty: 'REQUESTER', needsReconfirmation: false });
+    expect(item?.myOffer).toEqual({ id: scene.offerId, status: 'ACTIVE', amountMinor: 50_000, durationMinutes: 30, awaitingParty: 'REQUESTER', needsReconfirmation: false });
     expect((await detail(scene.runner, scene.errandId)).myOffer).toMatchObject({ id: scene.offerId, awaitingParty: 'REQUESTER' });
   });
 
@@ -64,12 +64,14 @@ describe('My offer on the marketplace', () => {
     expect(item?.myOffer).toMatchObject({ amountMinor: 40_000, awaitingParty: 'RUNNER' });
   });
 
-  it('stops showing an offer once it is withdrawn', async () => {
-    const scene = await offerScene(app, categoryId);
-    await offerAction(app, scene.runner, 'post', scene.offerId, 'withdraw').expect(200);
+  it('keeps showing an ended offer, with its state, because a second one would be refused', async () => {
+    const withdrawn = await offerScene(app, categoryId);
+    await offerAction(app, withdrawn.runner, 'post', withdrawn.offerId, 'withdraw').expect(200);
+    expect((await feed(withdrawn.runner)).find((candidate) => candidate.id === withdrawn.errandId)?.myOffer).toMatchObject({ id: withdrawn.offerId, status: 'WITHDRAWN' });
+    expect((await detail(withdrawn.runner, withdrawn.errandId)).myOffer).toMatchObject({ status: 'WITHDRAWN' });
 
-    const item = (await feed(scene.runner)).find((candidate) => candidate.id === scene.errandId);
-    expect(item?.myOffer ?? null).toBeNull();
-    expect((await detail(scene.runner, scene.errandId)).myOffer).toBeNull();
+    const declined = await offerScene(app, categoryId);
+    await offerAction(app, declined.requester, 'post', declined.offerId, 'reject').expect(200);
+    expect((await feed(declined.runner)).find((candidate) => candidate.id === declined.errandId)?.myOffer).toMatchObject({ status: 'REJECTED' });
   });
 });

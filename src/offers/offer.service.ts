@@ -112,6 +112,7 @@ export class OfferService {
     // Everything that needs the pool is read before the transaction: parallel submits hold every
     // connection while they wait on the counter lock, and must not need another one.
     const maxOpenOffers = await this.config.get('MAX_OPEN_OFFERS_PER_RUNNER');
+    const maxPerErrand = await this.config.get('MAX_OFFER_PER_RUNNER_PER_ERRAND');
     const allowance = await this.entitlement.offerAllowance(runnerId);
     const interstateEnabled = await this.config.get('INTERSTATE_ERRANDS_ENABLED');
 
@@ -156,6 +157,29 @@ export class OfferService {
         `);
         if (covered.length === 0) {
           throw DomainException.of(OFFER_NOT_ELIGIBLE, { details: { reasons: ['OUTSIDE_OPERATING_AREA'] } });
+        }
+
+        // One offer per runner per errand, for good. A requester who declined is not asked again, a runner
+        // cannot withdraw and start over to get a fresh set of counter-offers, and the live offer is edited,
+        // not repeated. (An earlier offer of any state counts.)
+        const earlier = await tx.offer.findMany({
+          where: { errandId, runnerId, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+          select: { status: true },
+        });
+        if (earlier.length > 0) {
+          if (earlier.some((offer) => offer.status === 'ACTIVE')) {
+            throw DomainException.of(OFFER_ALREADY_EXISTS, { details: { errandId, runnerId } });
+          }
+          if (earlier.length >= maxPerErrand) {
+            const reason = earlier[0].status === 'REJECTED' ? 'PREVIOUS_OFFER_DECLINED' : 'PREVIOUS_OFFER_ENDED';
+            throw DomainException.of(OFFER_NOT_ELIGIBLE, {
+              message: reason === 'PREVIOUS_OFFER_DECLINED'
+                ? 'The requester declined your offer on this errand.'
+                : 'You already made an offer on this errand. Only one offer is allowed.',
+              details: { reasons: [reason], previousStatus: earlier[0].status },
+            });
+          }
         }
 
         // Locks the runner's daily counter row: from here on this runner's submits are serial.

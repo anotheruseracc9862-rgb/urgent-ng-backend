@@ -120,9 +120,11 @@ export class RequesterSummaryDto {
   badges!: string[];
 }
 
-/** The viewer's own live offer on an errand, so a card can say "Offer sent" without opening it. */
+/** The viewer's own offer on an errand, so a card can say "Offer sent" (or "Offer declined") without opening it. */
 export class MyOfferDto {
   id!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'WITHDRAWN', 'REJECTED', 'SELECTED', 'EXPIRED', 'CLOSED'], description: 'An ended offer is shown too: one offer per errand is allowed, so the card must not offer another.' })
+  status!: 'ACTIVE' | 'WITHDRAWN' | 'REJECTED' | 'SELECTED' | 'EXPIRED' | 'CLOSED';
   amountMinor!: number;
   durationMinutes!: number;
   @ApiProperty({ enum: ['RUNNER', 'REQUESTER', 'NONE'], description: 'Whose move it is. RUNNER: a counter came in and the runner is next.' })
@@ -161,7 +163,7 @@ export class FeedItemDto {
   /** A boosted errand is pinned above the normal results (Backend PRD 12.4). */
   boosted!: boolean;
   saved!: boolean;
-  @ApiProperty({ type: MyOfferDto, nullable: true, description: 'The viewer\'s own active offer on this errand, or null.' })
+  @ApiProperty({ type: MyOfferDto, nullable: true, description: 'The viewer\'s own offer on this errand (the latest, whatever its state), or null.' })
   myOffer!: MyOfferDto | null;
 }
 
