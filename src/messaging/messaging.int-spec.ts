@@ -22,7 +22,7 @@ describe('Messaging (P8-01)', () => {
   let app: INestApplication;
   const prisma = getTestPrisma();
   let categoryId: string;
-  let carWashId: string;
+  let serviceId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -32,7 +32,7 @@ describe('Messaging (P8-01)', () => {
     await seedPolicies();
     const categories = await seedCategories();
     categoryId = categories.delivery;
-    carWashId = categories.car_wash;
+    serviceId = categories.home_cleaning;
   });
   afterAll(async () => {
     await app.close();
@@ -64,7 +64,7 @@ describe('Messaging (P8-01)', () => {
       const delivery = await acceptedScene(app, categoryId);
       expect((await conversationOf(delivery.requester))[0]).toMatchObject({ categoryFlow: 'TRANSIT', pickupArea: expect.any(String) });
 
-      const service = await acceptedScene(app, carWashId, { locationType: 'ERRAND_DESTINATION' });
+      const service = await acceptedScene(app, serviceId, { locationType: 'ERRAND_DESTINATION' });
       const [row] = await conversationOf(service.requester);
       expect(row).toMatchObject({ categoryFlow: 'SERVICE', pickupArea: null, destinationArea: expect.any(String) });
     });

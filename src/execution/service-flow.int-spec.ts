@@ -34,7 +34,7 @@ describe('Service flow', () => {
   });
 
   const serviceDraft = (extra: Record<string, unknown> = {}) => {
-    const { pickup: _pickup, ...rest } = draftBody(ids.car_wash, { title: 'Wash my car', description: 'Full exterior wash at my house', ...extra });
+    const { pickup: _pickup, ...rest } = draftBody(ids.home_cleaning, { title: 'Clean my flat', description: 'Deep clean of a two-bedroom flat', ...extra });
     return rest;
   };
 
@@ -42,19 +42,19 @@ describe('Service flow', () => {
     it('shows the flow in the public category list', async () => {
       const res = await request(app.getHttpServer()).get(`${API}/reference/categories`).expect(200);
       const flows = Object.fromEntries(res.body.data.map((c: { key: string; flow: string }) => [c.key, c.flow]));
-      expect(flows).toMatchObject({ delivery: 'TRANSIT', car_wash: 'SERVICE' });
+      expect(flows).toMatchObject({ delivery: 'TRANSIT', home_cleaning: 'SERVICE' });
     });
 
     it('creates and publishes with one address, and the errand reports its flow', async () => {
       const user = await signedInUser(app);
       const draft = await createDraft(app, user, serviceDraft()).expect(201);
-      expect(draft.body.data.category).toMatchObject({ key: 'car_wash', flow: 'SERVICE' });
+      expect(draft.body.data.category).toMatchObject({ key: 'home_cleaning', flow: 'SERVICE' });
       await publishErrand(app, user, draft.body.data.id).expect(201);
     });
 
     it('refuses a pickup on a service, on create and on update', async () => {
       const user = await signedInUser(app);
-      const withPickup = draftBody(ids.car_wash, { title: 'Wash my car', description: 'Full exterior wash at my house' });
+      const withPickup = draftBody(ids.home_cleaning, { title: 'Clean my flat', description: 'Deep clean of a two-bedroom flat' });
       const refused = await createDraft(app, user, withPickup).expect(400);
       expect(refused.body.error.details).toMatchObject({ field: 'pickup' });
 
@@ -78,7 +78,7 @@ describe('Service flow', () => {
 
   describe('doing the work', () => {
     it('start, begin with a before photo, finish with an after photo, then complete', async () => {
-      const s = await acceptedScene(app, ids.car_wash, { locationType: 'ERRAND_DESTINATION' });
+      const s = await acceptedScene(app, ids.home_cleaning, { locationType: 'ERRAND_DESTINATION' });
 
       await executionStep(app, s.runner, s.assignmentId, 'start').expect(201);
 

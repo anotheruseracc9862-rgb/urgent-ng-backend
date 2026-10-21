@@ -16,7 +16,7 @@ export async function seedCategories(): Promise<Record<string, string>> {
     ['shopping_purchase', 'Shopping & Purchase', false, true, false, 'TRANSIT'],
     ['document', 'Document', true, true, false, 'TRANSIT'],
     ['other', 'Other', true, false, false, 'TRANSIT'],
-    ['car_wash', 'Car Wash', false, true, false, 'SERVICE'],
+    ['home_cleaning', 'Home Cleaning', false, true, false, 'SERVICE'],
   ];
   const ids: Record<string, string> = {};
   for (const [index, [key, name, pickup, destination, popular, flow]] of rows.entries()) {

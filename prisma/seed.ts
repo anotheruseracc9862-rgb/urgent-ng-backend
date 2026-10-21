@@ -85,10 +85,8 @@ async function seedCategories(): Promise<void> {
     { key: 'shopping_purchase', name: 'Shopping & Purchase', flow: 'TRANSIT', pickup: false, destination: true, popular: true },
     { key: 'other', name: 'Other errand', flow: 'TRANSIT', pickup: true, destination: false, popular: false },
     { key: 'home_cleaning', name: 'Home Cleaning', flow: 'SERVICE', pickup: false, destination: true, popular: true },
-    { key: 'car_wash', name: 'Car Wash', flow: 'SERVICE', pickup: false, destination: true, popular: true },
     { key: 'plumbing', name: 'Plumbing', flow: 'SERVICE', pickup: false, destination: true, popular: false },
-    { key: 'electrical', name: 'Electrical & Generator', flow: 'SERVICE', pickup: false, destination: true, popular: false },
-    { key: 'childcare', name: 'Childcare', flow: 'SERVICE', pickup: false, destination: true, popular: false },
+    { key: 'electrical', name: 'Electrical', flow: 'SERVICE', pickup: false, destination: true, popular: false },
     { key: 'other_service', name: 'Other service', flow: 'SERVICE', pickup: false, destination: true, popular: false },
   ];
 

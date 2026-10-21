@@ -22,7 +22,7 @@ describe('Trusted contact (P9-06)', () => {
   let app: INestApplication;
   const prisma = getTestPrisma();
   let categoryId: string;
-  let carWashId: string;
+  let serviceId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -32,7 +32,7 @@ describe('Trusted contact (P9-06)', () => {
     await seedPolicies();
     const categories = await seedCategories();
     categoryId = categories.delivery;
-    carWashId = categories.car_wash;
+    serviceId = categories.home_cleaning;
   });
   afterAll(async () => {
     await app.close();
@@ -227,12 +227,12 @@ describe('Trusted contact (P9-06)', () => {
 
   describe('a service', () => {
     it('reports its flow and has one area, the destination, and no pickup', async () => {
-      const s = await acceptedScene(app, carWashId, { locationType: 'ERRAND_DESTINATION' });
+      const s = await acceptedScene(app, serviceId, { locationType: 'ERRAND_DESTINATION' });
       const { token } = (await make(s.requester, s.errandId).expect(201)).body.data;
 
       const data = (await view(token).expect(200)).body.data;
 
-      expect(data).toMatchObject({ category: 'Car Wash', categoryFlow: 'SERVICE', pickup: null });
+      expect(data).toMatchObject({ category: 'Home Cleaning', categoryFlow: 'SERVICE', pickup: null });
       expect(data.destination).toMatchObject({ area: expect.any(String) });
     });
   });
