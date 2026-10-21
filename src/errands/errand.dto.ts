@@ -264,6 +264,8 @@ export class CategoryRefDto {
   id!: string;
   key!: string;
   name!: string;
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'] })
+  flow!: 'TRANSIT' | 'SERVICE';
 }
 
 export class PublicLocationDto {

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min, MinLength } from 'class-validator';
+import { CategoryRefDto } from '../errands/errand.dto.js';
 
 export class SelectRunnerDto {
   @ApiProperty({ description: 'The offer to select.' })
@@ -38,8 +39,8 @@ export class AssignedErrandDto {
   @ApiProperty()
   version!: number;
 
-  @ApiProperty({ type: Object })
-  category!: { id: string; key: string; name: string };
+  @ApiProperty({ type: CategoryRefDto })
+  category!: CategoryRefDto;
 
   @ApiProperty()
   title!: string;

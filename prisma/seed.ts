@@ -78,18 +78,24 @@ async function seedAdminRoles(): Promise<void> {
 }
 
 async function seedCategories(): Promise<void> {
+  // TRANSIT moves something between places. SERVICE is work done at one address, stored as the destination.
   const categories = [
-    { key: 'delivery', name: 'Delivery', pickup: true, destination: true, popular: true },
-    { key: 'pickup', name: 'Pickup', pickup: true, destination: false, popular: true },
-    { key: 'shopping_purchase', name: 'Shopping & Purchase', pickup: false, destination: true, popular: true },
-    { key: 'document', name: 'Document', pickup: true, destination: true, popular: false },
-    { key: 'other', name: 'Other', pickup: true, destination: false, popular: false },
+    { key: 'delivery', name: 'Delivery', flow: 'TRANSIT', pickup: true, destination: true, popular: true },
+    { key: 'pickup', name: 'Pickup', flow: 'TRANSIT', pickup: true, destination: false, popular: true },
+    { key: 'shopping_purchase', name: 'Shopping & Purchase', flow: 'TRANSIT', pickup: false, destination: true, popular: true },
+    { key: 'other', name: 'Other errand', flow: 'TRANSIT', pickup: true, destination: false, popular: false },
+    { key: 'home_cleaning', name: 'Home Cleaning', flow: 'SERVICE', pickup: false, destination: true, popular: true },
+    { key: 'car_wash', name: 'Car Wash', flow: 'SERVICE', pickup: false, destination: true, popular: true },
+    { key: 'plumbing', name: 'Plumbing', flow: 'SERVICE', pickup: false, destination: true, popular: false },
+    { key: 'electrical', name: 'Electrical & Generator', flow: 'SERVICE', pickup: false, destination: true, popular: false },
+    { key: 'childcare', name: 'Childcare', flow: 'SERVICE', pickup: false, destination: true, popular: false },
+    { key: 'other_service', name: 'Other service', flow: 'SERVICE', pickup: false, destination: true, popular: false },
   ];
 
   for (const [index, category] of categories.entries()) {
     await prisma.$executeRaw`
-      INSERT INTO categories (key, name, requires_pickup, requires_destination, sort_order, is_popular, updated_at)
-      VALUES (${category.key}, ${category.name}, ${category.pickup}, ${category.destination}, ${index}, ${category.popular}, now())
+      INSERT INTO categories (key, name, flow, requires_pickup, requires_destination, sort_order, is_popular, updated_at)
+      VALUES (${category.key}, ${category.name}, ${category.flow}::"CategoryFlow", ${category.pickup}, ${category.destination}, ${index}, ${category.popular}, now())
       ON CONFLICT (key) DO NOTHING
     `;
   }

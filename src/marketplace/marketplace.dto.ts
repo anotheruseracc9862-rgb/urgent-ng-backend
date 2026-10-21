@@ -103,6 +103,8 @@ export class DistanceBucketDto {
 export class FeedCategoryDto {
   key!: string;
   name!: string;
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'] })
+  flow!: 'TRANSIT' | 'SERVICE';
 }
 
 export class RequesterSummaryDto {

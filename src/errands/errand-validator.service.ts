@@ -92,6 +92,7 @@ export class ErrandValidatorService {
     const has = (type: string) => locations.some((location) => location.type === type);
     if (errand.category.requiresPickup && !has('ERRAND_PICKUP')) missing('pickup');
     if (errand.category.requiresDestination && !has('ERRAND_DESTINATION')) missing('destination');
+    if (errand.category.flow === 'SERVICE' && has('ERRAND_PICKUP')) problems.push({ field: 'pickup', code: 'NOT_ALLOWED' });
     if (locations.length === 0 && !problems.some((problem) => problem.field === 'pickup' || problem.field === 'destination')) {
       missing('pickup');
     }

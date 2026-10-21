@@ -46,7 +46,7 @@ export class RunnerAssignmentsService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       include: {
-        errand: { select: { title: true, status: true, locations: { where: { deletedAt: null }, select: { type: true, area: true } } } },
+        errand: { select: { title: true, status: true, category: { select: { flow: true } }, locations: { where: { deletedAt: null }, select: { type: true, area: true } } } },
         requester: { select: { firstName: true } },
       },
     });
@@ -74,6 +74,7 @@ export class RunnerAssignmentsService {
         acceptedAt: row.acceptedAt,
         pickupArea: row.errand.locations.find((l) => l.type === 'ERRAND_PICKUP')?.area ?? null,
         destinationArea: row.errand.locations.find((l) => l.type === 'ERRAND_DESTINATION')?.area ?? null,
+        categoryFlow: row.errand.category.flow,
         selectedAt: row.selectedAt,
         requesterFirstName: row.requester.firstName,
         conversationId: conversationByOffer.get(row.selectedOfferId) ?? null,

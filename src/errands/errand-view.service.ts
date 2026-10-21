@@ -20,7 +20,7 @@ export interface RunnerErrandView {
   id: string;
   status: Errand['status'];
   version: number;
-  category: { id: string; key: string; name: string };
+  category: { id: string; key: string; name: string; flow: Category['flow'] };
   title: string;
   description: string;
   instructions: string | null;
@@ -83,7 +83,7 @@ export class ErrandViewService {
       id: errand.id,
       status: errand.status,
       version: errand.version,
-      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name },
+      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name, flow: errand.category.flow },
       title: errand.title,
       description: errand.description,
       instructions: errand.instructions,
@@ -127,7 +127,7 @@ export class ErrandViewService {
       id: errand.id,
       status: errand.status,
       version: errand.version,
-      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name },
+      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name, flow: errand.category.flow },
       title: errand.title,
       description: errand.description,
       instructions: errand.instructions,

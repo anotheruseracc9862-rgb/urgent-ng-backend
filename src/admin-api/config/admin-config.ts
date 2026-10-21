@@ -88,12 +88,17 @@ export class SetPriceDto extends AdminActionDto {
   @ApiPropertyOptional({ maxLength: 300 }) @IsOptional() @IsString() @MaxLength(300) notes?: string;
 }
 
+export const CATEGORY_FLOWS = ['TRANSIT', 'SERVICE'] as const;
+type CategoryFlowName = (typeof CATEGORY_FLOWS)[number];
+
 export class AdminCategoryDto {
   @ApiProperty() id!: string;
   @ApiProperty() key!: string;
   @ApiProperty() name!: string;
   @ApiProperty() requiresPickup!: boolean;
   @ApiProperty() requiresDestination!: boolean;
+  @ApiProperty({ enum: CATEGORY_FLOWS, description: 'TRANSIT moves something between places. SERVICE is work done at one address.' })
+  flow!: CategoryFlowName;
   @ApiProperty() isPopular!: boolean;
   @ApiProperty() active!: boolean;
   @ApiProperty() sortOrder!: number;
@@ -103,14 +108,18 @@ export class CreateCategoryDto extends AdminActionDto {
   @ApiProperty({ description: 'A stable key: lower-case letters, digits and underscores.' })
   @IsString() @MinLength(2) @MaxLength(50) key!: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name!: string;
-  @ApiProperty() @IsBoolean() requiresPickup!: boolean;
-  @ApiProperty() @IsBoolean() requiresDestination!: boolean;
+  @ApiPropertyOptional({ enum: CATEGORY_FLOWS, default: 'TRANSIT', description: 'SERVICE ignores the two booleans: one address, stored as the destination.' })
+  @IsOptional() @IsIn(CATEGORY_FLOWS as unknown as string[]) flow?: CategoryFlowName;
+  @ApiPropertyOptional({ description: 'Required for TRANSIT.' }) @IsOptional() @IsBoolean() requiresPickup?: boolean;
+  @ApiPropertyOptional({ description: 'Required for TRANSIT.' }) @IsOptional() @IsBoolean() requiresDestination?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPopular?: boolean;
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(1000) sortOrder?: number;
 }
 
 export class UpdateCategoryDto extends AdminActionDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(2) @MaxLength(80) name?: string;
+  @ApiPropertyOptional({ enum: CATEGORY_FLOWS, description: 'Cannot change once an errand uses the category.' })
+  @IsOptional() @IsIn(CATEGORY_FLOWS as unknown as string[]) flow?: CategoryFlowName;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() requiresPickup?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() requiresDestination?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPopular?: boolean;
@@ -159,6 +168,27 @@ export class SetTemplateDto extends AdminActionDto {
 // ---- Service ----
 
 const placeholdersOf = (text: string): string[] => [...text.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((m) => m[1]);
+
+type CategoryRow = { id: string; key: string; name: string; flow: CategoryFlowName; requiresPickup: boolean; requiresDestination: boolean; isPopular: boolean; active: boolean; sortOrder: number };
+
+function toAdminCategory(c: CategoryRow): AdminCategoryDto {
+  return {
+    id: c.id, key: c.key, name: c.name, flow: c.flow, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination,
+    isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder,
+  };
+}
+
+/** A service is done at one address, stored as the destination. A transit category needs a pickup, a destination, or both. */
+function categoryShape(flow: CategoryFlowName, pickup?: boolean, destination?: boolean): { pickup: boolean; destination: boolean } {
+  if (flow === 'SERVICE') return { pickup: false, destination: true };
+  if (pickup === undefined || destination === undefined) {
+    throw DomainException.of(VALIDATION_ERROR, { message: 'A transit category sets requiresPickup and requiresDestination.', details: { field: 'requiresPickup' } });
+  }
+  if (!pickup && !destination) {
+    throw DomainException.of(VALIDATION_ERROR, { message: 'A category needs a pickup, a destination, or both.', details: { field: 'requiresPickup' } });
+  }
+  return { pickup, destination };
+}
 
 @Injectable()
 export class AdminConfigService {
@@ -271,50 +301,47 @@ export class AdminConfigService {
 
   async categories() {
     const rows = await this.prisma.category.findMany({ where: { deletedAt: null }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
-    return rows.map((c): AdminCategoryDto => ({
-      id: c.id, key: c.key, name: c.name, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination,
-      isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder,
-    }));
+    return rows.map(toAdminCategory);
   }
 
   async createCategory(input: CreateCategoryDto): Promise<AdminCategoryDto> {
     if (!/^[a-z][a-z0-9_]*$/.test(input.key)) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'The key is lower-case letters, digits and underscores.', details: { field: 'key' } });
     }
-    if (!input.requiresPickup && !input.requiresDestination) {
-      throw DomainException.of(VALIDATION_ERROR, { message: 'A category needs a pickup, a destination, or both.', details: { field: 'requiresPickup' } });
-    }
+    const flow = input.flow ?? 'TRANSIT';
+    const shape = categoryShape(flow, input.requiresPickup, input.requiresDestination);
     const dup = await this.prisma.category.findFirst({ where: { key: input.key } });
     if (dup) throw DomainException.of(RESOURCE_CONFLICT, { message: 'A category with this key already exists.' });
     const c = await this.prisma.category.create({
       data: {
-        key: input.key, name: input.name.trim(), requiresPickup: input.requiresPickup, requiresDestination: input.requiresDestination,
+        key: input.key, name: input.name.trim(), flow, requiresPickup: shape.pickup, requiresDestination: shape.destination,
         isPopular: input.isPopular ?? false, sortOrder: input.sortOrder ?? 0,
       },
     });
-    return { id: c.id, key: c.key, name: c.name, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination, isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder };
+    return toAdminCategory(c);
   }
 
   async updateCategory(id: string, input: UpdateCategoryDto): Promise<AdminCategoryDto> {
     const existing = await this.prisma.category.findFirst({ where: { id, deletedAt: null } });
     if (!existing) throw DomainException.of(RESOURCE_NOT_FOUND);
-    const pickup = input.requiresPickup ?? existing.requiresPickup;
-    const destination = input.requiresDestination ?? existing.requiresDestination;
-    if (!pickup && !destination) {
-      throw DomainException.of(VALIDATION_ERROR, { message: 'A category needs a pickup, a destination, or both.', details: { field: 'requiresPickup' } });
+    const flow = input.flow ?? existing.flow;
+    if (flow !== existing.flow && (await this.prisma.errand.count({ where: { categoryId: id } })) > 0) {
+      throw DomainException.of(RESOURCE_CONFLICT, { message: 'This category already has errands, so its flow cannot change.', details: { field: 'flow' } });
     }
+    const shape = categoryShape(flow, input.requiresPickup ?? existing.requiresPickup, input.requiresDestination ?? existing.requiresDestination);
     const c = await this.prisma.category.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name.trim() } : {}),
-        requiresPickup: pickup,
-        requiresDestination: destination,
+        flow,
+        requiresPickup: shape.pickup,
+        requiresDestination: shape.destination,
         ...(input.isPopular !== undefined ? { isPopular: input.isPopular } : {}),
         ...(input.active !== undefined ? { active: input.active } : {}),
         ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
       },
     });
-    return { id: c.id, key: c.key, name: c.name, requiresPickup: c.requiresPickup, requiresDestination: c.requiresDestination, isPopular: c.isPopular, active: c.active, sortOrder: c.sortOrder };
+    return toAdminCategory(c);
   }
 
   // ---- prohibited items ----
@@ -741,7 +768,7 @@ export class AdminConfigController {
         'USER_BEHAVIOR', 'ERRAND', 'NON_PAYMENT', 'OVERCHARGING', 'LOST_ITEM', 'DAMAGED_ITEM', 'ABUSE', 'HARASSMENT', 'FRAUD',
         'UNSAFE_BEHAVIOR', 'PROHIBITED_ITEM', 'SPAM', 'FAKE_ACCOUNT', 'OTHER',
       ],
-      disputeTypes: ['ITEM_NOT_DELIVERED', 'ITEM_DAMAGED', 'ITEM_MISSING', 'WRONG_ITEM', 'UNAUTHORIZED_CHANGE', 'SAFETY_INCIDENT', 'OTHER'],
+      disputeTypes: ['ITEM_NOT_DELIVERED', 'ITEM_DAMAGED', 'ITEM_MISSING', 'WRONG_ITEM', 'UNAUTHORIZED_CHANGE', 'SAFETY_INCIDENT', 'SERVICE_NOT_DONE', 'POOR_QUALITY', 'PROPERTY_DAMAGE', 'OTHER'],
     };
   }
 }

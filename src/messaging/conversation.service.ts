@@ -176,6 +176,7 @@ export class ConversationService {
         errand_status: string;
         pickup_area: string | null;
         destination_area: string | null;
+        category_flow: 'TRANSIT' | 'SERVICE';
         assignment_id: string | null;
         agreed_minor: bigint | null;
         offer_minor: bigint | null;
@@ -199,6 +200,7 @@ export class ConversationService {
                ORDER BY lm.created_at DESC, lm.id DESC LIMIT 1) AS last_preview,
              e.status::text AS errand_status,
              pl.area AS pickup_area, dl.area AS destination_area,
+             (SELECT ca.flow::text FROM categories ca WHERE ca.id = e.category_id) AS category_flow,
              asg.id::text AS assignment_id, asg.agreed_amount_minor AS agreed_minor,
              (SELECT lo.amount_minor FROM offers lo
                WHERE lo.errand_id = c.errand_id AND lo.runner_id = c.runner_id AND lo.deleted_at IS NULL
@@ -255,6 +257,7 @@ export class ConversationService {
         amountKind: row.agreed_minor !== null ? 'AGREED' : row.offer_minor !== null ? 'OFFER' : null,
         pickupArea: row.pickup_area,
         destinationArea: row.destination_area,
+        categoryFlow: row.category_flow,
         assignmentId: row.assignment_id,
         lastMessageAt: row.last_message_at,
         unreadCount: row.unread,

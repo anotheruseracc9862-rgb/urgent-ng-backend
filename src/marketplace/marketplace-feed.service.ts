@@ -25,6 +25,7 @@ export interface FeedRow {
   description: string;
   category_key: string;
   category_name: string;
+  category_flow: 'TRANSIT' | 'SERVICE';
   priority: 'STANDARD' | 'URGENT';
   time_mode: 'ASAP' | 'SCHEDULED';
   scheduled_at: Date | null;
@@ -49,7 +50,7 @@ export interface FeedRow {
 
 /** The columns every feed-shaped query selects. */
 export const FEED_COLUMNS = Prisma.sql`
-  e.id::text AS id, e.title, e.description, c.key AS category_key, c.name AS category_name,
+  e.id::text AS id, e.title, e.description, c.key AS category_key, c.name AS category_name, c.flow::text AS category_flow,
   e.priority::text AS priority, e.time_mode::text AS time_mode, e.scheduled_at, e.suggested_budget_minor,
   e.published_at, e.expires_at, e.offer_count,
   u.first_name AS requester_first_name, pr.photo_media_id::text AS requester_photo_media_id,
@@ -77,7 +78,7 @@ export function toFeedItem(row: FeedRow, boosted = false, ratingMinCount = 3): F
   return {
     id: row.id,
     title: row.title,
-    category: { key: row.category_key, name: row.category_name },
+    category: { key: row.category_key, name: row.category_name, flow: row.category_flow },
     description: row.description,
     pickup: area(row.pickup_area, row.pickup_lga, row.pickup_state),
     destination: area(row.destination_area, row.destination_lga, row.destination_state),

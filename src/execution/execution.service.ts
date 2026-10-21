@@ -159,9 +159,19 @@ export class ExecutionService {
   // ---- internals ----
 
   private async step(runnerId: string, assignmentId: string, step: Step, evidence: StepEvidenceDto): Promise<ExecutionStepDto> {
-    const found = await this.prisma.assignment.findFirst({ where: { id: assignmentId, runnerId }, select: { errandId: true } });
+    const found = await this.prisma.assignment.findFirst({
+      where: { id: assignmentId, runnerId },
+      select: { errandId: true, errand: { select: { category: { select: { flow: true } } } } },
+    });
     if (!found) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
+    }
+    // A service has no item to hand over: pickup means "work started" and deliver means "work finished", each proven by a photo.
+    if (found.errand.category.flow === 'SERVICE' && step.evidencePurpose && !evidence.mediaId) {
+      throw DomainException.of(VALIDATION_ERROR, {
+        message: step.name === 'pickup' ? 'Add a before photo to start the work.' : 'Add an after photo to finish the work.',
+        details: { field: 'mediaId' },
+      });
     }
     // Pool reads happen before the transaction.
     if (evidence.mediaId && step.evidencePurpose) {

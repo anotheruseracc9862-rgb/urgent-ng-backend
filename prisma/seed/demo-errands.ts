@@ -166,7 +166,7 @@ export async function seedDemoErrands(context: DemoContext): Promise<void> {
     for (const [index, scenario] of completedScenarios.entries()) await seedErrand(context, requester, scenario, 'COMPLETED', category('delivery'), index);
     await seedErrand(context, requester, 'draft', 'DRAFT', category('shopping_purchase'), 0);
     await seedErrand(context, requester, 'open', 'OPEN', category('pickup'), 0);
-    await seedErrand(context, requester, 'open-scheduled', 'OPEN', category('document'), 0);
+    await seedErrand(context, requester, 'open-scheduled', 'OPEN', category('delivery'), 0);
     await seedErrand(context, requester, 'pending', 'RUNNER_SELECTED', category('delivery'), 0);
     await seedErrand(context, requester, 'active', activeScenario(requester.index), category('delivery'), 0);
     await seedErrand(context, requester, 'cancelled', 'CANCELLED', category('pickup'), 0);

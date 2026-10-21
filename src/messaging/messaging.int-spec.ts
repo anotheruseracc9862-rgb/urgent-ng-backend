@@ -22,6 +22,7 @@ describe('Messaging (P8-01)', () => {
   let app: INestApplication;
   const prisma = getTestPrisma();
   let categoryId: string;
+  let carWashId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -29,7 +30,9 @@ describe('Messaging (P8-01)', () => {
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
-    categoryId = (await seedCategories()).delivery;
+    const categories = await seedCategories();
+    categoryId = categories.delivery;
+    carWashId = categories.car_wash;
   });
   afterAll(async () => {
     await app.close();
@@ -57,6 +60,15 @@ describe('Messaging (P8-01)', () => {
   const rowFor = (s: { errandId: string; runner: Authed }) => prisma.conversation.findFirstOrThrow({ where: { errandId: s.errandId, runnerId: s.runner.userId } });
 
   describe('conversations', () => {
+    it('carry the flow of the errand, and a service has its one area as the destination', async () => {
+      const delivery = await acceptedScene(app, categoryId);
+      expect((await conversationOf(delivery.requester))[0]).toMatchObject({ categoryFlow: 'TRANSIT', pickupArea: expect.any(String) });
+
+      const service = await acceptedScene(app, carWashId, { locationType: 'ERRAND_DESTINATION' });
+      const [row] = await conversationOf(service.requester);
+      expect(row).toMatchObject({ categoryFlow: 'SERVICE', pickupArea: null, destinationArea: expect.any(String) });
+    });
+
     it('stay closed and hidden until the runner accepts, then open for both parties and link from the offer', async () => {
       const offered = await offerScene(app, categoryId);
       expect(await conversationOf(offered.requester)).toHaveLength(0);

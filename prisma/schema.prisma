@@ -170,6 +170,12 @@ enum VerificationFailureReason {
   OTHER
 }
 
+/// How an errand is carried out: TRANSIT moves something between places, SERVICE is work done at one address.
+enum CategoryFlow {
+  TRANSIT
+  SERVICE
+}
+
 enum LocationType {
   ERRAND_PICKUP
   ERRAND_DESTINATION
@@ -279,6 +285,9 @@ enum DisputeType {
   WRONG_ITEM
   UNAUTHORIZED_CHANGE
   SAFETY_INCIDENT
+  SERVICE_NOT_DONE
+  POOR_QUALITY
+  PROPERTY_DAMAGE
   OTHER
 }
 
@@ -1044,7 +1053,8 @@ model Category {
   name                String
   requiresPickup      Boolean   @map("requires_pickup")
   requiresDestination Boolean   @map("requires_destination")
-  sortOrder           Int       @default(0) @map("sort_order")
+  flow                CategoryFlow @default(TRANSIT)
+  sortOrder          Int       @default(0) @map("sort_order")
   isPopular           Boolean   @default(false) @map("is_popular")
   active              Boolean   @default(true)
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)

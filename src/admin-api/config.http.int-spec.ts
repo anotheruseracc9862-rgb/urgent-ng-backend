@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, REQUIRED_CONSENTS, adminLogin, bearer, createAdmin, nextPhone, seedAdminRoles, seedPolicies, signedInUser, type TestAdmin } from '../test/auth.helper.js';
-import { seedCategories } from '../test/errand.helper.js';
+import { insertErrand, seedCategories } from '../test/errand.helper.js';
 import { readyRunner } from '../test/verification.helper.js';
 import { BusinessConfigService } from '../config/business-config.service.js';
 import { PAYMENT_PROVIDER } from '../common/providers/payment.provider.js';
@@ -187,6 +187,25 @@ describe('Admin API: pricing, config, flags, reference data (P11-06)', () => {
       await ops.patch(`/admin/categories/${created.body.data.id}`, { ...reason, active: false }).expect(200);
       expect((await request(app.getHttpServer()).get(`${API}/reference/categories`).expect(200)).body.data.map((c: { key: string }) => c.key)).not.toContain('gardening');
       await ops.patch(`/admin/categories/${created.body.data.id}`, { ...reason, requiresPickup: false }).expect(400);
+    });
+
+    it('creates a service category: one address, and the flow is fixed once errands use it', async () => {
+      const ops = as(await login('OPERATIONS'));
+
+      // The two booleans are ignored for a service: it always has one address, stored as the destination.
+      const created = await ops.post('/admin/categories', { ...reason, key: 'tailoring', name: 'Tailoring', flow: 'SERVICE', requiresPickup: true, requiresDestination: false }).expect(201);
+      expect(created.body.data).toMatchObject({ flow: 'SERVICE', requiresPickup: false, requiresDestination: true });
+      await ops.post('/admin/categories', { ...reason, key: 'no_shape', name: 'No shape' }).expect(400);
+      await ops.post('/admin/categories', { ...reason, key: 'bad_flow', name: 'Bad', flow: 'ROBOT', requiresPickup: true, requiresDestination: true }).expect(400);
+
+      const id = created.body.data.id as string;
+      await ops.patch(`/admin/categories/${id}`, { ...reason, flow: 'TRANSIT', requiresPickup: true, requiresDestination: true }).expect(200);
+      await ops.patch(`/admin/categories/${id}`, { ...reason, flow: 'SERVICE' }).expect(200);
+
+      const requester = await signedInUser(app);
+      await insertErrand({ requesterId: requester.userId, categoryId: id, locationType: 'ERRAND_DESTINATION' });
+      const blocked = await ops.patch(`/admin/categories/${id}`, { ...reason, flow: 'TRANSIT', requiresPickup: true, requiresDestination: true }).expect(409);
+      expect(blocked.body.error.details).toMatchObject({ field: 'flow' });
     });
 
     it('adds a prohibited item that the public list then shows, and switches it off', async () => {

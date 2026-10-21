@@ -245,14 +245,18 @@ export class RunnerLocationService {
   /**
    * Minutes to the next stop, only from a traffic-aware estimate and a fresh position; otherwise
    * none (Backend PRD 17.4). The next stop is the pickup before pickup and the destination after.
+   * A service has no pickup, so its next stop is always the destination.
    */
   private async eta(ctx: AssignmentCtx, from: LatestRow): Promise<number | null> {
-    const type = ctx.errand_status === 'PICKED_UP' ? 'ERRAND_DESTINATION' : ctx.errand_status === 'DELIVERED' ? null : 'ERRAND_PICKUP';
-    if (!type) return null;
+    if (ctx.errand_status === 'DELIVERED') return null;
+    const wantPickup = ctx.errand_status !== 'PICKED_UP';
     const rows = await this.prisma.$queryRaw<Array<{ lat: number; lng: number }>>`
       SELECT ST_Y(exact_point::geometry) AS lat, ST_X(exact_point::geometry) AS lng
       FROM errand_locations
-      WHERE errand_id = ${ctx.errand_id}::uuid AND type = ${type}::"LocationType" AND deleted_at IS NULL
+      WHERE errand_id = ${ctx.errand_id}::uuid AND deleted_at IS NULL
+        AND type IN (${wantPickup ? 'ERRAND_PICKUP' : 'ERRAND_DESTINATION'}::"LocationType", 'ERRAND_DESTINATION'::"LocationType")
+      ORDER BY (type = 'ERRAND_PICKUP'::"LocationType") DESC
+      LIMIT 1
     `;
     const to = rows[0];
     if (!to) return null;

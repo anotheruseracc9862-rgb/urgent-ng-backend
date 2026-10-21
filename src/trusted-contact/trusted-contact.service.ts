@@ -268,6 +268,7 @@ export class TrustedContactService {
         title: string;
         status: string;
         category_name: string;
+        category_flow: 'TRANSIT' | 'SERVICE';
         requester_first_name: string;
         updated_at: Date;
         assignment_id: string | null;
@@ -279,7 +280,7 @@ export class TrustedContactService {
         duration_minutes: number | null;
       }>
     >`
-      SELECT e.title, e.status::text AS status, c.name AS category_name, ru.first_name AS requester_first_name, e.updated_at,
+      SELECT e.title, e.status::text AS status, c.name AS category_name, c.flow::text AS category_flow, ru.first_name AS requester_first_name, e.updated_at,
              a.id::text AS assignment_id, a.runner_id::text, rn.first_name AS runner_first_name, rn.last_name AS runner_last_name,
              pr.photo_media_id::text AS photo_media_id, a.accepted_at, o.duration_minutes
       FROM errands e
@@ -337,6 +338,7 @@ export class TrustedContactService {
     return {
       title: row.title,
       category: row.category_name,
+      categoryFlow: row.category_flow,
       requesterFirstName: row.requester_first_name,
       runner: {
         firstName: row.runner_first_name ?? '',

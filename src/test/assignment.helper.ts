@@ -41,11 +41,15 @@ export interface Scene {
 let ninCounter = 0;
 
 /** A requester, an eligible runner, an open errand and the runner's active offer on it. */
-export async function offerScene(app: INestApplication, categoryId: string, options: { requester?: TestUser } = {}): Promise<Scene> {
+export async function offerScene(
+  app: INestApplication,
+  categoryId: string,
+  options: { requester?: TestUser; locationType?: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION' } = {},
+): Promise<Scene> {
   const requester = options.requester ?? (await signedInUser(app));
   ninCounter += 1;
   const runner = await readyRunner(app, uniqueNin(ninCounter));
-  const errandId = await insertErrand({ requesterId: requester.userId, categoryId });
+  const errandId = await insertErrand({ requesterId: requester.userId, categoryId, locationType: options.locationType });
   const offer = (await submitOffer(app, runner, errandId).expect(201)).body.data;
   return { requester, runner, errandId, offerId: offer.id, offerVersion: offer.version };
 }
@@ -69,7 +73,7 @@ export const declineAssignment = (app: INestApplication, runner: Authed, assignm
   request(app.getHttpServer()).post(`${API}/assignments/${assignmentId}/decline`).set(...bearer(runner.accessToken)).send({});
 
 /** Select the scene's offer over HTTP and return the scene plus the assignment id. */
-export async function selectedScene(app: INestApplication, categoryId: string, options: { requester?: TestUser } = {}) {
+export async function selectedScene(app: INestApplication, categoryId: string, options: { requester?: TestUser; locationType?: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION' } = {}) {
   const scene = await offerScene(app, categoryId, options);
   const res = await selectRunner(app, scene.requester, scene.errandId, scene.offerId, scene.offerVersion).expect(201);
   return { ...scene, assignmentId: res.body.data.id as string };
@@ -110,7 +114,7 @@ export const cancelAssignment = (
     .send(body);
 
 /** Select and accept: the errand is ACCEPTED. */
-export async function acceptedScene(app: INestApplication, categoryId: string, options: { requester?: TestUser } = {}) {
+export async function acceptedScene(app: INestApplication, categoryId: string, options: { requester?: TestUser; locationType?: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION' } = {}) {
   const scene = await selectedScene(app, categoryId, options);
   await acceptAssignment(app, scene.runner, scene.assignmentId).expect(201);
   return scene;

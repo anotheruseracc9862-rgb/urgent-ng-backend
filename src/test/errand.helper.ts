@@ -10,18 +10,19 @@ import { getTestPrisma } from './database.helper.js';
 /** The five seeded categories (Backend PRD 11.2), returned by key. */
 export async function seedCategories(): Promise<Record<string, string>> {
   const prisma = getTestPrisma();
-  const rows: Array<[string, string, boolean, boolean, boolean]> = [
-    ['delivery', 'Delivery', true, true, true],
-    ['pickup', 'Pickup', true, false, true],
-    ['shopping_purchase', 'Shopping & Purchase', false, true, false],
-    ['document', 'Document', true, true, false],
-    ['other', 'Other', true, false, false],
+  const rows: Array<[string, string, boolean, boolean, boolean, 'TRANSIT' | 'SERVICE']> = [
+    ['delivery', 'Delivery', true, true, true, 'TRANSIT'],
+    ['pickup', 'Pickup', true, false, true, 'TRANSIT'],
+    ['shopping_purchase', 'Shopping & Purchase', false, true, false, 'TRANSIT'],
+    ['document', 'Document', true, true, false, 'TRANSIT'],
+    ['other', 'Other', true, false, false, 'TRANSIT'],
+    ['car_wash', 'Car Wash', false, true, false, 'SERVICE'],
   ];
   const ids: Record<string, string> = {};
-  for (const [index, [key, name, pickup, destination, popular]] of rows.entries()) {
+  for (const [index, [key, name, pickup, destination, popular, flow]] of rows.entries()) {
     const found = await prisma.$queryRaw<Array<{ id: string }>>`
-      INSERT INTO categories (key, name, requires_pickup, requires_destination, sort_order, is_popular, updated_at)
-      VALUES (${key}, ${name}, ${pickup}, ${destination}, ${index}, ${popular}, now())
+      INSERT INTO categories (key, name, flow, requires_pickup, requires_destination, sort_order, is_popular, updated_at)
+      VALUES (${key}, ${name}, ${flow}::"CategoryFlow", ${pickup}, ${destination}, ${index}, ${popular}, now())
       RETURNING id::text
     `;
     ids[key] = found[0].id;
@@ -53,6 +54,8 @@ export interface InsertErrandOptions {
   lat?: number;
   lng?: number;
   area?: string;
+  /** The stored location: a pickup (default), or the destination of a service. */
+  locationType?: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION';
 }
 
 /** An errand in any status, with a pickup location, inserted directly (bypasses the API). */
@@ -90,7 +93,7 @@ export async function insertErrand(options: InsertErrandOptions): Promise<string
   `;
   await prisma.$executeRaw`
     INSERT INTO errand_locations (errand_id, type, exact_point, approx_point, area, lga, state, state_id, lga_id, source, updated_at)
-    VALUES (${id}::uuid, 'ERRAND_PICKUP'::"LocationType",
+    VALUES (${id}::uuid, ${options.locationType ?? 'ERRAND_PICKUP'}::"LocationType",
             ST_SetSRID(ST_MakePoint(${lng}::float8, ${lat}::float8), 4326)::geography,
             ST_SetSRID(ST_MakePoint(${lng + 0.002}::float8, ${lat + 0.002}::float8), 4326)::geography,
             ${options.area ?? 'Yaba'}, 'Lagos Mainland', 'Lagos', 'ng-lagos', 'ng-lagos:lagos-mainland', 'MAP_PIN'::"LocationSource", now())

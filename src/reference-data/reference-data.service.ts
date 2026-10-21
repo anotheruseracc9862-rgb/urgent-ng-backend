@@ -7,6 +7,8 @@ export interface CategoryView {
   name: string;
   requiresPickup: boolean;
   requiresDestination: boolean;
+  /** TRANSIT moves something between places. SERVICE is work done at one address. */
+  flow: 'TRANSIT' | 'SERVICE';
   isPopular: boolean;
 }
 
@@ -37,6 +39,7 @@ export class ReferenceDataService {
       name: row.name,
       requiresPickup: row.requiresPickup,
       requiresDestination: row.requiresDestination,
+      flow: row.flow,
       isPopular: row.isPopular,
     }));
   }

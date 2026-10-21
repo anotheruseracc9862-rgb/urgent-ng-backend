@@ -26,6 +26,8 @@ export class CategoryDto {
   name!: string;
   requiresPickup!: boolean;
   requiresDestination!: boolean;
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'TRANSIT moves something between places. SERVICE is work done at one address.' })
+  flow!: 'TRANSIT' | 'SERVICE';
   isPopular!: boolean;
 }
 

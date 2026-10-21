@@ -22,6 +22,7 @@ describe('Trusted contact (P9-06)', () => {
   let app: INestApplication;
   const prisma = getTestPrisma();
   let categoryId: string;
+  let carWashId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -29,7 +30,9 @@ describe('Trusted contact (P9-06)', () => {
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
-    categoryId = (await seedCategories()).delivery;
+    const categories = await seedCategories();
+    categoryId = categories.delivery;
+    carWashId = categories.car_wash;
   });
   afterAll(async () => {
     await app.close();
@@ -119,9 +122,10 @@ describe('Trusted contact (P9-06)', () => {
       expect(res.headers['x-robots-tag']).toContain('noindex');
       const data = res.body.data;
       expect(Object.keys(data).sort()).toEqual(
-        ['category', 'checkpoints', 'destination', 'expectedDeliveryAt', 'lastUpdatedAt', 'linkExpiresAt', 'live', 'pickup', 'requesterFirstName', 'runner', 'status', 'title'].sort(),
+        ['category', 'categoryFlow', 'checkpoints', 'destination', 'expectedDeliveryAt', 'lastUpdatedAt', 'linkExpiresAt', 'live', 'pickup', 'requesterFirstName', 'runner', 'status', 'title'].sort(),
       );
       expect(data.status).toBe('IN_PROGRESS');
+      expect(data.categoryFlow).toBe('TRANSIT');
       expect(data.runner.lastInitial).toHaveLength(1);
       expect(Object.keys(data.runner).sort()).toEqual(['firstName', 'lastInitial', 'photoUrl', 'ratingAverage', 'ratingCount', 'verified']);
       expect(data.runner.verified).toBe(true);
@@ -218,6 +222,18 @@ describe('Trusted contact (P9-06)', () => {
       );
 
       expect(new Set(bodies)).toEqual(new Set(['RESOURCE_NOT_FOUND']));
+    });
+  });
+
+  describe('a service', () => {
+    it('reports its flow and has one area, the destination, and no pickup', async () => {
+      const s = await acceptedScene(app, carWashId, { locationType: 'ERRAND_DESTINATION' });
+      const { token } = (await make(s.requester, s.errandId).expect(201)).body.data;
+
+      const data = (await view(token).expect(200)).body.data;
+
+      expect(data).toMatchObject({ category: 'Car Wash', categoryFlow: 'SERVICE', pickup: null });
+      expect(data.destination).toMatchObject({ area: expect.any(String) });
     });
   });
 

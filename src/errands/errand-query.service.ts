@@ -110,7 +110,7 @@ export class ErrandQueryService {
         id: errand.id,
         status: errand.status,
         title: errand.title,
-        category: { id: errand.category.id, key: errand.category.key, name: errand.category.name },
+        category: { id: errand.category.id, key: errand.category.key, name: errand.category.name, flow: errand.category.flow },
         priority: errand.priority,
         timeMode: errand.timeMode,
         scheduledAt: errand.scheduledAt,

@@ -78,7 +78,8 @@ export class ErrandService {
   // ---- Create ----
 
   async create(userId: string, dto: CreateErrandDto): Promise<ErrandDto> {
-    await this.requireCategory(dto.categoryId);
+    const category = await this.requireCategory(dto.categoryId);
+    this.assertServiceHasNoPickup(category, dto.pickup);
     this.validator.assertScheduleShape(dto.timeMode, dto.scheduledAt);
     await this.validator.assertNoProhibitedText(dto.title, dto.description, dto.instructions);
     if (dto.timeMode === 'SCHEDULED' && !dto.scheduledAt) {
@@ -147,7 +148,12 @@ export class ErrandService {
    * only notifies. After a runner is selected an edit is refused (changes go through a change request).
    */
   async update(userId: string, errandId: string, dto: UpdateErrandDto): Promise<ErrandDto> {
-    if (dto.categoryId) await this.requireCategory(dto.categoryId);
+    if (dto.categoryId) {
+      this.assertServiceHasNoPickup(await this.requireCategory(dto.categoryId), dto.pickup ?? undefined);
+    } else if (dto.pickup) {
+      const current = await this.prisma.client.errand.findFirst({ where: { id: errandId, requesterId: userId }, select: { category: true } });
+      if (current) this.assertServiceHasNoPickup(current.category, dto.pickup);
+    }
     this.validator.assertScheduleShape(dto.timeMode, dto.scheduledAt);
     const places = await this.prepareLocations(errandId, { pickup: dto.pickup ?? undefined, destination: dto.destination ?? undefined });
 
@@ -423,6 +429,13 @@ export class ErrandService {
       throw DomainException.of(VALIDATION_ERROR, { message: 'Choose a valid category.', details: { field: 'categoryId' } });
     }
     return category;
+  }
+
+  /** A service is done at one address, so it takes no pickup. Publishing checks the same rule for stored locations. */
+  private assertServiceHasNoPickup(category: Category, pickup: unknown): void {
+    if (category.flow === 'SERVICE' && pickup) {
+      throw DomainException.of(VALIDATION_ERROR, { message: 'A service has one address. Send it as the destination.', details: { field: 'pickup' } });
+    }
   }
 
   /** One writer at a time per requester, so the draft and open limits cannot be beaten by parallel calls. */

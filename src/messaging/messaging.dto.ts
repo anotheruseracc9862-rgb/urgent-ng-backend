@@ -145,6 +145,9 @@ export class ConversationDto {
   @ApiProperty({ nullable: true, type: String, description: 'Approximate area only.' })
   destinationArea!: string | null;
 
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'A service has no pickup: its one address is the destination.' })
+  categoryFlow!: 'TRANSIT' | 'SERVICE';
+
   @ApiProperty({ nullable: true, type: String, description: 'The assignment for this conversation, from selection onward.' })
   assignmentId!: string | null;
 

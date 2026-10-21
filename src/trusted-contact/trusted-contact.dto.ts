@@ -96,6 +96,8 @@ export class SharedErrandDto {
   title!: string;
   @ApiProperty()
   category!: string;
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'A service is work at one address: there is no pickup, and its steps read as work started and finished.' })
+  categoryFlow!: 'TRANSIT' | 'SERVICE';
   @ApiProperty()
   requesterFirstName!: string;
   @ApiProperty({ type: SharedRunnerDto })

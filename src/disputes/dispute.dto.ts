@@ -9,6 +9,9 @@ export const DISPUTE_TYPES = [
   'WRONG_ITEM',
   'UNAUTHORIZED_CHANGE',
   'SAFETY_INCIDENT',
+  'SERVICE_NOT_DONE',
+  'POOR_QUALITY',
+  'PROPERTY_DAMAGE',
   'OTHER',
 ] as const;
 

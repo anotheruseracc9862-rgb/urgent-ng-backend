@@ -122,6 +122,9 @@ export class RunnerAssignmentSummaryDto {
   @ApiProperty({ nullable: true })
   destinationArea!: string | null;
 
+  @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'A service has no pickup: its one address is the destination.' })
+  categoryFlow!: 'TRANSIT' | 'SERVICE';
+
   @ApiProperty({ type: Date })
   selectedAt!: Date;
 

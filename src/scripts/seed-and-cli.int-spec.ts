@@ -135,7 +135,7 @@ describe('seed script and admin:create (against the test database)', () => {
       expect(await prisma.priceVersion.count()).toBe(3);
       expect(await prisma.adminPermission.count()).toBe(ADMIN_PERMISSIONS.length);
       expect(await prisma.adminRole.count()).toBe(5);
-      expect(await prisma.category.count()).toBe(5);
+      expect(await prisma.category.count()).toBe(10);
       expect(await prisma.prohibitedItemRule.count()).toBeGreaterThan(10);
       expect(await prisma.policyVersion.count()).toBe(7);
     });
@@ -145,12 +145,17 @@ describe('seed script and admin:create (against the test database)', () => {
 
       const categories = await prisma.category.findMany({ orderBy: { sortOrder: 'asc' } });
 
-      expect(categories.map((c) => [c.key, c.requiresPickup, c.requiresDestination])).toEqual([
-        ['delivery', true, true],
-        ['pickup', true, false],
-        ['shopping_purchase', false, true],
-        ['document', true, true],
-        ['other', true, false],
+      expect(categories.map((c) => [c.key, c.flow, c.requiresPickup, c.requiresDestination])).toEqual([
+        ['delivery', 'TRANSIT', true, true],
+        ['pickup', 'TRANSIT', true, false],
+        ['shopping_purchase', 'TRANSIT', false, true],
+        ['other', 'TRANSIT', true, false],
+        ['home_cleaning', 'SERVICE', false, true],
+        ['car_wash', 'SERVICE', false, true],
+        ['plumbing', 'SERVICE', false, true],
+        ['electrical', 'SERVICE', false, true],
+        ['childcare', 'SERVICE', false, true],
+        ['other_service', 'SERVICE', false, true],
       ]);
     });
 
@@ -184,7 +189,7 @@ describe('seed script and admin:create (against the test database)', () => {
         (await prisma.adminRolePermission.findMany()).length,
       );
       expect(await prisma.policyVersion.count()).toBe(7);
-      expect(await prisma.category.count()).toBe(5);
+      expect(await prisma.category.count()).toBe(10);
     });
 
     it('gives SUPER_ADMIN every permission and the other roles a subset', async () => {
