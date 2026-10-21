@@ -103,7 +103,10 @@ export class OfferService {
         details: { field: 'availabilityConfirmed' },
       });
     }
-    await this.assertTermsInBounds(amountMinor, durationMinutes);
+    // First against the longest limit any errand has: that needs only configuration, so nonsense fails before any query.
+    await this.assertTermsInBounds(amountMinor, durationMinutes, 'SERVICE');
+    // Then the limit of this errand's own kind: a delivery is quoted within a day, a service may take days.
+    if ((await this.flowOf(this.prisma, errandId)) === 'TRANSIT') await this.assertTermsInBounds(amountMinor, durationMinutes, 'TRANSIT');
     assertNoContactDetails(input.message, 'message');
     await this.eligibility.assertCanOffer(runnerId);
     // Everything that needs the pool is read before the transaction: parallel submits hold every
@@ -230,6 +233,8 @@ export class OfferService {
     message: string | null;
     assignmentId: string | null;
     errandTitle: string;
+    /** The longest estimated time either side may propose on this errand, in minutes. */
+    maxDurationMinutes: number;
     /** Counter-offers used so far, and how many this negotiation allows. */
     roundsUsed: number;
     roundsLimit: number;
@@ -246,7 +251,7 @@ export class OfferService {
     const offer = await this.prisma.offer.findFirst({
       where: { id: offerId, OR: [{ runnerId: userId }, { requesterId: userId }] },
       include: {
-        errand: { select: { title: true } },
+        errand: { select: { title: true, category: { select: { flow: true } } } },
         negotiationEvents: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
         assignments: { select: { id: true }, take: 1 },
       },
@@ -271,6 +276,7 @@ export class OfferService {
       message: offer.message,
       assignmentId: offer.assignments[0]?.id ?? null,
       errandTitle: offer.errand.title,
+      maxDurationMinutes: await this.config.get(offer.errand.category.flow === 'SERVICE' ? 'OFFER_DURATION_MAX_MINUTES_SERVICE' : 'OFFER_DURATION_MAX_MINUTES'),
       roundsUsed: offer.counterRounds,
       roundsLimit: await this.config.get('MAX_NEGOTIATION_ROUNDS'),
       history: offer.negotiationEvents.map((event) => ({
@@ -300,7 +306,7 @@ export class OfferService {
         });
       }
       await this.assertErrandOpen(tx, offer.errandId);
-      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes);
+      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes, await this.flowOf(tx, offer.errandId));
       return this.applyTerms(tx, offer, userId, input, 'REQUESTER');
     });
   }
@@ -323,7 +329,7 @@ export class OfferService {
         });
       }
       await this.assertErrandOpen(tx, offer.errandId);
-      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes);
+      await this.assertTermsInBounds(input.amountMinor, input.durationMinutes, await this.flowOf(tx, offer.errandId));
       return this.applyTerms(tx, offer, userId, input, party === 'RUNNER' ? 'REQUESTER' : 'RUNNER', true);
     });
   }
@@ -724,12 +730,18 @@ export class OfferService {
     }
   }
 
-  private async assertTermsInBounds(amountMinor: number, durationMinutes: number): Promise<void> {
+  /** The flow of the errand's category: a service may be quoted for longer than a delivery. */
+  private async flowOf(client: Pick<Prisma.TransactionClient, 'errand'>, errandId: string): Promise<'TRANSIT' | 'SERVICE'> {
+    const errand = await client.errand.findUnique({ where: { id: errandId }, select: { category: { select: { flow: true } } } });
+    return errand?.category.flow ?? 'TRANSIT';
+  }
+
+  private async assertTermsInBounds(amountMinor: number, durationMinutes: number, flow: 'TRANSIT' | 'SERVICE' = 'TRANSIT'): Promise<void> {
     const [minAmount, maxAmount, minDuration, maxDuration] = await Promise.all([
       this.config.get('OFFER_MIN_AMOUNT'),
       this.config.get('OFFER_MAX_AMOUNT'),
       this.config.get('OFFER_DURATION_MIN_MINUTES'),
-      this.config.get('OFFER_DURATION_MAX_MINUTES'),
+      this.config.get(flow === 'SERVICE' ? 'OFFER_DURATION_MAX_MINUTES_SERVICE' : 'OFFER_DURATION_MAX_MINUTES'),
     ]);
     if (!Number.isInteger(amountMinor) || amountMinor < minAmount || amountMinor > maxAmount) {
       throw DomainException.of(VALIDATION_ERROR, {

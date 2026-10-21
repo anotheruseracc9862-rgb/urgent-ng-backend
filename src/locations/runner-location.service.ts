@@ -29,6 +29,8 @@ interface AssignmentCtx {
   errand_status: string;
   stopped_at: Date | null;
   db_now: Date;
+  /** TRANSIT moves something between places. A SERVICE is work at one address: nothing travels, so nothing is followed. */
+  flow: 'TRANSIT' | 'SERVICE';
 }
 
 interface LatestRow {
@@ -80,6 +82,7 @@ export class RunnerLocationService {
         // Only the runner reports; the requester of the same assignment gets "not found".
         throw DomainException.of(RESOURCE_NOT_FOUND);
       }
+      this.assertFollowable(ctx);
       if (ctx.status !== 'ACCEPTED' || !ACTIVE_ERRAND.includes(ctx.errand_status)) {
         throw DomainException.of(ASSIGNMENT_INVALID_STATE, {
           message: 'Location is shared only while the errand is active.',
@@ -163,6 +166,7 @@ export class RunnerLocationService {
     await this.prisma.$transaction(async (tx) => {
       const ctx = await this.lockAssignment(tx, assignmentId, userId);
       if (ctx.runner_id !== userId) throw DomainException.of(RESOURCE_NOT_FOUND);
+      this.assertFollowable(ctx);
       await tx.$executeRaw`
         UPDATE assignments
         SET location_sharing_stopped_at = ${enabled ? null : ctx.db_now}::timestamptz, updated_at = clock_timestamp()
@@ -187,6 +191,7 @@ export class RunnerLocationService {
     if (!ctx || (ctx.requester_id !== userId && ctx.runner_id !== userId)) {
       throw DomainException.of(RESOURCE_NOT_FOUND);
     }
+    this.assertFollowable(ctx);
     if (ctx.status !== 'ACCEPTED' || !ACTIVE_ERRAND.includes(ctx.errand_status)) {
       throw DomainException.of(LOCATION_NOT_AVAILABLE);
     }
@@ -199,7 +204,7 @@ export class RunnerLocationService {
    */
   async liveForAssignmentSystem(assignmentId: string): Promise<LiveLocationDto | null> {
     const ctx = await this.context(this.prisma, assignmentId);
-    if (!ctx || ctx.status !== 'ACCEPTED' || !ACTIVE_ERRAND.includes(ctx.errand_status)) return null;
+    if (!ctx || ctx.flow === 'SERVICE' || ctx.status !== 'ACCEPTED' || !ACTIVE_ERRAND.includes(ctx.errand_status)) return null;
     return this.view(ctx);
   }
 
@@ -217,6 +222,16 @@ export class RunnerLocationService {
   }
 
   // ---- Internals ----
+
+  /** Live location is for errands where the runner travels with an item. A service has one address and nothing to follow. */
+  private assertFollowable(ctx: AssignmentCtx): void {
+    if (ctx.flow === 'SERVICE') {
+      throw DomainException.of(LOCATION_NOT_AVAILABLE, {
+        message: 'Live location is only for errands where the runner travels with an item. A service happens at one address.',
+        details: { reason: 'SERVICE' },
+      });
+    }
+  }
 
   private async view(ctx: AssignmentCtx): Promise<LiveLocationDto> {
     const [freshMinutes, staleMinutes, roundMeters] = await Promise.all([
@@ -293,8 +308,9 @@ export class RunnerLocationService {
   ): Promise<AssignmentCtx> {
     const rows = await tx.$queryRaw<AssignmentCtx[]>`
       SELECT a.id::text, a.errand_id::text, a.requester_id::text, a.runner_id::text, a.status::text AS status,
-             e.status::text AS errand_status, a.location_sharing_stopped_at AS stopped_at, clock_timestamp() AS db_now
-      FROM assignments a JOIN errands e ON e.id = a.errand_id
+             e.status::text AS errand_status, a.location_sharing_stopped_at AS stopped_at, clock_timestamp() AS db_now,
+             c.flow::text AS flow
+      FROM assignments a JOIN errands e ON e.id = a.errand_id JOIN categories c ON c.id = e.category_id
       WHERE a.id = ${assignmentId}::uuid AND a.deleted_at IS NULL
         AND (a.runner_id = ${userId}::uuid OR a.requester_id = ${userId}::uuid)
       FOR UPDATE OF a
@@ -306,8 +322,9 @@ export class RunnerLocationService {
   private async context(client: Pick<PrismaService, '$queryRaw'>, assignmentId: string): Promise<AssignmentCtx | null> {
     const rows = await client.$queryRaw<AssignmentCtx[]>`
       SELECT a.id::text, a.errand_id::text, a.requester_id::text, a.runner_id::text, a.status::text AS status,
-             e.status::text AS errand_status, a.location_sharing_stopped_at AS stopped_at, clock_timestamp() AS db_now
-      FROM assignments a JOIN errands e ON e.id = a.errand_id
+             e.status::text AS errand_status, a.location_sharing_stopped_at AS stopped_at, clock_timestamp() AS db_now,
+             c.flow::text AS flow
+      FROM assignments a JOIN errands e ON e.id = a.errand_id JOIN categories c ON c.id = e.category_id
       WHERE a.id = ${assignmentId}::uuid AND a.deleted_at IS NULL
     `;
     return rows[0] ?? null;

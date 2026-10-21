@@ -676,6 +676,30 @@ describe('Errands: drafts, publishing, editing, cancelling (P5-04, P5-05)', () =
       expect(events[0].payload).toMatchObject({ from: 'OPEN', to: 'CANCELLED', stage: 'OPEN' });
     });
 
+    it('needs no reason for a draft or an open errand: nobody else is involved, so it is recorded as the requester changing their mind', async () => {
+      const draft = (await createDraft(app, user, draftBody(categories.delivery)).expect(201)).body.data.id;
+      const cancelledDraft = await cancel(user, draft, {}).expect(200);
+      expect(cancelledDraft.body.data).toMatchObject({ status: 'CANCELLED', cancellationReason: 'REQUESTER_CANCELLED' });
+
+      const open = await openErrand(app, user, categories.delivery);
+      const cancelledOpen = await cancel(user, open, { note: 'found someone myself' }).expect(200);
+      expect(cancelledOpen.body.data).toMatchObject({ status: 'CANCELLED', cancellationReason: 'REQUESTER_CANCELLED' });
+      const [row] = await db<{ note: string }>(`SELECT cancellation_note AS note FROM errands WHERE id = $1::uuid`, open);
+      expect(row.note).toBe('found someone myself');
+    });
+
+    it.each(['RUNNER_SELECTED', 'ACCEPTED', 'IN_PROGRESS'] as const)('still asks why once a runner is involved (%s), and leaves the errand alone when it is missing', async (status) => {
+      const id = await insertErrand({ requesterId: user.userId, categoryId: categories.delivery, status });
+      const res = await cancel(user, id, {}).expect(400);
+      expect(res.body.error.details).toMatchObject({ field: 'reason' });
+      expect((await as(user).get(`/errands/${id}`)).body.data.status).toBe(status);
+    });
+
+    it('still refuses to cancel after pickup with a clear state error, whether or not a reason is sent', async () => {
+      const id = await insertErrand({ requesterId: user.userId, categoryId: categories.delivery, status: 'PICKED_UP' });
+      expect((await cancel(user, id, {}).expect(409)).body.error.code).toBe('ERRAND_INVALID_STATE');
+    });
+
     it('frees the open slot and keeps the cancelled errand on record', async () => {
       await config().set('MAX_OPEN_ERRANDS_PER_REQUESTER', 1);
       const first = await openErrand(app, user, categories.delivery);
@@ -708,7 +732,6 @@ describe('Errands: drafts, publishing, editing, cancelling (P5-04, P5-05)', () =
       const id = await openErrand(app, user, categories.delivery);
       await cancel(user, id, { reason: 'RUNNER_CANCELLED' }).expect(400);
       await cancel(user, id, { reason: 'ADMIN_CANCELLED' }).expect(400);
-      await cancel(user, id, {}).expect(400);
       await cancel(user, id, { reason: 'NOT_A_REASON' }).expect(400);
       const other = await signedInUser(app);
       await cancel(other, id).expect(404);

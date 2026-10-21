@@ -44,7 +44,7 @@ export class ErrandLifecycleService {
     /** Refuse unless the errand is still in one of these statuses (the caller read them a moment ago). */
     expectedFrom?: readonly ErrandStatus[],
   ): Promise<ErrandDto> {
-    if (!REQUESTER_REASONS.includes(dto.reason)) {
+    if (dto.reason !== undefined && !REQUESTER_REASONS.includes(dto.reason)) {
       throw DomainException.of(VALIDATION_ERROR, { message: 'Choose one of the cancellation reasons offered.', details: { field: 'reason' } });
     }
     await this.prisma.$transaction(async (tx) => {
@@ -63,13 +63,19 @@ export class ErrandLifecycleService {
           },
         });
       }
+      // Before a runner is involved nobody needs the reason, so it is not asked for. Once one is, it is.
+      const noRunnerYet = !current || current.status === 'DRAFT' || current.status === 'OPEN';
+      const reason = dto.reason ?? (noRunnerYet ? 'REQUESTER_CANCELLED' : undefined);
+      if (!reason) {
+        throw DomainException.of(VALIDATION_ERROR, { message: 'Choose why you are cancelling.', details: { field: 'reason' } });
+      }
       await this.state.transition(tx, {
         errandId,
         to: 'CANCELLED',
         ownerId: userId,
         ...(expectedFrom ? { expectedFrom } : {}),
         actor: { type: 'REQUESTER', id: userId },
-        cancellation: { reason: dto.reason, note: dto.note?.trim() || undefined },
+        cancellation: { reason, note: dto.note?.trim() || undefined },
         eventPayload: { stage: current?.status ?? null },
       });
     });

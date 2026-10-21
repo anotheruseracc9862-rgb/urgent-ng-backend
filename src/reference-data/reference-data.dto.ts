@@ -28,6 +28,8 @@ export class CategoryDto {
   requiresDestination!: boolean;
   @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'TRANSIT moves something between places. SERVICE is work done at one address.' })
   flow!: 'TRANSIT' | 'SERVICE';
+  @ApiProperty({ description: 'The longest time, in minutes, a runner may quote on an errand in this category.' })
+  maxOfferMinutes!: number;
   isPopular!: boolean;
 }
 

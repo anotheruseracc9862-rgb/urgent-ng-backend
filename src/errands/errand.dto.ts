@@ -248,9 +248,14 @@ export class PublishErrandDto {
 }
 
 export class CancelErrandDto {
-  @ApiProperty({ enum: ErrandCancellationReason, enumName: 'ErrandCancellationReason' })
+  @ApiPropertyOptional({
+    enum: ErrandCancellationReason,
+    enumName: 'ErrandCancellationReason',
+    description: 'Why the requester is cancelling. Optional for a draft or an open errand (no runner involved yet), where it defaults to REQUESTER_CANCELLED. Required once a runner is selected.',
+  })
+  @IsOptional()
   @IsEnum(ErrandCancellationReason)
-  reason!: ErrandCancellationReason;
+  reason?: ErrandCancellationReason;
 
   @IsOptional()
   @IsString()

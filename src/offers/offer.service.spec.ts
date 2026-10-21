@@ -9,10 +9,15 @@ function makeService(overrides: { assertCanOffer?: () => Promise<void> } = {}) {
         OFFER_MAX_AMOUNT: 50_000_000,
         OFFER_DURATION_MIN_MINUTES: 5,
         OFFER_DURATION_MAX_MINUTES: 1440,
+        OFFER_DURATION_MAX_MINUTES_SERVICE: 20_160,
         MAX_OPEN_OFFERS_PER_RUNNER: 20,
       })[key],
   };
-  const prisma = { $transaction: vi.fn(), offer: { findFirst: vi.fn() } };
+  const prisma = {
+    $transaction: vi.fn(),
+    offer: { findFirst: vi.fn() },
+    errand: { findUnique: vi.fn().mockResolvedValue({ category: { flow: 'SERVICE' } }) },
+  };
   const eligibility = { assertCanOffer: overrides.assertCanOffer ?? (async () => undefined) };
   const service = new OfferService(config as never, {} as never, eligibility as never, prisma as never, {} as never, {} as never, {} as never);
   return { service, prisma };
@@ -27,7 +32,7 @@ describe('OfferService.submitOffer input checks', () => {
     ['amount above the maximum', { amountMinor: 999_999_999_999 }],
     ['fractional amount', { amountMinor: 25_000.5 }],
     ['duration below the minimum', { durationMinutes: 1 }],
-    ['duration above the maximum', { durationMinutes: 5000 }],
+    ['duration above the longest any errand allows', { durationMinutes: 25_000 }],
     ['availability not confirmed', { availabilityConfirmed: false }],
   ])('rejects %s before touching the database', async (_label, override) => {
     const { service, prisma } = makeService();
@@ -35,6 +40,23 @@ describe('OfferService.submitOffer input checks', () => {
     await expect(service.submitOffer({ ...input, ...override })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses more than a day on a delivery, once it has read the errand, and still before any transaction', async () => {
+    const { service, prisma } = makeService();
+    prisma.errand.findUnique.mockResolvedValue({ category: { flow: 'TRANSIT' } });
+
+    await expect(service.submitOffer({ ...input, durationMinutes: 5000 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets the same quote through on a service', async () => {
+    const { service } = makeService();
+    // Past the duration check it goes on to the entitlement lookups, which this unit test does not provide.
+    // Failing there, and not with a validation error, is what shows the quote was accepted.
+    const outcome = await service.submitOffer({ ...input, durationMinutes: 5000 }).then(() => null, (error: { code?: string }) => error);
+    expect(outcome?.code).not.toBe('VALIDATION_ERROR');
   });
 
   describe('OfferService.getNegotiation', () => {
@@ -57,7 +79,7 @@ describe('OfferService.submitOffer input checks', () => {
         updatedAt: new Date('2026-10-14T10:10:00.000Z'),
         availabilityConfirmedAt: new Date('2026-10-14T10:00:00.000Z'),
         message: null,
-        errand: { title: 'Pick up a cake' },
+        errand: { title: 'Pick up a cake', category: { flow: 'TRANSIT' } },
         assignments: [],
         negotiationEvents: [{
           id: 'event-1',

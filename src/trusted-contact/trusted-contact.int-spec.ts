@@ -226,13 +226,15 @@ describe('Trusted contact (P9-06)', () => {
   });
 
   describe('a service', () => {
-    it('reports its flow and has one area, the destination, and no pickup', async () => {
+    it('reports its flow and has one area, the destination, and no pickup, and never a live position', async () => {
       const s = await acceptedScene(app, serviceId, { locationType: 'ERRAND_DESTINATION' });
+      await consent(s.runner);
+      await executionStep(app, s.runner, s.assignmentId, 'start').expect(201);
       const { token } = (await make(s.requester, s.errandId).expect(201)).body.data;
 
       const data = (await view(token).expect(200)).body.data;
 
-      expect(data).toMatchObject({ category: 'Home Cleaning', categoryFlow: 'SERVICE', pickup: null });
+      expect(data).toMatchObject({ category: 'Home Cleaning', categoryFlow: 'SERVICE', pickup: null, live: null, status: 'IN_PROGRESS' });
       expect(data.destination).toMatchObject({ area: expect.any(String) });
     });
   });

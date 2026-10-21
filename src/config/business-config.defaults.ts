@@ -20,6 +20,8 @@ export interface BusinessConfig {
   OFFER_MAX_AMOUNT: number;
   OFFER_DURATION_MIN_MINUTES: number;
   OFFER_DURATION_MAX_MINUTES: number;
+  /** The longest time a runner may quote for a service: a job at one address can take days. */
+  OFFER_DURATION_MAX_MINUTES_SERVICE: number;
   FREE_RUNNER_DAILY_OFFER_LIMIT: number;
   PRO_DAILY_OFFER_CAP: number;
   MAX_OPEN_OFFERS_PER_RUNNER: number;
@@ -189,6 +191,7 @@ export const DEFAULTS: BusinessConfig = {
   OFFER_MAX_AMOUNT: 50000000, // ₦500,000 in kobo
   OFFER_DURATION_MIN_MINUTES: 5,
   OFFER_DURATION_MAX_MINUTES: 1440,
+  OFFER_DURATION_MAX_MINUTES_SERVICE: 20160, // 14 days
   FREE_RUNNER_DAILY_OFFER_LIMIT: 10,
   PRO_DAILY_OFFER_CAP: 100,
   MAX_OPEN_OFFERS_PER_RUNNER: 20,

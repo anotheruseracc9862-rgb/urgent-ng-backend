@@ -21,6 +21,7 @@ describe('Runner location (P9-07)', () => {
   let app: INestApplication;
   const prisma = getTestPrisma();
   let categoryId: string;
+  let serviceId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -28,7 +29,9 @@ describe('Runner location (P9-07)', () => {
   beforeEach(async () => {
     await cleanAll();
     await seedPolicies();
-    categoryId = (await seedCategories()).delivery;
+    const categories = await seedCategories();
+    categoryId = categories.delivery;
+    serviceId = categories.home_cleaning;
   });
   afterAll(async () => {
     await app.close();
@@ -221,6 +224,43 @@ describe('Runner location (P9-07)', () => {
       await share(s.runner, s.assignmentId).expect(200);
 
       expect((await live(s.requester, s.assignmentId).expect(200)).body.data.errandStatus).toBe('PICKED_UP');
+    });
+  });
+
+  describe('a service', () => {
+    // A service happens at one address, so there is nothing to follow: no sharing, no live view.
+    async function serviceScene() {
+      const s = await acceptedScene(app, serviceId, { locationType: 'ERRAND_DESTINATION' });
+      await consent(s.runner);
+      await executionStep(app, s.runner, s.assignmentId, 'start').expect(201);
+      return s;
+    }
+
+    it('refuses a location from the runner, with a clear reason, and stores nothing', async () => {
+      const s = await serviceScene();
+      const res = await share(s.runner, s.assignmentId).expect(404);
+      expect(res.body.error.code).toBe('LOCATION_NOT_AVAILABLE');
+      expect(res.body.error.details).toMatchObject({ reason: 'SERVICE' });
+      expect(await prisma.$queryRaw`SELECT 1 FROM location_records WHERE assignment_id = ${s.assignmentId}::uuid`).toHaveLength(0);
+    });
+
+    it('shows the requester no live view', async () => {
+      const s = await serviceScene();
+      expect((await live(s.requester, s.assignmentId).expect(404)).body.error.code).toBe('LOCATION_NOT_AVAILABLE');
+      expect((await live(s.runner, s.assignmentId).expect(404)).body.error.code).toBe('LOCATION_NOT_AVAILABLE');
+    });
+
+    it('has no sharing to turn on or off', async () => {
+      const s = await serviceScene();
+      expect((await sharing(s.runner, s.assignmentId, false).expect(404)).body.error.code).toBe('LOCATION_NOT_AVAILABLE');
+      expect((await sharing(s.runner, s.assignmentId, true).expect(404)).body.error.code).toBe('LOCATION_NOT_AVAILABLE');
+    });
+
+    it('still lets a delivery share and be followed as before', async () => {
+      const s = await sharingRunner();
+      await executionStep(app, s.runner, s.assignmentId, 'start').expect(201);
+      await share(s.runner, s.assignmentId).expect(200);
+      expect((await live(s.requester, s.assignmentId).expect(200)).body.data.sharing).toBe('ACTIVE');
     });
   });
 

@@ -8,10 +8,10 @@ export class SubmitOfferDto {
   @Min(1)
   amountMinor!: number;
 
-  @ApiProperty({ description: 'Estimated duration in minutes (5-1440 by default).' })
+  @ApiProperty({ description: 'Estimated duration in minutes. The longest allowed depends on the errand: 1440 (24 hours) for a delivery-style errand, 20160 (14 days) for a service. See maxOfferMinutes on the category.' })
   @IsInt()
   @Min(1)
-  @Max(1440)
+  @Max(100_000)
   durationMinutes!: number;
 
   @ApiProperty({ description: 'The runner confirms they are available. Must be true; the server records the time.' })
@@ -35,7 +35,7 @@ export class CounterOfferDto {
   @ApiProperty()
   @IsInt()
   @Min(1)
-  @Max(1440)
+  @Max(100_000)
   durationMinutes!: number;
 
   @ApiPropertyOptional()
@@ -188,6 +188,9 @@ export class OfferNegotiationDto {
 
   @ApiProperty()
   errandTitle!: string;
+
+  @ApiProperty({ description: 'The longest estimated time either side may propose on this errand, in minutes.' })
+  maxDurationMinutes!: number;
 
   @ApiProperty({ description: 'Counter-offers made so far, by both sides together.' })
   roundsUsed!: number;

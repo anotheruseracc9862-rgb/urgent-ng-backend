@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
 
 export interface CategoryView {
   id: string;
@@ -9,6 +10,8 @@ export interface CategoryView {
   requiresDestination: boolean;
   /** TRANSIT moves something between places. SERVICE is work done at one address. */
   flow: 'TRANSIT' | 'SERVICE';
+  /** The longest time a runner may quote on an errand in this category, in minutes. */
+  maxOfferMinutes: number;
   isPopular: boolean;
 }
 
@@ -26,13 +29,20 @@ export interface ProhibitedItemView {
  */
 @Injectable()
 export class ReferenceDataService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: BusinessConfigService,
+  ) {}
 
   async categories(options: { popularOnly?: boolean } = {}): Promise<CategoryView[]> {
     const rows = await this.prisma.client.category.findMany({
       where: { active: true, ...(options.popularOnly ? { isPopular: true } : {}) },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
+    const [transitMax, serviceMax] = await Promise.all([
+      this.config.get('OFFER_DURATION_MAX_MINUTES'),
+      this.config.get('OFFER_DURATION_MAX_MINUTES_SERVICE'),
+    ]);
     return rows.map((row) => ({
       id: row.id,
       key: row.key,
@@ -40,6 +50,7 @@ export class ReferenceDataService {
       requiresPickup: row.requiresPickup,
       requiresDestination: row.requiresDestination,
       flow: row.flow,
+      maxOfferMinutes: row.flow === 'SERVICE' ? serviceMax : transitMax,
       isPopular: row.isPopular,
     }));
   }
