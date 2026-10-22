@@ -154,6 +154,18 @@ describe('Admin API: users, verification, enforcement, blocklist, badges (P11-02
       expect((await trust.get(`/admin/users/${user.userId}/verifications`).expect(200)).body.data).toHaveLength(1);
     });
 
+    it('reads one attempt summary by id without the sensitive submission, and returns 404 for an unknown id', async () => {
+      const trust = as(await login('TRUST_AND_SAFETY'));
+      const finance = as(await login('FINANCE'));
+      const user = await signedInUser(app);
+      const id = await attempt(user.userId);
+      const row = (await trust.get(`/admin/verifications/${id}`).expect(200)).body.data;
+      expect(row).toMatchObject({ id, userId: user.userId, status: 'REVIEW_REQUIRED' });
+      expect(row).not.toHaveProperty('submission');
+      await finance.get(`/admin/verifications/${id}`).expect(403);
+      await trust.get('/admin/verifications/00000000-0000-4000-8000-000000000000').expect(404);
+    });
+
     it('rejects with a failure reason, grants attempts and revokes', async () => {
       const trust = as(await login('TRUST_AND_SAFETY'));
       const user = await signedInUser(app);

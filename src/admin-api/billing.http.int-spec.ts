@@ -145,10 +145,15 @@ describe('Admin API: billing (P11-05)', () => {
 
       const queue = (await second.get('/admin/refunds').expect(200)).body.data;
       expect(queue.map((r: { id: string }) => r.id)).toEqual([asked.body.data.id]);
+      const pendingOrder = (await second.get(`/admin/orders/${big.order.id}`).expect(200)).body.data;
+      expect(pendingOrder.refunds[0]).toMatchObject(queue[0].data);
+      expect(pendingOrder.refunds[0].paymentId).toBe(big.payment.id);
       await first.post(`/admin/refunds/${asked.body.data.id}/approve`, reason).expect(409);
       const approved = await second.post(`/admin/refunds/${asked.body.data.id}/approve`, reason).expect(200);
 
       expect(approved.body.data.status).toBe('COMPLETED');
+      const completedOrder = (await second.get(`/admin/orders/${big.order.id}`).expect(200)).body.data;
+      expect(completedOrder.refunds[0]).toMatchObject({ requestedById: queue[0].data.requestedById, approvedBy: expect.any(String), status: 'COMPLETED' });
     });
 
     it('rejects a waiting refund, and refuses without REFUNDS_APPROVE', async () => {

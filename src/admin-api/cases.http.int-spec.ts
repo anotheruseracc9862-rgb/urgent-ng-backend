@@ -11,7 +11,7 @@ import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, adminLogin, bearer, createAdmin, seedAdminRoles, seedPolicies, type TestAdmin } from '../test/auth.helper.js';
 import { seedCategories } from '../test/errand.helper.js';
-import { acceptedScene, completedScene, executionStep, offerScene } from '../test/assignment.helper.js';
+import { acceptedScene, completedScene, executionStep } from '../test/assignment.helper.js';
 import { dispatchOutbox } from '../test/events.helper.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';

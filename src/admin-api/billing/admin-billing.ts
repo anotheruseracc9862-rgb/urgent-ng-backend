@@ -158,7 +158,11 @@ export class AdminBillingService {
         paidAt: p.paidAt,
         attempts: attempts.filter((a) => a.paymentId === p.id).map((a) => ({ kind: a.kind, status: a.status, at: a.createdAt })),
       })),
-      refunds: refunds.map((r) => ({ id: r.id, status: r.status, amountMinor: Number(r.amountMinor), reason: r.reason, createdAt: r.createdAt })),
+      refunds: refunds.map((r) => ({
+        id: r.id, status: r.status, amountMinor: Number(r.amountMinor), reason: r.reason, createdAt: r.createdAt,
+        paymentId: r.paymentId, requestedByType: r.requestedByType, requestedById: r.requestedById,
+        approvedBy: r.approvedBy, failureReason: r.failureReason,
+      })),
     };
   }
 

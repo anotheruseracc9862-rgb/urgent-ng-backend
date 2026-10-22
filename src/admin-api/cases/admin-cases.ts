@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { DisputeStatus, Prisma, RatingStatus, ReportStatus } from '@prisma/client';
+import { CategoryFlow, DisputeStatus, Prisma, RatingStatus, ReportStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -39,6 +39,8 @@ import { AnyObjectDto } from '../common/any-object.dto.js';
 // ---- DTOs ----
 
 export class CaseListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID() errandId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() assignmentId?: string;
   @ApiPropertyOptional({ description: 'Only cases assigned to you.' })
   @IsOptional() @Transform(({ value }) => value === true || value === 'true') @IsBoolean() mine?: boolean;
   @ApiPropertyOptional({ description: 'Only cases past their response or resolution deadline.' })
@@ -127,12 +129,25 @@ export class ChatViewQueryDto extends PaginationQueryDto {
   @IsIn(ADMIN_REASON_CODES as unknown as string[]) reasonCode!: AdminReasonCode;
 }
 
+export class AdminChatPageMetaDto {
+  @ApiProperty() hasNextPage!: boolean;
+  @ApiPropertyOptional() nextCursor?: string;
+}
+
+export class AdminDisputeChatDto {
+  @ApiProperty({ type: String, nullable: true }) conversationId!: string | null;
+  @ApiProperty({ type: AnyObjectDto, isArray: true }) messages!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: AdminChatPageMetaDto }) meta!: AdminChatPageMetaDto;
+}
+
 export class CaseRowDto {
   @ApiProperty() id!: string;
   @ApiProperty() status!: string;
   @ApiProperty() kind!: string;
   @ApiProperty({ nullable: true, type: String }) type!: string | null;
   @ApiProperty({ nullable: true, type: String }) errandId!: string | null;
+  @ApiProperty({ nullable: true, type: String }) assignmentId!: string | null;
+  @ApiProperty({ nullable: true, enum: CategoryFlow }) categoryFlow!: CategoryFlow | null;
   @ApiProperty({ nullable: true, type: String }) errandTitle!: string | null;
   @ApiProperty({ nullable: true, type: String }) assignedTo!: string | null;
   @ApiProperty({ nullable: true, type: Date }) slaDueAt!: Date | null;
@@ -151,10 +166,17 @@ export class AdminCasesService {
     private readonly pager: AdminPager,
   ) {}
 
-  async disputes(adminId: string, q: { status?: DisputeStatus; mine?: boolean; overdue?: boolean; unassigned?: boolean; cursor?: string; limit?: number }): Promise<Paginated<CaseRowDto>> {
+  async disputes(adminId: string, q: DisputeListQueryDto): Promise<Paginated<CaseRowDto>> {
     const limit = q.limit ?? 20;
-    const after = this.pager.after(q.cursor);
+    const priority = q.overdue || q.unassigned;
+    const after = priority ? undefined : this.pager.after(q.cursor);
+    const deadline = priority ? this.pager.deadline(q.cursor) : undefined;
     const c: Prisma.Sql[] = [Prisma.sql`d.deleted_at IS NULL`];
+    if (q.errandId) c.push(Prisma.sql`d.errand_id = ${q.errandId}::uuid`);
+    if (q.assignmentId) c.push(Prisma.sql`d.assignment_id = ${q.assignmentId}::uuid`);
+    if (deadline) c.push(deadline.dueAt === null
+      ? Prisma.sql`(d.sla_due_at IS NULL AND d.id > ${deadline.id}::uuid)`
+      : Prisma.sql`(d.sla_due_at IS NULL OR (d.sla_due_at, d.id) > (${deadline.dueAt}::timestamptz, ${deadline.id}::uuid))`);
     if (q.status) c.push(Prisma.sql`d.status = ${q.status}::"DisputeStatus"`);
     if (q.mine) c.push(Prisma.sql`d.assigned_to = ${adminId}::uuid`);
     if (q.unassigned) c.push(Prisma.sql`d.assigned_to IS NULL`);
@@ -165,23 +187,24 @@ export class AdminCasesService {
     if (after) c.push(Prisma.sql`(d.created_at, d.id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     const rows = await this.prisma.$queryRaw<
       Array<{
-        id: string; status: string; type: string; errand_id: string; title: string; assigned_to: string | null;
+        id: string; status: string; type: string; errand_id: string; assignment_id: string; category_flow: CategoryFlow; title: string; assigned_to: string | null;
         sla_due_at: Date | null; resolution_due_at: Date | null; overdue: boolean; escalated_at: Date | null; created_at: Date;
       }>
     >`
-      SELECT d.id::text AS id, d.status::text AS status, d.type::text AS type, d.errand_id::text AS errand_id, e.title,
+      SELECT d.id::text AS id, d.status::text AS status, d.type::text AS type, d.errand_id::text AS errand_id, d.assignment_id::text AS assignment_id, cat.flow AS category_flow, e.title,
              d.assigned_to::text AS assigned_to, d.sla_due_at, d.resolution_due_at, d.escalated_at, d.created_at,
              (d.status IN ('OPEN'::"DisputeStatus", 'UNDER_REVIEW'::"DisputeStatus")
                AND ((d.first_response_at IS NULL AND d.sla_due_at < clock_timestamp()) OR d.resolution_due_at < clock_timestamp())) AS overdue
-      FROM disputes d JOIN errands e ON e.id = d.errand_id
+      FROM disputes d JOIN errands e ON e.id = d.errand_id JOIN categories cat ON cat.id = e.category_id
       WHERE ${Prisma.join(c, ' AND ')}
       ORDER BY ${q.overdue || q.unassigned ? Prisma.sql`d.sla_due_at ASC NULLS LAST, d.id ASC` : Prisma.sql`d.created_at DESC, d.id DESC`}
       LIMIT ${limit + 1}
     `;
     return this.pager.page(rows.map((r) => ({ ...r, createdAt: r.created_at })), limit, (r): CaseRowDto => ({
       id: r.id, status: r.status, kind: 'DISPUTE', type: r.type, errandId: r.errand_id, errandTitle: r.title, assignedTo: r.assigned_to,
+      assignmentId: r.assignment_id, categoryFlow: r.category_flow,
       slaDueAt: r.sla_due_at, resolutionDueAt: r.resolution_due_at, overdue: r.overdue, escalatedAt: r.escalated_at, createdAt: r.created_at,
-    }));
+    }), priority ? (r) => `sla:${r.sla_due_at?.toISOString() ?? 'null'}` : undefined);
   }
 
   async disputeWorkspace(disputeId: string): Promise<Record<string, unknown>> {
@@ -192,7 +215,7 @@ export class AdminCasesService {
         where: { id: d.assignmentId },
         include: { requester: { select: { id: true, name: true } }, runner: { select: { id: true, name: true } }, paymentAgreement: true },
       }),
-      this.prisma.errand.findUnique({ where: { id: d.errandId }, select: { id: true, title: true, status: true, statusBeforeDispute: true } }),
+      this.prisma.errand.findUnique({ where: { id: d.errandId }, select: { id: true, title: true, status: true, statusBeforeDispute: true, category: { select: { flow: true } } } }),
       this.prisma.executionEvent.findMany({ where: { assignmentId: d.assignmentId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
       this.prisma.checkpoint.findMany({ where: { assignmentId: d.assignmentId }, select: { type: true, capturedAt: true, note: true, mediaId: true } }),
       this.prisma.executionProblem.findMany({ where: { assignmentId: d.assignmentId, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
@@ -201,6 +224,7 @@ export class AdminCasesService {
     ]);
     return {
       id: d.id,
+      assignmentId: d.assignmentId,
       type: d.type,
       status: d.status,
       claim: d.claim,
@@ -231,23 +255,28 @@ export class AdminCasesService {
   }
 
   /** Chat extracts for a dispute: the messages of the conversation between its two parties. */
-  async disputeChat(disputeId: string, limit: number): Promise<{ conversationId: string | null; messages: Array<Record<string, unknown>> }> {
+  async disputeChat(disputeId: string, limit: number, cursor?: string): Promise<AdminDisputeChatDto> {
+    this.pager.after(cursor);
     const d = await this.prisma.dispute.findFirst({ where: { id: disputeId, deletedAt: null }, select: { assignmentId: true } });
     if (!d) throw DomainException.of(RESOURCE_NOT_FOUND);
     const a = await this.prisma.assignment.findUniqueOrThrow({ where: { id: d.assignmentId }, select: { errandId: true, runnerId: true } });
     const conversation = await this.prisma.conversation.findFirst({ where: { errandId: a.errandId, runnerId: a.runnerId, deletedAt: null }, select: { id: true } });
-    if (!conversation) return { conversationId: null, messages: [] };
-    return { conversationId: conversation.id, messages: await this.messages(conversation.id, limit) };
+    if (!conversation) return { conversationId: null, messages: [], meta: { hasNextPage: false } };
+    const page = await this.messages(conversation.id, limit, cursor);
+    return { conversationId: conversation.id, messages: page.items, meta: page.meta };
   }
 
-  async messages(conversationId: string, limit: number): Promise<Array<Record<string, unknown>>> {
+  async messages(conversationId: string, limit: number, cursor?: string): Promise<Paginated<Record<string, unknown>>> {
+    const after = this.pager.after(cursor);
     const rows = await this.prisma.message.findMany({
-      where: { conversationId, deletedAt: null },
+      where: { conversationId, deletedAt: null,
+        ...(after ? { OR: [{ createdAt: { gt: after.createdAt } }, { createdAt: after.createdAt, id: { gt: after.id } }] } : {}),
+      },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: limit,
+      take: limit + 1,
       include: { sender: { select: { id: true, name: true } } },
     });
-    return rows.map((m) => ({
+    return this.pager.page(rows, limit, (m) => ({
       id: m.id,
       sender: m.sender,
       type: m.type,
@@ -270,10 +299,17 @@ export class AdminCasesService {
     return m.senderId;
   }
 
-  async reports(adminId: string, q: { status?: ReportStatus; targetType?: string; mine?: boolean; overdue?: boolean; unassigned?: boolean; cursor?: string; limit?: number }): Promise<Paginated<CaseRowDto>> {
+  async reports(adminId: string, q: ReportListQueryDto): Promise<Paginated<CaseRowDto>> {
     const limit = q.limit ?? 20;
-    const after = this.pager.after(q.cursor);
+    const priority = q.overdue || q.unassigned;
+    const after = priority ? undefined : this.pager.after(q.cursor);
+    const deadline = priority ? this.pager.deadline(q.cursor) : undefined;
     const c: Prisma.Sql[] = [Prisma.sql`r.deleted_at IS NULL`];
+    if (q.errandId) c.push(Prisma.sql`r.errand_id = ${q.errandId}::uuid`);
+    if (q.assignmentId) c.push(Prisma.sql`r.assignment_id = ${q.assignmentId}::uuid`);
+    if (deadline) c.push(deadline.dueAt === null
+      ? Prisma.sql`(r.sla_due_at IS NULL AND r.id > ${deadline.id}::uuid)`
+      : Prisma.sql`(r.sla_due_at IS NULL OR (r.sla_due_at, r.id) > (${deadline.dueAt}::timestamptz, ${deadline.id}::uuid))`);
     if (q.status) c.push(Prisma.sql`r.status = ${q.status}::"ReportStatus"`);
     if (q.targetType) c.push(Prisma.sql`r.target_type::text = ${q.targetType}`);
     if (q.mine) c.push(Prisma.sql`r.assigned_to = ${adminId}::uuid`);
@@ -282,32 +318,34 @@ export class AdminCasesService {
     if (after) c.push(Prisma.sql`(r.created_at, r.id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     const rows = await this.prisma.$queryRaw<
       Array<{
-        id: string; status: string; type: string; errand_id: string | null; title: string | null; assigned_to: string | null;
+        id: string; status: string; type: string; errand_id: string | null; assignment_id: string | null; category_flow: CategoryFlow | null; title: string | null; assigned_to: string | null;
         sla_due_at: Date | null; overdue: boolean; escalated_at: Date | null; created_at: Date;
       }>
     >`
-      SELECT r.id::text AS id, r.status::text AS status, r.type::text AS type, r.errand_id::text AS errand_id, e.title,
+      SELECT r.id::text AS id, r.status::text AS status, r.type::text AS type, r.errand_id::text AS errand_id, r.assignment_id::text AS assignment_id, cat.flow AS category_flow, e.title,
              r.assigned_to::text AS assigned_to, r.sla_due_at, r.escalated_at, r.created_at,
              (r.status IN ('OPEN'::"ReportStatus", 'UNDER_REVIEW'::"ReportStatus", 'ACTION_REQUIRED'::"ReportStatus")
                AND r.first_response_at IS NULL AND r.sla_due_at < clock_timestamp()) AS overdue
-      FROM reports r LEFT JOIN errands e ON e.id = r.errand_id
+      FROM reports r LEFT JOIN errands e ON e.id = r.errand_id LEFT JOIN categories cat ON cat.id = e.category_id
       WHERE ${Prisma.join(c, ' AND ')}
       ORDER BY ${q.overdue || q.unassigned ? Prisma.sql`r.sla_due_at ASC NULLS LAST, r.id ASC` : Prisma.sql`r.created_at DESC, r.id DESC`}
       LIMIT ${limit + 1}
     `;
     return this.pager.page(rows.map((r) => ({ ...r, createdAt: r.created_at })), limit, (r): CaseRowDto => ({
       id: r.id, status: r.status, kind: 'REPORT', type: r.type, errandId: r.errand_id, errandTitle: r.title, assignedTo: r.assigned_to,
+      assignmentId: r.assignment_id, categoryFlow: r.category_flow,
       slaDueAt: r.sla_due_at, resolutionDueAt: null, overdue: r.overdue, escalatedAt: r.escalated_at, createdAt: r.created_at,
-    }));
+    }), priority ? (r) => `sla:${r.sla_due_at?.toISOString() ?? 'null'}` : undefined);
   }
 
   async reportDetail(reportId: string): Promise<Record<string, unknown>> {
     const r = await this.prisma.report.findFirst({ where: { id: reportId, deletedAt: null }, include: { evidence: true } });
     if (!r) throw DomainException.of(RESOURCE_NOT_FOUND);
-    const [reporter, target, notes] = await Promise.all([
+    const [reporter, target, notes, errand] = await Promise.all([
       this.prisma.user.findFirst({ where: { id: r.reporterId }, select: { id: true, name: true } }),
       r.targetUserId ? this.prisma.user.findFirst({ where: { id: r.targetUserId }, select: { id: true, name: true } }) : Promise.resolve(null),
       this.notes('report', reportId),
+      r.errandId ? this.prisma.errand.findUnique({ where: { id: r.errandId }, select: { category: { select: { flow: true } } } }) : Promise.resolve(null),
     ]);
     return {
       id: r.id,
@@ -318,6 +356,7 @@ export class AdminCasesService {
       reporter,
       target,
       errandId: r.errandId,
+      categoryFlow: errand?.category.flow ?? null,
       assignmentId: r.assignmentId,
       messageId: r.messageId,
       ratingId: r.ratingId,
@@ -475,10 +514,10 @@ export class AdminCasesController {
   /** Chat extracts for the case. Needs CHAT_SENSITIVE_VIEW and a reason; audited. */
   @Get('disputes/:id/chat')
   @AdminAuth('DISPUTES_VIEW', 'CHAT_SENSITIVE_VIEW')
-  @ApiEnveloped(AnyObjectDto)
+  @ApiEnveloped(AdminDisputeChatDto, { description: 'Oldest-first messages. Continue with data.meta.nextCursor; each page requires a reason and is audited.' })
   @ApiErrors(400, 403, 404)
   async disputeChat(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Query() query: ChatViewQueryDto, @ReqCtx() ctx: RequestContext) {
-    const chat = await this.cases.disputeChat(id, query.limit ?? 50);
+    const chat = await this.cases.disputeChat(id, query.limit ?? 50, query.cursor);
     await this.sensitive.record({
       admin,
       permission: 'CHAT_SENSITIVE_VIEW',
@@ -760,7 +799,7 @@ export class AdminCasesController {
   /** A conversation's messages. Needs CHAT_SENSITIVE_VIEW and a reason; audited before the content is returned. */
   @Get('conversations/:id/messages')
   @AdminAuth('CHAT_SENSITIVE_VIEW')
-  @ApiEnveloped(AnyObjectDto, { isArray: true })
+  @ApiEnveloped(AnyObjectDto, { isArray: true, description: 'Oldest-first messages. Continue with meta.nextCursor; each page requires a reason and is audited.' })
   @ApiErrors(400, 403, 404)
   async conversation(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string, @Query() query: ChatViewQueryDto, @ReqCtx() ctx: RequestContext) {
     await this.cases.conversationExists(id);
@@ -773,7 +812,7 @@ export class AdminCasesController {
       reasonText: query.reasonCode,
       ctx,
     });
-    return this.cases.messages(id, query.limit ?? 50);
+    return this.cases.messages(id, query.limit ?? 50, query.cursor);
   }
 
   /** Remove one message's content (the sender is told through enforcement). */
@@ -801,4 +840,3 @@ export class AdminCasesController {
     });
   }
 }
-

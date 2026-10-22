@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { AssignmentStatus, ErrandStatus, Prisma } from '@prisma/client';
+import { AssignmentStatus, CategoryFlow, ErrandStatus, Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -37,6 +37,7 @@ export class AdminErrandRowDto {
   @ApiProperty() title!: string;
   @ApiProperty({ enum: ErrandStatus }) status!: ErrandStatus;
   @ApiProperty() category!: string;
+  @ApiProperty({ enum: CategoryFlow }) categoryFlow!: CategoryFlow;
   @ApiProperty() requesterId!: string;
   @ApiProperty() requesterName!: string;
   @ApiProperty() offerCount!: number;
@@ -66,6 +67,7 @@ export class AdminTransitionDto extends AdminActionDto {
 }
 
 export class AdminAssignmentListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID() errandId?: string;
   @ApiPropertyOptional({ enum: AssignmentStatus }) @IsOptional() @IsEnum(AssignmentStatus) status?: AssignmentStatus;
   @ApiPropertyOptional() @IsOptional() @IsUUID() runnerId?: string;
   @ApiPropertyOptional() @IsOptional() @IsUUID() requesterId?: string;
@@ -76,6 +78,7 @@ export class AdminAssignmentRowDto {
   @ApiProperty() id!: string;
   @ApiProperty() errandId!: string;
   @ApiProperty() errandTitle!: string;
+  @ApiProperty({ enum: CategoryFlow }) categoryFlow!: CategoryFlow;
   @ApiProperty({ enum: AssignmentStatus }) status!: AssignmentStatus;
   @ApiProperty({ enum: ErrandStatus }) errandStatus!: ErrandStatus;
   @ApiProperty() requesterId!: string;
@@ -114,12 +117,12 @@ export class AdminErrandsService {
     if (after) conditions.push(Prisma.sql`(e.created_at, e.id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     const rows = await this.prisma.$queryRaw<
       Array<{
-        id: string; title: string; status: ErrandStatus; category: string; requester_id: string; requester_name: string;
+        id: string; title: string; status: ErrandStatus; category: string; category_flow: CategoryFlow; requester_id: string; requester_name: string;
         offer_count: number; pickup_area: string | null; destination_area: string | null; published_at: Date | null;
         expires_at: Date | null; created_at: Date;
       }>
     >`
-      SELECT e.id::text AS id, e.title, e.status, c.name AS category, e.requester_id::text AS requester_id, u.name AS requester_name,
+      SELECT e.id::text AS id, e.title, e.status, c.name AS category, c.flow AS category_flow, e.requester_id::text AS requester_id, u.name AS requester_name,
              e.offer_count, e.published_at, e.expires_at, e.created_at,
              (SELECT l.area FROM errand_locations l WHERE l.errand_id = e.id AND l.type = 'ERRAND_PICKUP'::"LocationType" AND l.deleted_at IS NULL LIMIT 1) AS pickup_area,
              (SELECT l.area FROM errand_locations l WHERE l.errand_id = e.id AND l.type = 'ERRAND_DESTINATION'::"LocationType" AND l.deleted_at IS NULL LIMIT 1) AS destination_area
@@ -132,14 +135,14 @@ export class AdminErrandsService {
       rows.map((r) => ({ ...r, createdAt: r.created_at })),
       limit,
       (r): AdminErrandRowDto => ({
-        id: r.id, title: r.title, status: r.status, category: r.category, requesterId: r.requester_id, requesterName: r.requester_name,
+        id: r.id, title: r.title, status: r.status, category: r.category, categoryFlow: r.category_flow, requesterId: r.requester_id, requesterName: r.requester_name,
         offerCount: r.offer_count, pickupArea: r.pickup_area, destinationArea: r.destination_area, publishedAt: r.published_at,
         expiresAt: r.expires_at, createdAt: r.created_at,
       }),
     );
   }
 
-  async detail(errandId: string): Promise<Record<string, unknown>> {
+  async detail(errandId: string, locateConversation = false): Promise<Record<string, unknown>> {
     const errand = await this.prisma.errand.findFirst({
       where: { id: errandId },
       include: { category: true, requester: { select: { id: true, name: true } } },
@@ -167,7 +170,8 @@ export class AdminErrandsService {
       description: errand.description,
       status: errand.status,
       version: errand.version,
-      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name },
+      category: { id: errand.category.id, key: errand.category.key, name: errand.category.name, flow: errand.category.flow },
+      ...(locateConversation ? { conversationId: assignment ? await this.conversationId(errandId, assignment.runnerId) : null } : {}),
       requester: errand.requester,
       priority: errand.priority,
       timeMode: errand.timeMode,
@@ -277,11 +281,12 @@ export class AdminErrandsService {
   }
 
   async assignments(options: {
-    status?: AssignmentStatus; runnerId?: string; requesterId?: string; q?: string; cursor?: string; limit?: number;
+    status?: AssignmentStatus; errandId?: string; runnerId?: string; requesterId?: string; q?: string; cursor?: string; limit?: number;
   }): Promise<Paginated<AdminAssignmentRowDto>> {
     const limit = options.limit ?? 20;
     const after = this.pager.after(options.cursor);
     const conditions: Prisma.Sql[] = [Prisma.sql`a.deleted_at IS NULL`];
+    if (options.errandId) conditions.push(Prisma.sql`a.errand_id = ${options.errandId}::uuid`);
     if (options.status) conditions.push(Prisma.sql`a.status = ${options.status}::"AssignmentStatus"`);
     if (options.runnerId) conditions.push(Prisma.sql`a.runner_id = ${options.runnerId}::uuid`);
     if (options.requesterId) conditions.push(Prisma.sql`a.requester_id = ${options.requesterId}::uuid`);
@@ -289,14 +294,14 @@ export class AdminErrandsService {
     if (after) conditions.push(Prisma.sql`(a.created_at, a.id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     const rows = await this.prisma.$queryRaw<
       Array<{
-        id: string; errand_id: string; title: string; status: AssignmentStatus; errand_status: ErrandStatus; requester_id: string;
+        id: string; errand_id: string; title: string; category_flow: CategoryFlow; status: AssignmentStatus; errand_status: ErrandStatus; requester_id: string;
         runner_id: string; runner_name: string; agreed: bigint; selected_at: Date; accepted_at: Date | null; created_at: Date;
       }>
     >`
-      SELECT a.id::text AS id, a.errand_id::text AS errand_id, e.title, a.status, e.status AS errand_status,
+      SELECT a.id::text AS id, a.errand_id::text AS errand_id, e.title, c.flow AS category_flow, a.status, e.status AS errand_status,
              a.requester_id::text AS requester_id, a.runner_id::text AS runner_id, u.name AS runner_name,
              a.agreed_amount_minor AS agreed, a.selected_at, a.accepted_at, a.created_at
-      FROM assignments a JOIN errands e ON e.id = a.errand_id JOIN users u ON u.id = a.runner_id
+      FROM assignments a JOIN errands e ON e.id = a.errand_id JOIN categories c ON c.id = e.category_id JOIN users u ON u.id = a.runner_id
       WHERE ${Prisma.join(conditions, ' AND ')}
       ORDER BY a.created_at DESC, a.id DESC
       LIMIT ${limit + 1}
@@ -305,18 +310,18 @@ export class AdminErrandsService {
       rows.map((r) => ({ ...r, createdAt: r.created_at })),
       limit,
       (r): AdminAssignmentRowDto => ({
-        id: r.id, errandId: r.errand_id, errandTitle: r.title, status: r.status, errandStatus: r.errand_status,
+        id: r.id, errandId: r.errand_id, errandTitle: r.title, categoryFlow: r.category_flow, status: r.status, errandStatus: r.errand_status,
         requesterId: r.requester_id, runnerId: r.runner_id, runnerName: r.runner_name, agreedAmountMinor: Number(r.agreed),
         selectedAt: r.selected_at, acceptedAt: r.accepted_at, createdAt: r.created_at,
       }),
     );
   }
 
-  async assignmentDetail(assignmentId: string): Promise<Record<string, unknown>> {
+  async assignmentDetail(assignmentId: string, locateConversation = false): Promise<Record<string, unknown>> {
     const a = await this.prisma.assignment.findFirst({
       where: { id: assignmentId },
       include: {
-        errand: { select: { id: true, title: true, status: true } },
+        errand: { select: { id: true, title: true, status: true, category: { select: { flow: true } } } },
         runner: { select: { id: true, name: true } },
         requester: { select: { id: true, name: true } },
         paymentAgreement: true,
@@ -332,6 +337,7 @@ export class AdminErrandsService {
       id: a.id,
       status: a.status,
       errand: a.errand,
+      ...(locateConversation ? { conversationId: await this.conversationId(a.errandId, a.runnerId) } : {}),
       runner: a.runner,
       requester: a.requester,
       agreedAmountMinor: Number(a.agreedAmountMinor),
@@ -348,6 +354,11 @@ export class AdminErrandsService {
       problems: problems.map((p) => ({ id: p.id, type: p.type, status: p.status, note: p.note, createdAt: p.createdAt, resolvedAt: p.resolvedAt })),
       changeRequests: changes.map((c) => ({ id: c.id, type: c.type, status: c.status, expiresAt: c.expiresAt, createdAt: c.createdAt })),
     };
+  }
+
+  private async conversationId(errandId: string, runnerId: string): Promise<string | null> {
+    const conversation = await this.prisma.conversation.findFirst({ where: { errandId, runnerId, deletedAt: null }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { id: true } });
+    return conversation?.id ?? null;
   }
 
   async errandIdOfAssignment(assignmentId: string): Promise<{ errandId: string; requesterId: string }> {
@@ -413,8 +424,8 @@ export class AdminErrandsController {
   @AdminAuth('ERRANDS_VIEW')
   @ApiEnveloped(AnyObjectDto)
   @ApiErrors(404)
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.detail(id);
+  detail(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.detail(id, admin.permissions.includes('CHAT_SENSITIVE_VIEW'));
   }
 
   @Get('errands/:id/timeline')
@@ -595,8 +606,8 @@ export class AdminErrandsController {
   @AdminAuth('ERRANDS_VIEW')
   @ApiEnveloped(AnyObjectDto)
   @ApiErrors(404)
-  assignment(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.assignmentDetail(id);
+  assignment(@CurrentAdmin() admin: AuthenticatedAdmin, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.assignmentDetail(id, admin.permissions.includes('CHAT_SENSITIVE_VIEW'));
   }
 
   /** Cancel the assignment's errand as an admin. From pickup on, the state machine requires a dispute instead. */

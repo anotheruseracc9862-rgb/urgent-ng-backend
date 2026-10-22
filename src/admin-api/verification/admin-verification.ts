@@ -62,13 +62,14 @@ export class AdminVerificationService {
     private readonly pager: AdminPager,
   ) {}
 
-  async queue(options: { status?: VerificationStatus; userId?: string; cursor?: string; limit?: number }): Promise<Paginated<VerificationRowDto>> {
+  async queue(options: { status?: VerificationStatus; userId?: string; attemptId?: string; cursor?: string; limit?: number }): Promise<Paginated<VerificationRowDto>> {
     const limit = options.limit ?? 20;
     const after = this.pager.after(options.cursor);
-    const status = options.userId ? options.status : (options.status ?? 'REVIEW_REQUIRED');
+    const status = options.userId || options.attemptId ? options.status : (options.status ?? 'REVIEW_REQUIRED');
     const conditions: Prisma.Sql[] = [Prisma.sql`a.deleted_at IS NULL`];
     if (status) conditions.push(Prisma.sql`a.status = ${status}::"VerificationStatus"`);
     if (options.userId) conditions.push(Prisma.sql`a.user_id = ${options.userId}::uuid`);
+    if (options.attemptId) conditions.push(Prisma.sql`a.id = ${options.attemptId}::uuid`);
     if (after) conditions.push(Prisma.sql`(a.created_at, a.id) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
     const rows = await this.prisma.$queryRaw<
       Array<{
@@ -115,6 +116,13 @@ export class AdminVerificationService {
     );
   }
 
+  /** One attempt's non-sensitive summary, for reloadable review links. Never reads the submission. */
+  async attempt(attemptId: string): Promise<VerificationRowDto> {
+    const [row] = (await this.queue({ attemptId, limit: 1 })).items;
+    if (!row) throw DomainException.of(RESOURCE_NOT_FOUND);
+    return row;
+  }
+
   async userIdOf(attemptId: string): Promise<string> {
     const row = await this.prisma.verificationAttempt.findUnique({ where: { id: attemptId }, select: { userId: true } });
     if (!row) throw DomainException.of(RESOURCE_NOT_FOUND);
@@ -150,6 +158,15 @@ export class AdminVerificationController {
   @ApiErrors(403)
   history(@Param('id', ParseUUIDPipe) id: string, @Query() query: PaginationQueryDto) {
     return this.verification.queue({ userId: id, cursor: query.cursor, limit: query.limit });
+  }
+
+  /** One attempt's summary. Identity details stay behind the audited submission read. */
+  @Get('verifications/:attemptId')
+  @AdminAuth('VERIFICATION_VIEW')
+  @ApiEnveloped(VerificationRowDto)
+  @ApiErrors(403, 404)
+  attempt(@Param('attemptId', ParseUUIDPipe) attemptId: string) {
+    return this.verification.attempt(attemptId);
   }
 
   /** What the runner told us: identity details, the ID document and the guarantor. Audited. */
