@@ -12,6 +12,7 @@ export type RetentionReport = Record<
   | 'authSessions'
   | 'adminSessions'
   | 'offerDailyCounters'
+  | 'errandViews'
   | 'analyticsEvents'
   | 'messagesRedacted',
   number
@@ -47,6 +48,7 @@ export class RetentionService {
       authSessions: await this.purgeSessions('auth_sessions', batch),
       adminSessions: await this.purgeSessions('admin_sessions', batch),
       offerDailyCounters: await this.purgeOfferCounters(batch),
+      errandViews: await this.purgeErrandViews(batch),
       analyticsEvents: await this.purgeAnalytics(batch),
       messagesRedacted: await this.redactMessages(batch),
     };
@@ -102,6 +104,22 @@ export class RetentionService {
       WHERE id IN (
         SELECT id FROM admin_sessions
         WHERE LEAST(expires_at, COALESCE(revoked_at, expires_at)) < clock_timestamp() - make_interval(days => ${days}::int)
+        LIMIT ${batch}
+      )
+    `;
+  }
+
+  /**
+   * Which runner opened which errand, kept only to count a boost's results ("opened by N runners"). Rows whose last
+   * view is older than ERRAND_VIEW_RETENTION_DAYS are removed for good. A boost lasts a day, so nothing live needs them.
+   */
+  async purgeErrandViews(batch = BATCH): Promise<number> {
+    const days = await this.config.get('ERRAND_VIEW_RETENTION_DAYS');
+    return this.prisma.$executeRaw`
+      DELETE FROM errand_views
+      WHERE (errand_id, viewer_id) IN (
+        SELECT errand_id, viewer_id FROM errand_views
+        WHERE last_viewed_at < clock_timestamp() - make_interval(days => ${days}::int)
         LIMIT ${batch}
       )
     `;

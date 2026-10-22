@@ -8,7 +8,7 @@ import type { INestApplication } from '@nestjs/common';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { seedPolicies, signedInUser } from '../test/auth.helper.js';
-import { seedCategories } from '../test/errand.helper.js';
+import { insertErrand, seedCategories } from '../test/errand.helper.js';
 import { completedScene } from '../test/assignment.helper.js';
 import { RetentionService } from './retention.service.js';
 
@@ -104,6 +104,22 @@ describe('Retention (P12-02)', () => {
       expect(await retention.purgeOfferCounters()).toBe(1);
       const left = (await prisma.offerDailyCounter.findMany({ select: { dayLagos: true } })).map((r) => r.dayLagos).sort();
       expect(left).toEqual([lagosDay(-3), lagosDay(0)].sort());
+    });
+
+    it('removes who-opened-which-errand rows after 90 days and keeps newer ones', async () => {
+      const requester = await signedInUser(app);
+      const runner = await signedInUser(app);
+      const errandId = await insertErrand({ requesterId: requester.userId, categoryId });
+      const other = await signedInUser(app);
+      const view = (viewerId: string, ageDays: number) =>
+        prisma.errandView.create({ data: { errandId, viewerId, lastViewedAt: new Date(Date.now() - ageDays * 86_400_000) } });
+      await view(runner.userId, 91);
+      await view(other.userId, 89);
+
+      expect(await retention.purgeErrandViews()).toBe(1);
+
+      const left = await prisma.errandView.findMany({ where: { errandId } });
+      expect(left.map((row) => row.viewerId)).toEqual([other.userId]);
     });
 
     it('removes analytics events after 13 months', async () => {
@@ -214,7 +230,7 @@ describe('Retention (P12-02)', () => {
   it('runs every rule in one pass and reports what it did', async () => {
     const report = await retention.runAll();
     expect(Object.keys(report).sort()).toEqual(
-      ['adminSessions', 'analyticsEvents', 'authSessions', 'messagesRedacted', 'notificationDeliveries', 'notifications', 'offerDailyCounters', 'outboxEvents'].sort(),
+      ['adminSessions', 'analyticsEvents', 'authSessions', 'errandViews', 'messagesRedacted', 'notificationDeliveries', 'notifications', 'offerDailyCounters', 'outboxEvents'].sort(),
     );
     expect(Object.values(report).every((n) => n === 0)).toBe(true);
   });

@@ -91,6 +91,7 @@ export interface BusinessConfig {
   SESSION_RETENTION_DAYS: number;
   /** Days of per-day offer counters kept (only today's count matters for the limit). */
   OFFER_COUNTER_RETENTION_DAYS: number;
+  ERRAND_VIEW_RETENTION_DAYS: number;
   KYC_SELFIE_MATCH_THRESHOLD: number;
   KYC_REQUEST_TIMEOUT_SECONDS: number;
   IDEMPOTENCY_TTL_HOURS: number;
@@ -256,6 +257,7 @@ export const DEFAULTS: BusinessConfig = {
   OUTBOX_RETENTION_DAYS: 7,
   SESSION_RETENTION_DAYS: 30,
   OFFER_COUNTER_RETENTION_DAYS: 7,
+  ERRAND_VIEW_RETENTION_DAYS: 90, // which runner opened which errand: kept only long enough to count a boost's results
   KYC_SELFIE_MATCH_THRESHOLD: 90,
   KYC_REQUEST_TIMEOUT_SECONDS: 30,
   IDEMPOTENCY_TTL_HOURS: 24,
