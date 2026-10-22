@@ -309,6 +309,12 @@ export class ErrandPhotoDto {
 export class ErrandBoostDto {
   @ApiProperty({ type: Date })
   expiresAt!: Date;
+  @ApiProperty({ type: Date })
+  startedAt!: Date;
+  @ApiProperty({ description: 'Runners who opened the errand since the boost started. A count only.' })
+  openedByCount!: number;
+  @ApiProperty({ description: 'Offers received since the boost started.' })
+  offersSinceCount!: number;
 }
 
 export class ErrandAssignmentSummaryDto {
@@ -442,6 +448,8 @@ export class ErrandSummaryDto {
   destinationApprox!: LatLngDto | null;
   @ApiProperty({ type: ErrandBoostDto, nullable: true, description: 'The boost running on this errand now, or null.' })
   boost!: ErrandBoostDto | null;
+  @ApiProperty({ type: Date, nullable: true, description: 'When a boost bought now would end: the boost length, or the errand\'s own deadline if that is sooner. Null unless the errand is open and not boosted.' })
+  boostWouldEndAt!: Date | null;
   offerCount!: number;
   @ApiProperty({ nullable: true, type: Date })
   publishedAt!: Date | null;

@@ -1,4 +1,6 @@
 import { findLiveBoosts } from '../boosts/live-boost.js';
+import { boostWindow } from '../billing/billing.rules.js';
+import { BusinessConfigService } from '../config/business-config.service.js';
 import { Injectable } from '@nestjs/common';
 import { Prisma, type ErrandStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
@@ -35,6 +37,7 @@ export class ErrandQueryService {
     private readonly prisma: PrismaService,
     private readonly cursors: CursorService,
     private readonly expiry: ErrandExpiryService,
+    private readonly config: BusinessConfigService,
   ) {}
 
   async mine(
@@ -105,6 +108,8 @@ export class ErrandQueryService {
     const page = pageKeys.map((k) => byId.get(k.id)).filter((errand): errand is NonNullable<typeof errand> => Boolean(errand));
     const points = await this.approxPoints(page.map((errand) => errand.id));
     const boosts = await findLiveBoosts(this.prisma, page.map((errand) => errand.id));
+    const boostHours = await this.config.get('PRIORITY_BOOST_MAX_HOURS');
+    const now = new Date();
     const extras = await this.extras(userId, page.map((errand) => ({ id: errand.id, status: errand.status, offerCount: errand.offerCount, expiresAt: errand.expiresAt })));
 
     return new Paginated(
@@ -123,6 +128,9 @@ export class ErrandQueryService {
         pickupApprox: points.get(`${errand.id}:ERRAND_PICKUP`) ?? null,
         destinationApprox: points.get(`${errand.id}:ERRAND_DESTINATION`) ?? null,
         boost: boosts.get(errand.id) ?? null,
+        boostWouldEndAt: errand.status === 'OPEN' && !boosts.has(errand.id)
+          ? boostWindow({ now, maxHours: boostHours, errandExpiresAt: errand.expiresAt })?.expiresAt ?? null
+          : null,
         offerCount: errand.offerCount,
         publishedAt: errand.publishedAt,
         expiresAt: errand.expiresAt,

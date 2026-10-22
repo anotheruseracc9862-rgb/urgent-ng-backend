@@ -760,35 +760,36 @@ model User {
   deletedAt           DateTime?  @map("deleted_at") @db.Timestamptz(3)
 
   // Relations
-  profile              Profile?
-  authSessions         AuthSession[]
-  consentRecords       ConsentRecord[]
-  blocksGiven          Block[]                  @relation("BlockerRelation")
-  blocksReceived       Block[]                  @relation("BlockedRelation")
-  notificationPrefs    NotificationPreference[]
-  devices              Device[]
-  restrictions         UserRestriction[]
-  media                Media[]
-  runnerProfile        RunnerProfile?
-  verificationAttempts VerificationAttempt[]
-  errands              Errand[]                 @relation("ErrandRequester")
-  savedErrands         SavedErrand[]            @relation("SavedErrands")
-  offersAsRunner       Offer[]                  @relation("OfferRunner")
-  offersAsRequester    Offer[]                  @relation("OfferRequester")
-  negotiationEvents    NegotiationEvent[]       @relation("NegotiationActor")
-  assignmentsAsRequester Assignment[]           @relation("AssignmentRequester")
-  assignmentsAsRunner    Assignment[]           @relation("AssignmentRunner")
-  executionProblems      ExecutionProblem[]     @relation("ProblemReporter")
-  changeRequestsMade     ChangeRequest[]        @relation("ChangeRequester")
-  changeRequestsAnswered ChangeRequest[]        @relation("ChangeResponder")
-  conversationsAsRequester Conversation[]       @relation("ConversationRequester")
-  conversationsAsRunner    Conversation[]       @relation("ConversationRunner")
+  profile                  Profile?
+  authSessions             AuthSession[]
+  consentRecords           ConsentRecord[]
+  blocksGiven              Block[]                   @relation("BlockerRelation")
+  blocksReceived           Block[]                   @relation("BlockedRelation")
+  notificationPrefs        NotificationPreference[]
+  devices                  Device[]
+  restrictions             UserRestriction[]
+  media                    Media[]
+  runnerProfile            RunnerProfile?
+  verificationAttempts     VerificationAttempt[]
+  errands                  Errand[]                  @relation("ErrandRequester")
+  savedErrands             SavedErrand[]             @relation("SavedErrands")
+  offersAsRunner           Offer[]                   @relation("OfferRunner")
+  offersAsRequester        Offer[]                   @relation("OfferRequester")
+  negotiationEvents        NegotiationEvent[]        @relation("NegotiationActor")
+  assignmentsAsRequester   Assignment[]              @relation("AssignmentRequester")
+  assignmentsAsRunner      Assignment[]              @relation("AssignmentRunner")
+  executionProblems        ExecutionProblem[]        @relation("ProblemReporter")
+  changeRequestsMade       ChangeRequest[]           @relation("ChangeRequester")
+  changeRequestsAnswered   ChangeRequest[]           @relation("ChangeResponder")
+  conversationsAsRequester Conversation[]            @relation("ConversationRequester")
+  conversationsAsRunner    Conversation[]            @relation("ConversationRunner")
   conversationParticipants ConversationParticipant[]
-  messagesSent             Message[]            @relation("MessageSender")
+  messagesSent             Message[]                 @relation("MessageSender")
   notifications            Notification[]
-  ratingsGiven             Rating[]             @relation("RatingRater")
-  ratingsReceived          Rating[]             @relation("RatingRatee")
+  ratingsGiven             Rating[]                  @relation("RatingRater")
+  ratingsReceived          Rating[]                  @relation("RatingRatee")
   stats                    UserStats?
+  errandViews              ErrandView[]
 
   @@index([status], map: "users_status_idx")
   @@index([deletionScheduledAt], map: "users_deletion_scheduled_idx")
@@ -1050,18 +1051,18 @@ model AdminAuthEvent {
 
 // Reference data (Backend PRD A.5, section 11.2)
 model Category {
-  id                  String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  key                 String    @unique(map: "categories_key_key")
+  id                  String       @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  key                 String       @unique(map: "categories_key_key")
   name                String
-  requiresPickup      Boolean   @map("requires_pickup")
-  requiresDestination Boolean   @map("requires_destination")
+  requiresPickup      Boolean      @map("requires_pickup")
+  requiresDestination Boolean      @map("requires_destination")
   flow                CategoryFlow @default(TRANSIT)
-  sortOrder          Int       @default(0) @map("sort_order")
-  isPopular           Boolean   @default(false) @map("is_popular")
-  active              Boolean   @default(true)
-  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
+  sortOrder           Int          @default(0) @map("sort_order")
+  isPopular           Boolean      @default(false) @map("is_popular")
+  active              Boolean      @default(true)
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?    @map("deleted_at") @db.Timestamptz(3)
 
   errands Errand[]
 
@@ -1125,19 +1126,19 @@ model Media {
 // P4-01: Runner profile (Backend PRD 10.1). The operating area is one circle: centre + radius.
 // The centre is a PostGIS geography point, written and read with raw SQL only.
 model RunnerProfile {
-  userId              String                               @id @map("user_id") @db.Uuid
-  user                User                                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  userId              String                                @id @map("user_id") @db.Uuid
+  user                User                                  @relation(fields: [userId], references: [id], onDelete: Restrict)
   transport           TransportMethod
   areaCenter          Unsupported("geography(Point,4326)")? @map("area_center")
-  areaMode            String                               @default("RADIUS") @map("area_mode")
-  areaStateIds        String[]                             @default([]) @map("area_state_ids")
-  areaLgaIds          String[]                             @default([]) @map("area_lga_ids")
-  areaRadiusKm        Decimal                              @default(5) @map("area_radius_km") @db.Decimal(4, 1)
-  availability        RunnerAvailability                   @default(UNAVAILABLE)
-  excludedCategoryIds String[]                             @default([]) @map("excluded_category_ids") @db.Uuid
-  createdAt           DateTime                             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime                             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt           DateTime?                            @map("deleted_at") @db.Timestamptz(3)
+  areaMode            String                                @default("RADIUS") @map("area_mode")
+  areaStateIds        String[]                              @default([]) @map("area_state_ids")
+  areaLgaIds          String[]                              @default([]) @map("area_lga_ids")
+  areaRadiusKm        Decimal                               @default(5) @map("area_radius_km") @db.Decimal(4, 1)
+  availability        RunnerAvailability                    @default(UNAVAILABLE)
+  excludedCategoryIds String[]                              @default([]) @map("excluded_category_ids") @db.Uuid
+  createdAt           DateTime                              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?                             @map("deleted_at") @db.Timestamptz(3)
 
   @@index([areaCenter], type: Gist, map: "runner_profiles_area_center_idx")
   @@index([availability], map: "runner_profiles_availability_idx")
@@ -1194,20 +1195,20 @@ enum GuarantorRelationship {
 }
 
 model VerificationSubmission {
-  attemptId           String          @id @map("attempt_id") @db.Uuid
-  userId              String          @map("user_id") @db.Uuid
-  firstName           String?         @map("first_name")
-  lastName            String?         @map("last_name")
-  dateOfBirth         DateTime?       @map("date_of_birth") @db.Date
-  addressLine         String?         @map("address_line")
-  lga                 String?
-  idDocumentType      IdDocumentType? @map("id_document_type")
-  idDocumentMediaId   String?         @map("id_document_media_id") @db.Uuid
-  guarantorName       String?         @map("guarantor_name")
-  guarantorRelation   GuarantorRelationship? @map("guarantor_relationship")
-  guarantorPhone      String?         @map("guarantor_phone_e164")
-  anonymisedAt        DateTime?       @map("anonymised_at") @db.Timestamptz(3)
-  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  attemptId         String                 @id @map("attempt_id") @db.Uuid
+  userId            String                 @map("user_id") @db.Uuid
+  firstName         String?                @map("first_name")
+  lastName          String?                @map("last_name")
+  dateOfBirth       DateTime?              @map("date_of_birth") @db.Date
+  addressLine       String?                @map("address_line")
+  lga               String?
+  idDocumentType    IdDocumentType?        @map("id_document_type")
+  idDocumentMediaId String?                @map("id_document_media_id") @db.Uuid
+  guarantorName     String?                @map("guarantor_name")
+  guarantorRelation GuarantorRelationship? @map("guarantor_relationship")
+  guarantorPhone    String?                @map("guarantor_phone_e164")
+  anonymisedAt      DateTime?              @map("anonymised_at") @db.Timestamptz(3)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([userId], map: "verification_submissions_user_idx")
   @@map("verification_submissions")
@@ -1270,6 +1271,7 @@ model Errand {
   assignments       Assignment[]
   executionEvents   ExecutionEvent[]
   conversations     Conversation[]
+  views             ErrandView[]
 
   @@index([status, categoryId], map: "errands_status_category_idx")
   @@index([requesterId, status], map: "errands_requester_status_idx")
@@ -1426,20 +1428,20 @@ model OfferDailyCounter {
 }
 
 model NegotiationEvent {
-  id                   String               @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  errandId             String               @map("errand_id") @db.Uuid
-  errand               Errand               @relation(fields: [errandId], references: [id], onDelete: Restrict)
-  offerId              String               @map("offer_id") @db.Uuid
-  offer                Offer                @relation(fields: [offerId], references: [id], onDelete: Restrict)
-  actorUserId          String               @map("actor_user_id") @db.Uuid
-  actor                User                 @relation("NegotiationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-  messageType          NegotiationMessageType @map("message_type")
-  proposedAmountMinor  BigInt?              @map("proposed_amount_minor")
-  proposedDurationMinutes Int?               @map("proposed_duration_minutes")
-  currency             String               @default("NGN")
-  message              String?
-  resultingOfferVersion Int                 @map("resulting_offer_version")
-  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                      String                 @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId                String                 @map("errand_id") @db.Uuid
+  errand                  Errand                 @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  offerId                 String                 @map("offer_id") @db.Uuid
+  offer                   Offer                  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  actorUserId             String                 @map("actor_user_id") @db.Uuid
+  actor                   User                   @relation("NegotiationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  messageType             NegotiationMessageType @map("message_type")
+  proposedAmountMinor     BigInt?                @map("proposed_amount_minor")
+  proposedDurationMinutes Int?                   @map("proposed_duration_minutes")
+  currency                String                 @default("NGN")
+  message                 String?
+  resultingOfferVersion   Int                    @map("resulting_offer_version")
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([offerId, createdAt], map: "negotiation_events_offer_created_idx")
   @@index([errandId, createdAt], map: "negotiation_events_errand_created_idx")
@@ -1451,35 +1453,35 @@ model NegotiationEvent {
 // the triggers that Prisma cannot express; they are known drift in `prisma migrate diff`.
 // Errand status is the execution status: there is no separate column (Backend PRD 15.1).
 model Assignment {
-  id                 String                    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  errandId           String                    @map("errand_id") @db.Uuid
-  errand             Errand                    @relation(fields: [errandId], references: [id], onDelete: Restrict)
-  requesterId        String                    @map("requester_id") @db.Uuid
-  requester          User                      @relation("AssignmentRequester", fields: [requesterId], references: [id], onDelete: Restrict)
-  runnerId           String                    @map("runner_id") @db.Uuid
-  runner             User                      @relation("AssignmentRunner", fields: [runnerId], references: [id], onDelete: Restrict)
-  selectedOfferId    String                    @map("selected_offer_id") @db.Uuid
-  selectedOffer      Offer                     @relation(fields: [selectedOfferId], references: [id], onDelete: Restrict)
-  status             AssignmentStatus          @default(PENDING_ACCEPTANCE)
-  agreedAmountMinor  BigInt                    @map("agreed_amount_minor")
-  currency           String                    @default("NGN")
-  selectedAt         DateTime                  @map("selected_at") @db.Timestamptz(3)
-  acceptanceDeadline DateTime                  @map("acceptance_deadline") @db.Timestamptz(3)
-  acceptedAt         DateTime?                 @map("accepted_at") @db.Timestamptz(3)
-  declinedAt         DateTime?                 @map("declined_at") @db.Timestamptz(3)
-  timedOutAt         DateTime?                 @map("timed_out_at") @db.Timestamptz(3)
-  cancelledAt        DateTime?                 @map("cancelled_at") @db.Timestamptz(3)
-  completedAt        DateTime?                 @map("completed_at") @db.Timestamptz(3)
-  locationSharingStoppedAt DateTime?           @map("location_sharing_stopped_at") @db.Timestamptz(3)
-  cancelledBy        String?                   @map("cancelled_by") @db.Uuid
-  cancelledByType    AuditActorType?           @map("cancelled_by_type")
-  cancellationReason ErrandCancellationReason? @map("cancellation_reason")
-  cancellationNote   String?                   @map("cancellation_note")
-  cancelledStage     ErrandStatus?             @map("cancelled_stage")
-  version            Int                       @default(0)
-  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt          DateTime?                 @map("deleted_at") @db.Timestamptz(3)
+  id                       String                    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  errandId                 String                    @map("errand_id") @db.Uuid
+  errand                   Errand                    @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  requesterId              String                    @map("requester_id") @db.Uuid
+  requester                User                      @relation("AssignmentRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  runnerId                 String                    @map("runner_id") @db.Uuid
+  runner                   User                      @relation("AssignmentRunner", fields: [runnerId], references: [id], onDelete: Restrict)
+  selectedOfferId          String                    @map("selected_offer_id") @db.Uuid
+  selectedOffer            Offer                     @relation(fields: [selectedOfferId], references: [id], onDelete: Restrict)
+  status                   AssignmentStatus          @default(PENDING_ACCEPTANCE)
+  agreedAmountMinor        BigInt                    @map("agreed_amount_minor")
+  currency                 String                    @default("NGN")
+  selectedAt               DateTime                  @map("selected_at") @db.Timestamptz(3)
+  acceptanceDeadline       DateTime                  @map("acceptance_deadline") @db.Timestamptz(3)
+  acceptedAt               DateTime?                 @map("accepted_at") @db.Timestamptz(3)
+  declinedAt               DateTime?                 @map("declined_at") @db.Timestamptz(3)
+  timedOutAt               DateTime?                 @map("timed_out_at") @db.Timestamptz(3)
+  cancelledAt              DateTime?                 @map("cancelled_at") @db.Timestamptz(3)
+  completedAt              DateTime?                 @map("completed_at") @db.Timestamptz(3)
+  locationSharingStoppedAt DateTime?                 @map("location_sharing_stopped_at") @db.Timestamptz(3)
+  cancelledBy              String?                   @map("cancelled_by") @db.Uuid
+  cancelledByType          AuditActorType?           @map("cancelled_by_type")
+  cancellationReason       ErrandCancellationReason? @map("cancellation_reason")
+  cancellationNote         String?                   @map("cancellation_note")
+  cancelledStage           ErrandStatus?             @map("cancelled_stage")
+  version                  Int                       @default(0)
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt                DateTime?                 @map("deleted_at") @db.Timestamptz(3)
 
   paymentAgreement PaymentAgreement?
   executionEvents  ExecutionEvent[]
@@ -1760,18 +1762,18 @@ model RatingEdit {
 // P9-01: Derived aggregates (Backend PRD A.2). Rebuildable from source rows; written only by
 // UserStatsService. Window-bound figures (cancellation rate, response time) are never stored here.
 model UserStats {
-  userId               String   @id @map("user_id") @db.Uuid
-  user                 User     @relation(fields: [userId], references: [id], onDelete: Restrict)
-  completedAsRunner    Int      @default(0) @map("completed_as_runner")
-  completedAsRequester Int      @default(0) @map("completed_as_requester")
-  runnerRatingCount    Int      @default(0) @map("runner_rating_count")
-  runnerRatingAvg      Decimal? @map("runner_rating_avg") @db.Decimal(3, 2)
-  requesterRatingCount Int      @default(0) @map("requester_rating_count")
-  requesterRatingAvg   Decimal? @map("requester_rating_avg") @db.Decimal(3, 2)
-  paymentConductAvg    Decimal? @map("payment_conduct_avg") @db.Decimal(3, 2)
-  paymentConductCount  Int      @default(0) @map("payment_conduct_count")
+  userId               String    @id @map("user_id") @db.Uuid
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  completedAsRunner    Int       @default(0) @map("completed_as_runner")
+  completedAsRequester Int       @default(0) @map("completed_as_requester")
+  runnerRatingCount    Int       @default(0) @map("runner_rating_count")
+  runnerRatingAvg      Decimal?  @map("runner_rating_avg") @db.Decimal(3, 2)
+  requesterRatingCount Int       @default(0) @map("requester_rating_count")
+  requesterRatingAvg   Decimal?  @map("requester_rating_avg") @db.Decimal(3, 2)
+  paymentConductAvg    Decimal?  @map("payment_conduct_avg") @db.Decimal(3, 2)
+  paymentConductCount  Int       @default(0) @map("payment_conduct_count")
   badgesComputedAt     DateTime? @map("badges_computed_at") @db.Timestamptz(3)
-  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("user_stats")
 }
@@ -2221,25 +2223,25 @@ enum ApprovalRequestStatus {
 }
 
 model ApprovalRequest {
-  id            String         @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  id            String                @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
   kind          ApprovalKind
   status        ApprovalRequestStatus @default(PENDING)
-  requestedBy   String         @map("requested_by") @db.Uuid
-  reasonCode    String         @map("reason_code")
-  reasonText    String?        @map("reason_text")
+  requestedBy   String                @map("requested_by") @db.Uuid
+  reasonCode    String                @map("reason_code")
+  reasonText    String?               @map("reason_text")
   summary       String
-  targetType    String?        @map("target_type")
-  targetId      String?        @map("target_id")
+  targetType    String?               @map("target_type")
+  targetId      String?               @map("target_id")
   payload       Json
-  decidedBy     String?        @map("decided_by") @db.Uuid
-  decisionNote  String?        @map("decision_note")
-  decidedAt     DateTime?      @map("decided_at") @db.Timestamptz(3)
-  executedAt    DateTime?      @map("executed_at") @db.Timestamptz(3)
+  decidedBy     String?               @map("decided_by") @db.Uuid
+  decisionNote  String?               @map("decision_note")
+  decidedAt     DateTime?             @map("decided_at") @db.Timestamptz(3)
+  executedAt    DateTime?             @map("executed_at") @db.Timestamptz(3)
   result        Json?
-  failureReason String?        @map("failure_reason")
-  expiresAt     DateTime       @map("expires_at") @db.Timestamptz(3)
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  failureReason String?               @map("failure_reason")
+  expiresAt     DateTime              @map("expires_at") @db.Timestamptz(3)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, createdAt], map: "approval_requests_status_created_idx")
   @@index([kind, status], map: "approval_requests_kind_status_idx")
@@ -2279,20 +2281,20 @@ model SweeperRun {
 // P11-07: access, correction and deletion requests, tracked to their due date. Never deleted.
 // Foreign keys are in the migration.
 model DataSubjectRequest {
-  id          String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
-  userId      String?   @map("user_id") @db.Uuid
-  type        DsrType
-  status      DsrStatus @default(OPEN)
-  channel     String    @default("SUPPORT")
-  summary     String
-  dueAt       DateTime  @map("due_at") @db.Timestamptz(3)
-  assignedTo  String?   @map("assigned_to") @db.Uuid
-  resolution  String?
-  resolvedBy  String?   @map("resolved_by") @db.Uuid
-  resolvedAt  DateTime? @map("resolved_at") @db.Timestamptz(3)
-  createdBy   String    @map("created_by") @db.Uuid
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId     String?   @map("user_id") @db.Uuid
+  type       DsrType
+  status     DsrStatus @default(OPEN)
+  channel    String    @default("SUPPORT")
+  summary    String
+  dueAt      DateTime  @map("due_at") @db.Timestamptz(3)
+  assignedTo String?   @map("assigned_to") @db.Uuid
+  resolution String?
+  resolvedBy String?   @map("resolved_by") @db.Uuid
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(3)
+  createdBy  String    @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, dueAt], map: "data_subject_requests_status_due_idx")
   @@map("data_subject_requests")
@@ -2311,4 +2313,20 @@ model AnalyticsEvent {
   @@index([name, occurredAt], map: "analytics_events_name_occurred_idx")
   @@index([occurredAt], map: "analytics_events_occurred_idx")
   @@map("analytics_events")
+}
+
+/// Which runners opened an errand's page, and when. Counted for the requester's boost results; never listed to anyone.
+model ErrandView {
+  errandId      String   @map("errand_id") @db.Uuid
+  viewerId      String   @map("viewer_id") @db.Uuid
+  firstViewedAt DateTime @default(now()) @map("first_viewed_at") @db.Timestamptz(3)
+  lastViewedAt  DateTime @default(now()) @map("last_viewed_at") @db.Timestamptz(3)
+  viewCount     Int      @default(1) @map("view_count")
+
+  errand Errand @relation(fields: [errandId], references: [id], onDelete: Restrict)
+  viewer User   @relation(fields: [viewerId], references: [id], onDelete: Restrict)
+
+  @@id([errandId, viewerId])
+  @@index([errandId, lastViewedAt], map: "errand_views_errand_last_idx")
+  @@map("errand_views")
 }

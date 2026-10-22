@@ -21,7 +21,7 @@ import { ProRenewalService } from './pro-renewal.service.js';
 import { ProSubscriptionService } from '../subscriptions/pro-subscription.service.js';
 import { BoostService } from '../boosts/boost.service.js';
 import { readyRunner } from '../test/verification.helper.js';
-import { acceptedScene, offerScene, selectRunner } from '../test/assignment.helper.js';
+import { acceptAssignment, acceptedScene, offerScene, selectRunner, declineAssignment } from '../test/assignment.helper.js';
 import { dispatchOutbox } from '../test/events.helper.js';
 
 process.env.RATE_LIMIT_DISABLED = 'true';
@@ -437,7 +437,7 @@ describe('Platform billing (P10)', () => {
       return openErrand(app, requester as never, categoryId);
     }
 
-    it('activates on payment, pins in the feed and ends when a runner is selected', async () => {
+    it('activates on payment, pins in the feed and ends when the runner accepts', async () => {
       const requester = await signedInUser(app);
       const errandId = await openEnd(requester);
       const order = (await buyBoost(requester, errandId).expect(201)).body.data;
@@ -451,14 +451,54 @@ describe('Platform billing (P10)', () => {
       expect(hours).toBeLessThanOrEqual(24);
       expect(await app.get(BoostService).activeBoostedErrandIds()).toEqual([errandId]);
 
-      // A runner is selected: the boost ends.
+      // A runner is selected: the boost waits, because the runner may still decline. The runner accepts: it ends.
       const runner = await readyRunner(app, '50000031234');
       const offer = (await post(runner, `/errands/${errandId}/offers`, { amountMinor: 50_000, durationMinutes: 30, availabilityConfirmed: true }).expect(201)).body.data;
-      await selectRunner(app, requester, errandId, offer.id, offer.version).expect(201);
+      const selected = (await selectRunner(app, requester, errandId, offer.id, offer.version).expect(201)).body.data;
+      await dispatchOutbox(app, { eventType: 'errand.status_changed' });
+      expect((await prisma.boost.findFirstOrThrow({ where: { errandId } })).status).toBe('ACTIVE');
+
+      await acceptAssignment(app, runner, selected.id).expect(201);
       await dispatchOutbox(app, { eventType: 'errand.status_changed' });
 
       expect((await prisma.boost.findFirstOrThrow({ where: { errandId } })).status).toBe('EXPIRED');
       expect(await app.get(BoostService).activeBoostedErrandIds()).toEqual([]);
+    });
+
+    it('keeps the boost when the selected runner declines, so the requester keeps the time they paid for', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openEnd(requester);
+      await pay((await buyBoost(requester, errandId).expect(201)).body.data);
+      const runner = await readyRunner(app, '50000031235');
+      const offer = (await post(runner, `/errands/${errandId}/offers`, { amountMinor: 50_000, durationMinutes: 30, availabilityConfirmed: true }).expect(201)).body.data;
+      const selected = (await selectRunner(app, requester, errandId, offer.id, offer.version).expect(201)).body.data;
+      await dispatchOutbox(app, { eventType: 'errand.status_changed' });
+
+      await declineAssignment(app, runner, selected.id).expect(200);
+      await dispatchOutbox(app, { eventType: 'errand.status_changed' });
+
+      expect((await prisma.errand.findUniqueOrThrow({ where: { id: errandId } })).status).toBe('OPEN');
+      expect((await prisma.boost.findFirstOrThrow({ where: { errandId } })).status).toBe('ACTIVE');
+      expect(await app.get(BoostService).activeBoostedErrandIds()).toEqual([errandId]);
+      expect((await get(requester, `/errands/${errandId}`).expect(200)).body.data.boost).not.toBeNull();
+    });
+
+    it('refunds a second payment for an errand that is already boosted, instead of losing it', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openEnd(requester);
+      // Two checkouts opened before either is paid (two tabs).
+      const first = (await buyBoost(requester, errandId).expect(201)).body.data;
+      const second = (await buyBoost(requester, errandId).expect(201)).body.data;
+
+      await pay(first);
+      await pay(second);
+
+      const boosts = await prisma.boost.findMany({ where: { errandId }, orderBy: { createdAt: 'asc' } });
+      expect(boosts.map((boost) => boost.status)).toEqual(['ACTIVE', 'REFUNDED']);
+      expect(boosts[1].endedReason).toBe('REFUNDED');
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('REFUNDED');
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: first.id } })).status).toBe('PAID');
+      expect(await prisma.refund.count()).toBe(1);
     });
 
     it('tells the requester which of their errands are boosted, on the errand and in their list', async () => {
@@ -479,6 +519,49 @@ describe('Platform billing (P10)', () => {
       // Once the boost ends, nothing says boosted any more.
       await prisma.boost.updateMany({ where: { errandId: boosted }, data: { status: 'EXPIRED' } });
       expect((await get(requester, `/errands/${boosted}`).expect(200)).body.data.boost).toBeNull();
+    });
+
+    it('says when a boost bought now would end, before it is bought', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openEnd(requester);
+      const mine = async () => ((await get(requester, '/errands/mine?tab=OPEN').expect(200)).body.data as Array<{ id: string; boostWouldEndAt: string | null }>).find((row) => row.id === errandId)!;
+
+      const plenty = new Date((await mine()).boostWouldEndAt!).getTime() - Date.now();
+      expect(plenty).toBeGreaterThan(23 * 3_600_000);
+      expect(plenty).toBeLessThanOrEqual(24 * 3_600_000 + 5_000);
+
+      // With only two hours left, the boost can only run two hours.
+      await prisma.$executeRaw`UPDATE errands SET expires_at = now() + interval '2 hours' WHERE id = ${errandId}::uuid`;
+      const short = new Date((await mine()).boostWouldEndAt!).getTime() - Date.now();
+      expect(short).toBeGreaterThan(110 * 60_000);
+      expect(short).toBeLessThanOrEqual(2 * 3_600_000 + 5_000);
+
+      // Once boosted, there is nothing to preview.
+      await pay((await buyBoost(requester, errandId).expect(201)).body.data);
+      expect((await mine()).boostWouldEndAt).toBeNull();
+    });
+
+    it('counts how many runners opened the errand, and the offers it got, since the boost started', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openEnd(requester);
+      const runner = await readyRunner(app, '50000061234');
+      const other = await readyRunner(app, '50000061235');
+      await get(runner, `/marketplace/errands/${errandId}`).expect(200); // before the boost
+      await prisma.errandView.updateMany({ where: { errandId }, data: { lastViewedAt: new Date(Date.now() - 3_600_000) } });
+      await pay((await buyBoost(requester, errandId).expect(201)).body.data);
+      // The test database runs on its own clock, a few seconds off the app's. Start the boost a little earlier so offers written by the app count.
+      await prisma.$executeRaw`UPDATE boosts SET activates_at = activates_at - interval '2 minutes' WHERE errand_id = ${errandId}::uuid`;
+      const boost = async () => (await get(requester, `/errands/${errandId}`).expect(200)).body.data.boost;
+      expect(await boost()).toMatchObject({ openedByCount: 0, offersSinceCount: 0 });
+
+      await get(runner, `/marketplace/errands/${errandId}`).expect(200);
+      await get(runner, `/marketplace/errands/${errandId}`).expect(200); // the same runner twice is one runner
+      await get(other, `/marketplace/errands/${errandId}`).expect(200);
+      await post(runner, `/errands/${errandId}/offers`, { amountMinor: 50_000, durationMinutes: 30, availabilityConfirmed: true }).expect(201);
+
+      expect(await boost()).toMatchObject({ openedByCount: 2, offersSinceCount: 1 });
+      // Nobody is named.
+      expect(JSON.stringify(await boost())).not.toMatch(/runner|userId|viewer/i);
     });
 
     it('allows one boost per errand, and only for its owner on an open errand', async () => {
@@ -515,6 +598,25 @@ describe('Platform billing (P10)', () => {
       // The same trigger again refunds nothing more.
       await app.get(RefundService).requestAutomatic({ paymentId: refund.paymentId, reason: 'AUTO:BOOST_NOT_ACTIVATED' });
       expect(await prisma.refund.count()).toBe(1);
+    });
+
+    it('reaches runners the first wave did not, rather than repeating the nearest ones', async () => {
+      const requester = await signedInUser(app);
+      const errandId = await openEnd(requester);
+      const nearest = await readyRunner(app, '50000051234');
+      const next = await readyRunner(app, '50000051235');
+      await setConfig('NEARBY_BOOST_WAVE_SIZE', 1);
+      // The first wave has already told the nearest runner.
+      await prisma.notification.create({ data: {
+        userId: nearest.userId, type: 'errand.nearby', category: 'MARKETPLACE', title: 'Nearby', body: 'first wave', dedupeKey: `errand:${errandId}:nearby:${nearest.userId}`,
+      } });
+      await pay((await buyBoost(requester, errandId).expect(201)).body.data);
+
+      await dispatchOutbox(app, { eventType: 'boost.activated' });
+
+      const told = async (runner: Authed) => ((await get(runner, '/notifications').expect(200)).body.data as Array<{ type: string }>).filter((n) => n.type === 'errand.nearby').length;
+      expect(await told(nearest)).toBe(1); // not told again
+      expect(await told(next)).toBe(1); // the wave moved on to them
     });
 
     it('tells nearby runners when an errand is boosted (the second wave)', async () => {

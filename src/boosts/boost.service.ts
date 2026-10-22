@@ -19,7 +19,8 @@ export interface BoostActivation {
 /**
  * Priority boosts (Backend PRD 22.5): a paid, time-limited lift for one OPEN errand.
  *
- * - One live boost per errand (partial unique index), so a second purchase is `BOOST_NOT_ELIGIBLE`.
+ * - One live boost per errand (partial unique index), so a second purchase is `BOOST_NOT_ELIGIBLE`. If two orders
+ *   are paid anyway, the second is cancelled and refunded automatically.
  * - It lasts `PRIORITY_BOOST_MAX_HOURS`, never past the errand's own deadline, and ends when a
  *   runner is selected or the errand leaves OPEN.
  * - A boost never overrides eligibility, location privacy or moderation: it only pins the errand
@@ -77,6 +78,23 @@ export class BoostService {
       FROM errands WHERE id = ${input.errandId}::uuid AND deleted_at IS NULL FOR SHARE
     `;
     const row = errand[0];
+    // Two orders paid for the same errand (two tabs, a retried checkout): the second cannot run beside the first.
+    const alreadyLive = row
+      ? await tx.$queryRaw<Array<{ one: number }>>`
+          SELECT 1 AS one FROM boosts
+          WHERE errand_id = ${input.errandId}::uuid AND order_id <> ${input.orderId}::uuid
+            AND status IN ('PURCHASED'::"BoostStatus", 'SCHEDULED'::"BoostStatus", 'ACTIVE'::"BoostStatus") LIMIT 1
+        `
+      : [];
+    if (alreadyLive.length > 0) {
+      const created = await tx.$queryRaw<Array<{ id: string }>>`
+        INSERT INTO boosts (errand_id, order_id, status, ended_reason, updated_at)
+        VALUES (${input.errandId}::uuid, ${input.orderId}::uuid, 'CANCELLED'::"BoostStatus", 'ALREADY_BOOSTED', clock_timestamp())
+        ON CONFLICT (order_id) DO UPDATE SET updated_at = clock_timestamp()
+        RETURNING id::text
+      `;
+      return { boostId: created[0].id, activated: false, expiresAt: null, reason: 'ALREADY_BOOSTED' };
+    }
     const window = row && row.status === 'OPEN' ? boostWindow({ now: row.db_now, maxHours: input.maxHours, errandExpiresAt: row.expires_at }) : null;
 
     if (!row || !window) {

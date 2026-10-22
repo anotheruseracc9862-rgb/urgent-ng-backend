@@ -8,7 +8,10 @@ import { DomainException } from '../common/exceptions/domain.exception.js';
 import { RESOURCE_NOT_FOUND, VALIDATION_ERROR } from '../common/constants/error-codes.js';
 import { RunnerEligibilityService } from '../runner/runner-eligibility.service.js';
 import { distanceBucket } from '../errands/location-privacy.js';
-import { FEED_BOOST_SOURCE, type FeedBoostSource } from './feed-boost.hook.js';
+import { FEED_BOOST_SOURCE, pinRotationBucket, rotatePinned, type FeedBoostSource } from './feed-boost.hook.js';
+
+/** How many boosted errands are considered for the pinned slots before the rotation picks. */
+const PINNED_CANDIDATES = 30;
 import { FeedRateLimiter } from './feed-rate-limiter.js';
 import { sortForDisplay } from '../badges/badge.rules.js';
 import { RiskFlagService } from '../risk/risk-flag.service.js';
@@ -151,7 +154,9 @@ export class MarketplaceFeedService {
 
     // Boosted errands are pinned on the first page only and left out of the normal list.
     const boostedIds = cursor ? [] : await this.boosts.activeBoostedErrandIds();
-    const pinned = boostedIds.length > 0 ? await this.query(userId, query, { only: boostedIds, limit: maxPinned, sort }) : [];
+    // Every boosted errand this runner may see, then the slots are given out in turn (see rotatePinned).
+    const candidates = boostedIds.length > 0 ? await this.query(userId, query, { only: boostedIds, limit: Math.max(maxPinned, PINNED_CANDIDATES), sort }) : [];
+    const pinned = rotatePinned(candidates, maxPinned, pinRotationBucket());
     const pinnedIds = pinned.map((row) => row.id);
 
     const rows = await this.query(userId, query, { exclude: pinnedIds, limit: limit + 1, sort, cursor });
@@ -242,7 +247,24 @@ export class MarketplaceFeedService {
   async detail(userId: string, errandId: string): Promise<MarketplaceErrandDto> {
     await this.limiter.consume(userId);
     await this.eligibility.assertCanBrowseFeed(userId);
+    const result = await this.loadDetail(userId, errandId);
+    await this.recordOpen(errandId, userId);
+    return result;
+  }
 
+  /** Remember that this runner opened the errand. It is counted for the boost results, never listed, and never blocks the page. */
+  private async recordOpen(errandId: string, viewerId: string): Promise<void> {
+    try {
+      await this.prisma.$executeRaw`
+        INSERT INTO errand_views (errand_id, viewer_id) VALUES (${errandId}::uuid, ${viewerId}::uuid)
+        ON CONFLICT (errand_id, viewer_id) DO UPDATE SET last_viewed_at = clock_timestamp(), view_count = errand_views.view_count + 1
+      `;
+    } catch {
+      // Counting is a courtesy. A failure here must not break the page.
+    }
+  }
+
+  private async loadDetail(userId: string, errandId: string): Promise<MarketplaceErrandDto> {
     const rows = await this.prisma.$queryRaw<
       Array<
         FeedRow & {

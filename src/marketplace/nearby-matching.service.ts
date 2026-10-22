@@ -96,14 +96,15 @@ export class NearbyMatchingService {
   }
 
   /**
-   * The second wave for a boosted errand (Backend PRD 12.5, 22.5): everyone eligible nearby, up to
-   * `NEARBY_BOOST_WAVE_SIZE`, Pro or not, now. A runner who was in the first wave is not told
-   * again: the notification's dedupe key is the same, so the repeat is a no-op.
+   * The second wave for a boosted errand (Backend PRD 12.5, 22.5): the next eligible runners nearby, up to
+   * `NEARBY_BOOST_WAVE_SIZE`, Pro or not, now. A runner who was already told is skipped *before* the wave is
+   * counted, so the wave goes on to the next runners instead of repeating the nearest ones. (When both waves
+   * are the same size, the second would otherwise pick the very same runners and reach nobody new.)
    */
   async onBoosted(errandId: string, occurredAt: Date): Promise<number> {
     if (!(await this.isOpen(errandId))) return 0;
     const size = await this.config.get('NEARBY_BOOST_WAVE_SIZE');
-    const runners = await this.eligibleRunners(errandId, size);
+    const runners = await this.eligibleRunners(errandId, size, { skipAlreadyTold: true });
     for (const runnerId of runners) {
       await this.notify(errandId, runnerId, occurredAt);
     }
@@ -142,7 +143,7 @@ export class NearbyMatchingService {
   }
 
   /** Nearest first, limited to the wave size. */
-  private async eligibleRunners(errandId: string, limit: number): Promise<string[]> {
+  private async eligibleRunners(errandId: string, limit: number, options: { skipAlreadyTold?: boolean } = {}): Promise<string[]> {
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT u.id::text
       FROM errands e
@@ -152,6 +153,10 @@ export class NearbyMatchingService {
         AND e.expires_at > clock_timestamp() AND e.feed_point IS NOT NULL
         AND ${ELIGIBLE}
         AND ${errandGeographySql(await this.config.get('INTERSTATE_ERRANDS_ENABLED'))}
+        AND (${!options.skipAlreadyTold}::boolean OR NOT EXISTS (
+          SELECT 1 FROM notifications n
+          WHERE n.user_id = u.id AND n.dedupe_key = 'errand:' || e.id::text || ':nearby:' || u.id::text
+        ))
       ORDER BY ST_Distance(rp.area_center, e.feed_point), u.id
       LIMIT ${limit}
     `);

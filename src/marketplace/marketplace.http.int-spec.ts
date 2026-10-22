@@ -485,7 +485,7 @@ describe('Marketplace feed, map, detail and saved errands (P5-07, P5-08)', () =>
       expect(point).toMatchObject({ id: near, title: 'Deliver a parcel', categoryKey: 'delivery', area: 'Yaba', priority: 'URGENT', boosted: false });
       expect(Math.abs(point.approx.lat - NEAR.lat)).toBeLessThan(0.01);
       expect(point.approx.lat).not.toBe(NEAR.lat);
-      expect(Object.keys(point).sort()).toEqual(['approx', 'area', 'boosted', 'categoryKey', 'distance', 'id', 'priority', 'suggestedBudgetMinor', 'title']);
+      expect(Object.keys(point).sort()).toEqual(['approx', 'area', 'boosted', 'categoryKey', 'distance', 'id', 'myOffer', 'priority', 'suggestedBudgetMinor', 'title']);
 
       expect((await as(runner).get('/marketplace/errands/map?limit=1').expect(200)).body.data).toHaveLength(1);
       expect((await as(runner).get('/marketplace/errands/map?category=document').expect(200)).body.data).toEqual([]);
