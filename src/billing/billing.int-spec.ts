@@ -461,6 +461,26 @@ describe('Platform billing (P10)', () => {
       expect(await app.get(BoostService).activeBoostedErrandIds()).toEqual([]);
     });
 
+    it('tells the requester which of their errands are boosted, on the errand and in their list', async () => {
+      const requester = await signedInUser(app);
+      const boosted = await openEnd(requester);
+      const plain = await openEnd(requester);
+      expect((await get(requester, `/errands/${boosted}`).expect(200)).body.data.boost).toBeNull();
+
+      await pay((await buyBoost(requester, boosted).expect(201)).body.data);
+
+      const detail = (await get(requester, `/errands/${boosted}`).expect(200)).body.data;
+      expect(detail.boost).toMatchObject({ expiresAt: expect.any(String) });
+      expect(new Date(detail.boost.expiresAt).getTime()).toBeGreaterThan(Date.now());
+      const mine = (await get(requester, '/errands/mine?tab=OPEN').expect(200)).body.data as Array<{ id: string; boost: { expiresAt: string } | null }>;
+      expect(mine.find((row) => row.id === boosted)?.boost?.expiresAt).toBeTruthy();
+      expect(mine.find((row) => row.id === plain)?.boost).toBeNull();
+
+      // Once the boost ends, nothing says boosted any more.
+      await prisma.boost.updateMany({ where: { errandId: boosted }, data: { status: 'EXPIRED' } });
+      expect((await get(requester, `/errands/${boosted}`).expect(200)).body.data.boost).toBeNull();
+    });
+
     it('allows one boost per errand, and only for its owner on an open errand', async () => {
       const requester = await signedInUser(app);
       const errandId = await openEnd(requester);

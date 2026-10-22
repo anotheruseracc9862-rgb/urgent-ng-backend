@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsDate, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { PaginationQueryDto } from '../common/pagination/pagination.dto.js';
+import { LatLngDto } from '../runner/runner.dto.js';
 
 const STATUSES = ['PENDING_ACCEPTANCE', 'ACCEPTED', 'DECLINED', 'TIMED_OUT', 'CANCELLED', 'COMPLETED'] as const;
 
@@ -121,6 +122,12 @@ export class RunnerAssignmentSummaryDto {
 
   @ApiProperty({ nullable: true })
   destinationArea!: string | null;
+
+  @ApiProperty({ type: LatLngDto, nullable: true, description: 'The approximate pickup point (about 500 m grid), for a map. Never the exact point.' })
+  pickupApprox!: LatLngDto | null;
+
+  @ApiProperty({ type: LatLngDto, nullable: true, description: 'The approximate destination point, for a map. Never the exact point.' })
+  destinationApprox!: LatLngDto | null;
 
   @ApiProperty({ enum: ['TRANSIT', 'SERVICE'], description: 'A service has no pickup: its one address is the destination.' })
   categoryFlow!: 'TRANSIT' | 'SERVICE';

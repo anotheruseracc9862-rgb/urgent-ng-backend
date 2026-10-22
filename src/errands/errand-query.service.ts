@@ -1,3 +1,4 @@
+import { findLiveBoosts } from '../boosts/live-boost.js';
 import { Injectable } from '@nestjs/common';
 import { Prisma, type ErrandStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service.js';
@@ -102,6 +103,8 @@ export class ErrandQueryService {
     });
     const byId = new Map(found.map((errand) => [errand.id, errand]));
     const page = pageKeys.map((k) => byId.get(k.id)).filter((errand): errand is NonNullable<typeof errand> => Boolean(errand));
+    const points = await this.approxPoints(page.map((errand) => errand.id));
+    const boosts = await findLiveBoosts(this.prisma, page.map((errand) => errand.id));
     const extras = await this.extras(userId, page.map((errand) => ({ id: errand.id, status: errand.status, offerCount: errand.offerCount, expiresAt: errand.expiresAt })));
 
     return new Paginated(
@@ -117,6 +120,9 @@ export class ErrandQueryService {
         suggestedBudgetMinor: toNumber(errand.suggestedBudgetMinor),
         pickupArea: errand.locations.find((l) => l.type === 'ERRAND_PICKUP')?.area ?? null,
         destinationArea: errand.locations.find((l) => l.type === 'ERRAND_DESTINATION')?.area ?? null,
+        pickupApprox: points.get(`${errand.id}:ERRAND_PICKUP`) ?? null,
+        destinationApprox: points.get(`${errand.id}:ERRAND_DESTINATION`) ?? null,
+        boost: boosts.get(errand.id) ?? null,
         offerCount: errand.offerCount,
         publishedAt: errand.publishedAt,
         expiresAt: errand.expiresAt,
@@ -149,6 +155,17 @@ export class ErrandQueryService {
   }
 
   /** The offer preview, the selected runner and the attention flag for one page of errands. */
+  /** The approximate points of the errands on a page, keyed `errandId:TYPE`. The exact point is never read here. */
+  private async approxPoints(errandIds: string[]): Promise<Map<string, { lat: number; lng: number }>> {
+    if (errandIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<Array<{ errand_id: string; type: string; lat: number; lng: number }>>`
+      SELECT errand_id::text, type::text AS type, ST_Y(approx_point::geometry) AS lat, ST_X(approx_point::geometry) AS lng
+      FROM errand_locations
+      WHERE errand_id = ANY(${errandIds}::uuid[]) AND deleted_at IS NULL
+    `;
+    return new Map(rows.map((row) => [`${row.errand_id}:${row.type}`, { lat: row.lat, lng: row.lng }]));
+  }
+
   private async extras(
     userId: string,
     errands: Array<{ id: string; status: ErrandStatus; offerCount: number; expiresAt: Date | null }>,

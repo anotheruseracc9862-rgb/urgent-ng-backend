@@ -305,6 +305,12 @@ export class ErrandPhotoDto {
   position!: number;
 }
 
+/** A paid boost running on the errand: it is shown higher in the runner feed until `expiresAt`. */
+export class ErrandBoostDto {
+  @ApiProperty({ type: Date })
+  expiresAt!: Date;
+}
+
 export class ErrandAssignmentSummaryDto {
   @ApiProperty()
   id!: string;
@@ -361,6 +367,8 @@ export class ErrandDto {
   photos!: ErrandPhotoDto[];
   @ApiProperty({ type: ErrandAssignmentSummaryDto, nullable: true })
   assignment!: ErrandAssignmentSummaryDto | null;
+  @ApiProperty({ type: ErrandBoostDto, nullable: true, description: 'The boost running on this errand now, or null. One boost at a time.' })
+  boost!: ErrandBoostDto | null;
   offerCount!: number;
   @ApiProperty({ nullable: true, type: Date })
   publishedAt!: Date | null;
@@ -428,6 +436,12 @@ export class ErrandSummaryDto {
   pickupArea!: string | null;
   @ApiProperty({ nullable: true, type: String })
   destinationArea!: string | null;
+  @ApiProperty({ type: LatLngDto, nullable: true, description: 'The approximate pickup point (about 500 m grid), for a map.' })
+  pickupApprox!: LatLngDto | null;
+  @ApiProperty({ type: LatLngDto, nullable: true, description: 'The approximate destination point, for a map. A service has only this one.' })
+  destinationApprox!: LatLngDto | null;
+  @ApiProperty({ type: ErrandBoostDto, nullable: true, description: 'The boost running on this errand now, or null.' })
+  boost!: ErrandBoostDto | null;
   offerCount!: number;
   @ApiProperty({ nullable: true, type: Date })
   publishedAt!: Date | null;

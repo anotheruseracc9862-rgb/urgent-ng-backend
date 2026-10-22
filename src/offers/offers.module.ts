@@ -16,6 +16,8 @@ import { OfferService } from './offer.service.js';
 import { OfferListService } from './offer-list.service.js';
 import { RunnerOffersController } from './runner-offers.controller.js';
 import { RunnerOffersService } from './runner-offers.service.js';
+import { RequesterOffersController } from './requester-offers.controller.js';
+import { RequesterOffersService } from './requester-offers.service.js';
 
 @Module({
   imports: [
@@ -32,8 +34,8 @@ import { RunnerOffersService } from './runner-offers.service.js';
     RatingsModule,
     BadgesModule,
   ],
-  controllers: [OffersController, RunnerOffersController],
-  providers: [OfferService, OfferListService, RunnerOffersService],
+  controllers: [OffersController, RunnerOffersController, RequesterOffersController],
+  providers: [OfferService, OfferListService, RunnerOffersService, RequesterOffersService],
   exports: [OfferService, OfferListService],
 })
 export class OffersModule {}

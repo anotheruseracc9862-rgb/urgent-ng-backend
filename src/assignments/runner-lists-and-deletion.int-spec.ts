@@ -9,7 +9,7 @@ import request from 'supertest';
 import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
-import { insertErrand, seedCategories } from '../test/errand.helper.js';
+import { insertErrand, LAGOS_PICKUP, seedCategories } from '../test/errand.helper.js';
 import { readyRunner } from '../test/verification.helper.js';
 import { submitOffer } from '../test/offer.helper.js';
 import {
@@ -66,6 +66,10 @@ describe('Runner lists and deletion blockers', () => {
       expect(all.body.data.map((r: { id: string }) => r.id)).toEqual([second.assignmentId, first.assignmentId]);
       expect(all.body.data[0]).toMatchObject({ status: 'PENDING_ACCEPTANCE', errandStatus: 'RUNNER_SELECTED', pickupArea: 'Yaba' });
       expect(JSON.stringify(all.body.data)).not.toContain('exact');
+      // A map gets the approximate point (the helper offsets it from the exact one by 0.002), never the exact one.
+      expect(all.body.data[0].pickupApprox.lat).toBeCloseTo(LAGOS_PICKUP.lat + 0.002, 6);
+      expect(all.body.data[0].pickupApprox.lng).toBeCloseTo(LAGOS_PICKUP.lng + 0.002, 6);
+      expect(all.body.data[0].destinationApprox).toBeNull();
 
       const active = await get(runner, '/runner/assignments?status=ACTIVE').expect(200);
       expect(active.body.data.map((r: { id: string }) => r.id)).toEqual([second.assignmentId]);

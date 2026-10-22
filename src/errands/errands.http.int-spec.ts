@@ -603,6 +603,18 @@ describe('Errands: drafts, publishing, editing, cancelling (P5-04, P5-05)', () =
     });
   });
 
+  describe('GET /errands/mine', () => {
+    it('gives a map the approximate point of each stop, never the exact one', async () => {
+      const id = await insertErrand({ requesterId: user.userId, categoryId: categories.delivery });
+      const res = await as(user).get('/errands/mine').expect(200);
+      const row = (res.body.data as Array<{ id: string; pickupApprox: { lat: number; lng: number } | null; destinationApprox: unknown }>).find((item) => item.id === id);
+      expect(row?.pickupApprox?.lat).toBeCloseTo(LAGOS_PICKUP.lat + 0.002, 6);
+      expect(row?.pickupApprox?.lng).toBeCloseTo(LAGOS_PICKUP.lng + 0.002, 6);
+      expect(row?.destinationApprox).toBeNull();
+      expect(JSON.stringify(row)).not.toContain('exact');
+    });
+  });
+
   describe('POST /errands/:id/duplicate', () => {
     it('copies an errand into a new draft with its own id, approximate points, contacts and photos', async () => {
       const photo = await readyMedia(app, user.accessToken, 'ERRAND_PHOTO');
@@ -648,6 +660,14 @@ describe('Errands: drafts, publishing, editing, cancelling (P5-04, P5-05)', () =
 
       await config().set('MAX_DRAFTS_PER_REQUESTER', 1);
       await as(user).post(`/errands/${done}/duplicate`).expect(422);
+    });
+
+    it('reposts an expired errand as a draft the requester can open straight away', async () => {
+      const expired = await insertErrand({ requesterId: user.userId, categoryId: categories.delivery, status: 'EXPIRED' });
+      const copy = (await as(user).post(`/errands/${expired}/duplicate`).expect(201)).body.data;
+      expect(copy.status).toBe('DRAFT');
+      const opened = await as(user).get(`/errands/${copy.id}`).expect(200);
+      expect(opened.body.data.id).toBe(copy.id);
     });
 
     it('is private to the requester', async () => {

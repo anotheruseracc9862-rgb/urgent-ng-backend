@@ -1,3 +1,4 @@
+import { findLiveBoosts } from '../boosts/live-boost.js';
 import { Injectable } from '@nestjs/common';
 import type { Category, Errand, Prisma } from '@prisma/client';
 import type { PrismaService } from '../database/prisma.service.js';
@@ -123,6 +124,7 @@ export class ErrandViewService {
     const conversation = assignment?.acceptedAt
       ? await client.conversation.findFirst({ where: { offerId: assignment.selectedOfferId, deletedAt: null }, select: { id: true } })
       : null;
+    const boost = (await findLiveBoosts(client, [errandId])).get(errandId) ?? null;
     const at = (type: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION'): ParticipantLocationView | null => {
       const found = locations.find((location) => location.type === type);
       return found ? this.privacy.toParticipant(found) : null;
@@ -156,6 +158,7 @@ export class ErrandViewService {
             conversationId: conversation?.id ?? null,
           }
         : null,
+      boost,
       offerCount: errand.offerCount,
       publishedAt: errand.publishedAt,
       expiresAt: errand.expiresAt,

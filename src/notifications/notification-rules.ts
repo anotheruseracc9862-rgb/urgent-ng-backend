@@ -121,8 +121,7 @@ export class NotificationRules {
       case 'change_request.cancelled':
       case 'change_request.expired':
         return this.changeRequest(event);
-      case 'payment_agreement.updated':
-        return this.paymentAgreement(event);
+      // A payment plan is an optional note between the two people. It never notifies anyone.
       case 'account.password_changed':
       case 'account.contact_changed':
         return this.accountSecurity(event);
@@ -483,27 +482,6 @@ export class NotificationRules {
         vars: await this.vars({ errandId: row.errand_id }, {}),
         data: { errandId: row.errand_id, assignmentId: row.assignment_id, changeRequestId: id },
         dedupeKey: `change-request:${id}:${type}`,
-      },
-    ];
-  }
-
-  private async paymentAgreement(event: DomainEvent): Promise<NotificationIntent[]> {
-    const p = event.payload;
-    const requesterId = str(p, 'requesterId');
-    const runnerId = str(p, 'runnerId');
-    const role = str(p, 'actorRole');
-    const assignmentId = str(p, 'assignmentId');
-    if (!requesterId || !runnerId || !role || !assignmentId) return [];
-    const fullyConfirmed = p.fullyConfirmed === true;
-    if (!fullyConfirmed && p.termsChanged !== true) return [];
-    const other = role === 'REQUESTER' ? runnerId : requesterId;
-    return [
-      {
-        userId: other,
-        template: fullyConfirmed ? 'payment_agreement.confirmed' : 'payment_agreement.updated',
-        vars: await this.vars(p, {}),
-        data: this.ids(p),
-        dedupeKey: `agreement:${assignmentId}:${event.eventId}`,
       },
     ];
   }

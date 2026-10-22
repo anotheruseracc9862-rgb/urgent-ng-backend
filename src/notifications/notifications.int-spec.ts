@@ -122,6 +122,19 @@ describe('Notification engine (P8-03)', () => {
       expect(await ofType(errand.requester, 'execution.started')).toHaveLength(1);
     });
 
+    it('a payment plan notifies nobody: it is an optional note between the two people', async () => {
+      const s = await acceptedScene(app, categoryId);
+      await request(app.getHttpServer())
+        .put(`${API}/assignments/${s.assignmentId}/payment-agreement`)
+        .set(...bearer(s.requester.accessToken))
+        .send({ paymentMethod: 'CASH', paymentTiming: 'AT_DELIVERY' })
+        .expect(200);
+      await dispatchOutbox(app);
+
+      const types = (await list(s.runner)).map((notice) => notice.type);
+      expect(types.some((type) => type.startsWith('payment_agreement'))).toBe(false);
+    });
+
     it('the runner who was not chosen is told, once', async () => {
       const first = await offerScene(app, categoryId);
       const { addOffer } = await import('../test/assignment.helper.js');

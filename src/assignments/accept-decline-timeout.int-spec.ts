@@ -63,11 +63,17 @@ describe('Accept, decline, timeout (P7-03)', () => {
       const detail = async (user: { accessToken: string }) =>
         (await request(app.getHttpServer()).get(`${API}/assignments/${s.assignmentId}`).set(...bearer(user.accessToken)).expect(200)).body.data;
       expect((await detail(s.runner)).conversationId).toBeNull();
+      // The runner gets no exact point before accepting. "Get directions" depends on that.
+      expect((await detail(s.runner)).errand.pickup.exact).toBeUndefined();
 
       await acceptAssignment(app, s.runner, s.assignmentId).expect(201);
       const conversation = await prisma.conversation.findFirstOrThrow({ where: { errandId: s.errandId } });
       expect((await detail(s.runner)).conversationId).toBe(conversation.id);
       expect((await detail(s.requester)).conversationId).toBe(conversation.id);
+      const accepted = (await detail(s.runner)).errand;
+      expect(accepted.accessLevel).toBe('EXACT');
+      expect(typeof accepted.pickup.exact.lat).toBe('number');
+      expect(typeof accepted.pickup.exact.lng).toBe('number');
       const errandView = (await request(app.getHttpServer()).get(`${API}/errands/${s.errandId}`).set(...bearer(s.requester.accessToken)).expect(200)).body.data;
       expect(errandView.assignment.conversationId).toBe(conversation.id);
     });

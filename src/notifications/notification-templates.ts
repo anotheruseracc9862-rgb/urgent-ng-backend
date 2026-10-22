@@ -213,16 +213,6 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
   'change_request.rejected': { category: 'TRANSACTIONAL', title: 'Change declined', body: 'Your change request for "{errandTitle}" was declined.' },
   'change_request.cancelled': { category: 'TRANSACTIONAL', title: 'Change withdrawn', body: 'The change request for "{errandTitle}" was withdrawn.' },
   'change_request.expired': { category: 'TRANSACTIONAL', title: 'Change expired', body: 'Your change request for "{errandTitle}" expired.' },
-  'payment_agreement.updated': {
-    category: 'MARKETPLACE',
-    title: 'Payment terms updated',
-    body: 'The payment terms for "{errandTitle}" changed. Please review and confirm.',
-  },
-  'payment_agreement.confirmed': {
-    category: 'MARKETPLACE',
-    title: 'Payment terms confirmed',
-    body: 'Both of you confirmed the payment terms for "{errandTitle}".',
-  },
 
   // Service notices an admin sends (security, outage, policy, payment, safety). Never marketing.
   'system.announcement': { category: 'TRANSACTIONAL', title: 'Service notice', body: '{message}', email: true },

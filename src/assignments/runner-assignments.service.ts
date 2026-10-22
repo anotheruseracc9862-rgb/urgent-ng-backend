@@ -60,6 +60,7 @@ export class RunnerAssignmentsService {
           select: { id: true, offerId: true },
         })
       : [];
+    const points = await this.approxPoints(page.map((row) => row.errandId));
     const conversationByOffer = new Map(conversations.map((conversation) => [conversation.offerId, conversation.id]));
 
     return new Paginated(
@@ -74,6 +75,8 @@ export class RunnerAssignmentsService {
         acceptedAt: row.acceptedAt,
         pickupArea: row.errand.locations.find((l) => l.type === 'ERRAND_PICKUP')?.area ?? null,
         destinationArea: row.errand.locations.find((l) => l.type === 'ERRAND_DESTINATION')?.area ?? null,
+        pickupApprox: points.get(`${row.errandId}:ERRAND_PICKUP`) ?? null,
+        destinationApprox: points.get(`${row.errandId}:ERRAND_DESTINATION`) ?? null,
         categoryFlow: row.errand.category.flow,
         selectedAt: row.selectedAt,
         requesterFirstName: row.requester.firstName,
@@ -84,6 +87,17 @@ export class RunnerAssignmentsService {
         ...(hasNextPage && last ? { nextCursor: this.cursors.encode({ sort: last.createdAt.toISOString(), createdAt: last.createdAt, id: last.id }) } : {}),
       },
     );
+  }
+
+  /** The approximate points of the errands on a page, keyed `errandId:TYPE`. The exact point is never read here. */
+  private async approxPoints(errandIds: string[]): Promise<Map<string, { lat: number; lng: number }>> {
+    if (errandIds.length === 0) return new Map();
+    const rows = await this.prisma.$queryRaw<Array<{ errand_id: string; type: string; lat: number; lng: number }>>`
+      SELECT errand_id::text, type::text AS type, ST_Y(approx_point::geometry) AS lat, ST_X(approx_point::geometry) AS lng
+      FROM errand_locations
+      WHERE errand_id = ANY(${errandIds}::uuid[]) AND deleted_at IS NULL
+    `;
+    return new Map(rows.map((row) => [`${row.errand_id}:${row.type}`, { lat: row.lat, lng: row.lng }]));
   }
 
   /**
