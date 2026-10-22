@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { formatInTimeZone } from 'date-fns-tz';
 import { PrismaService } from '../database/prisma.service.js';
 import type { DomainEvent } from '../queue/event-dispatcher.js';
-import { formatNaira } from './notification-templates.js';
+import { formatNaira, TEMPLATE_DEFAULTS } from './notification-templates.js';
 
 /** What one event asks the notification engine to do for one user. */
 export interface NotificationIntent {
@@ -55,7 +55,7 @@ export class NotificationRules {
       case 'assignment.selected':
         return this.assignmentSelected(p);
       case 'assignment.accepted':
-        return this.toRequester(p, 'assignment.accepted', `assignment:${str(p, 'assignmentId')}:accepted`, { runnerNameOf: 'runnerId' });
+        return this.assignmentAccepted(p);
       case 'assignment.declined':
         return this.toRequester(p, 'assignment.declined', `assignment:${str(p, 'assignmentId')}:declined`, { runnerNameOf: 'runnerId' });
       case 'assignment.timed_out':
@@ -68,9 +68,9 @@ export class NotificationRules {
       case 'execution.started':
       case 'execution.picked_up':
       case 'execution.delivered':
-        return this.toRequester(p, event.eventType, `assignment:${str(p, 'assignmentId')}:${event.eventType}`, { runnerNameOf: 'runnerId' });
+        return this.toRequester(p, await this.forFlow(p, event.eventType), `assignment:${str(p, 'assignmentId')}:${event.eventType}`, { runnerNameOf: 'runnerId' });
       case 'execution.arrived':
-        return this.toRequester(p, 'execution.arrived', `assignment:${str(p, 'assignmentId')}:arrived`, { runnerNameOf: 'runnerId' });
+        return this.toRequester(p, await this.forFlow(p, 'execution.arrived'), `assignment:${str(p, 'assignmentId')}:arrived`, { runnerNameOf: 'runnerId' });
       case 'execution.delay_notified':
         return this.toRequester(p, 'execution.delayed', `assignment:${str(p, 'assignmentId')}:delay:${num(p, 'notice') ?? event.eventId}`, {
           runnerNameOf: 'runnerId',
@@ -267,12 +267,12 @@ export class NotificationRules {
     const automatic = str(p, 'actorType') === 'SYSTEM';
     const out: NotificationIntent[] = [];
     if (automatic) {
-      out.push({ userId: requesterId, template: 'errand.auto_completed.requester', vars, data, dedupeKey: `errand:${errandId}:completed:${requesterId}` });
+      out.push({ userId: requesterId, template: await this.forFlow(p, 'errand.auto_completed.requester'), vars, data, dedupeKey: `errand:${errandId}:completed:${requesterId}` });
     }
     if (runnerId) {
       out.push({
         userId: runnerId,
-        template: automatic ? 'errand.auto_completed.runner' : 'errand.completed.runner',
+        template: automatic ? await this.forFlow(p, 'errand.auto_completed.runner') : 'errand.completed.runner',
         vars,
         data,
         dedupeKey: `errand:${errandId}:completed:${runnerId}`,
@@ -530,6 +530,38 @@ export class NotificationRules {
     ];
   }
 
+  /** Acceptance opens the chat: both people are told, each with the conversation to open. */
+  private async assignmentAccepted(p: Record<string, unknown>): Promise<NotificationIntent[]> {
+    const errandId = str(p, 'errandId');
+    const requesterId = str(p, 'requesterId');
+    const runnerId = str(p, 'runnerId');
+    const assignmentId = str(p, 'assignmentId');
+    if (!errandId || !requesterId || !runnerId || !assignmentId) return [];
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM conversations
+      WHERE errand_id = ${errandId}::uuid AND runner_id = ${runnerId}::uuid AND deleted_at IS NULL
+      ORDER BY created_at DESC LIMIT 1
+    `;
+    const conversationId = rows[0]?.id ?? null;
+    const data = { ...this.ids(p), conversationId };
+    return [
+      {
+        userId: requesterId,
+        template: 'assignment.accepted',
+        vars: await this.vars(p, { runnerNameOf: 'runnerId' }),
+        data,
+        dedupeKey: `assignment:${assignmentId}:accepted`,
+      },
+      {
+        userId: runnerId,
+        template: 'assignment.chat_open',
+        vars: { ...(await this.vars(p, {})), requesterName: await this.firstName(requesterId) },
+        data,
+        dedupeKey: `assignment:${assignmentId}:chat-open`,
+      },
+    ];
+  }
+
   private async message(p: Record<string, unknown>): Promise<NotificationIntent[]> {
     const recipientId = str(p, 'recipientId');
     const messageId = str(p, 'messageId');
@@ -591,6 +623,16 @@ export class NotificationRules {
     const amount = num(p, 'amountMinor') ?? num(p, 'agreedAmountMinor');
     if (options.amount && amount !== undefined) vars.amount = formatNaira(amount);
     return vars;
+  }
+
+  /** The service copy of a template when the errand is a service and that copy exists; else the template itself. */
+  private async forFlow(p: Record<string, unknown>, template: string): Promise<string> {
+    const errandId = str(p, 'errandId');
+    if (!errandId || !TEMPLATE_DEFAULTS[`${template}.service`]) return template;
+    const rows = await this.prisma.$queryRaw<Array<{ flow: string }>>`
+      SELECT c.flow::text AS flow FROM errands e JOIN categories c ON c.id = e.category_id WHERE e.id = ${errandId}::uuid
+    `;
+    return rows[0]?.flow === 'SERVICE' ? `${template}.service` : template;
   }
 
   private async errandTitle(errandId: string): Promise<string> {

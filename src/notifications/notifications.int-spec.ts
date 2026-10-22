@@ -10,7 +10,7 @@ import { createTestApp } from '../test/app.factory.js';
 import { cleanAll, getTestPrisma } from '../test/database.helper.js';
 import { API, bearer, seedPolicies, signedInUser } from '../test/auth.helper.js';
 import { seedCategories } from '../test/errand.helper.js';
-import { acceptAssignment, offerScene, selectRunner, selectedScene } from '../test/assignment.helper.js';
+import { acceptAssignment, acceptedScene, executionStep, offerScene, selectRunner, selectedScene } from '../test/assignment.helper.js';
 import { dispatchOutbox } from '../test/events.helper.js';
 import { EventDispatcher } from '../queue/event-dispatcher.js';
 import { PUSH_PROVIDER } from '../common/providers/push.provider.js';
@@ -98,6 +98,28 @@ describe('Notification engine (P8-03)', () => {
       const accepted = await ofType(s.requester, 'assignment.accepted');
       expect(accepted).toHaveLength(1);
       expect(accepted[0].data).toMatchObject({ assignmentId: s.assignmentId });
+
+      // The runner is told too, and both notices carry the conversation that just opened.
+      const chatOpen = await ofType(s.runner, 'assignment.chat_open');
+      expect(chatOpen).toHaveLength(1);
+      const conversation = await prisma.conversation.findFirstOrThrow({ where: { errandId: s.errandId } });
+      expect(chatOpen[0].data).toMatchObject({ conversationId: conversation.id });
+      expect(accepted[0].data).toMatchObject({ conversationId: conversation.id });
+    });
+
+    it('a service reads as work at an address, not a pickup', async () => {
+      const service = await acceptedScene(app, (await prisma.category.findFirstOrThrow({ where: { key: 'home_cleaning' } })).id);
+      await executionStep(app, service.runner, service.assignmentId, 'start').expect(201);
+      await dispatchOutbox(app);
+      const started = await ofType(service.requester, 'execution.started.service');
+      expect(started).toHaveLength(1);
+      expect(started[0]).toMatchObject({ title: 'On the way' });
+      expect(await ofType(service.requester, 'execution.started')).toHaveLength(0);
+
+      const errand = await acceptedScene(app, categoryId);
+      await executionStep(app, errand.runner, errand.assignmentId, 'start').expect(201);
+      await dispatchOutbox(app);
+      expect(await ofType(errand.requester, 'execution.started')).toHaveLength(1);
     });
 
     it('the runner who was not chosen is told, once', async () => {

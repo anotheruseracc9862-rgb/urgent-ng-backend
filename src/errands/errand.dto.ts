@@ -320,6 +320,9 @@ export class ErrandAssignmentSummaryDto {
 
   @ApiProperty({ nullable: true, type: Date })
   acceptedAt!: Date | null;
+
+  @ApiProperty({ nullable: true, type: String, description: 'The conversation with the runner once they accept and messages are open.' })
+  conversationId!: string | null;
 }
 
 /** What the requester sees of their own errand. */

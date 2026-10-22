@@ -182,6 +182,8 @@ export class MapPointDto {
   @ApiProperty({ type: DistanceBucketDto, nullable: true })
   distance!: DistanceBucketDto | null;
   boosted!: boolean;
+  @ApiProperty({ type: MyOfferDto, nullable: true, description: "The viewer's own offer on this errand (the latest, whatever its state), or null." })
+  myOffer!: MyOfferDto | null;
 }
 
 export class PublicLocationViewDto extends PublicAreaDto {

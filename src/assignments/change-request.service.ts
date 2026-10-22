@@ -84,6 +84,9 @@ export class ChangeRequestService {
         if (input.type === 'TIME' && a.timeMode !== 'SCHEDULED') {
           throw DomainException.of(CHANGE_REQUEST_NOT_ALLOWED, { message: 'Only a scheduled errand has a time to change.' });
         }
+        if (input.type === 'PICKUP' || input.type === 'DESTINATION') {
+          await this.requireLocationFits(tx, a.errandId, input.type);
+        }
         const pending = await tx.changeRequest.findFirst({ where: { assignmentId, status: 'PENDING' }, select: { id: true } });
         if (pending) {
           throw DomainException.of(CHANGE_REQUEST_PENDING, { details: { changeRequestId: pending.id } });
@@ -420,6 +423,24 @@ export class ChangeRequestService {
       errandVersion: errand.version,
       timeMode: errand.time_mode,
     };
+  }
+
+  /** A service has one address (the destination); an errand only has the stops its category asks for. */
+  private async requireLocationFits(tx: Prisma.TransactionClient, errandId: string, type: 'PICKUP' | 'DESTINATION'): Promise<void> {
+    const errand = await tx.errand.findUniqueOrThrow({
+      where: { id: errandId },
+      select: { category: { select: { flow: true, requiresPickup: true, requiresDestination: true } } },
+    });
+    const { flow, requiresPickup, requiresDestination } = errand.category;
+    const fits = flow === 'SERVICE' ? type === 'DESTINATION' : type === 'PICKUP' ? requiresPickup : requiresDestination;
+    if (!fits) {
+      throw DomainException.of(CHANGE_REQUEST_NOT_ALLOWED, {
+        message: flow === 'SERVICE'
+          ? 'A service has one address. Ask to change the service address instead.'
+          : `This errand has no ${type === 'PICKUP' ? 'pickup' : 'destination'} to change.`,
+        details: { reason: 'LOCATION_NOT_ON_ERRAND', type },
+      });
+    }
   }
 
   private async lockRequest(tx: Prisma.TransactionClient, changeRequestId: string): Promise<ChangeRequest> {

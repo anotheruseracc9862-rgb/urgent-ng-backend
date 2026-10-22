@@ -217,7 +217,7 @@ export class MarketplaceFeedService {
       ${FEED_JOINS}
       ORDER BY page.dist_m ASC, page.published_at DESC, page.id DESC
     `);
-    return rows.map((row) => ({
+    const points: MapPointDto[] = rows.map((row) => ({
       id: row.id,
       title: row.title,
       categoryKey: row.category_key,
@@ -227,7 +227,10 @@ export class MarketplaceFeedService {
       suggestedBudgetMinor: row.suggested_budget_minor === null ? null : Number(row.suggested_budget_minor),
       distance: row.dist_m === null ? null : distanceBucket(row.dist_m),
       boosted: boosted.has(row.id),
+      myOffer: null,
     }));
+    await attachMyOffers(this.prisma, userId, points);
+    return points;
   }
 
   // ---- Detail ----

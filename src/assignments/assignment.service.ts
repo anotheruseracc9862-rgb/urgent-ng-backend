@@ -489,14 +489,18 @@ export class AssignmentService {
     }
     const role = row.requesterId === userId ? 'REQUESTER' : 'RUNNER';
     const exact = role === 'REQUESTER' || row.status === 'ACCEPTED';
-    const [errand, dispute] = await Promise.all([
+    const [errand, dispute, conversation] = await Promise.all([
       this.errandViews.forAssignedRunner(this.prisma, row.errandId, exact),
       this.prisma.dispute.findFirst({
         where: { assignmentId: row.id, deletedAt: null },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select: { id: true },
       }),
+      // Messages open for both people once the runner accepts, so the link only exists from then on.
+      row.acceptedAt
+        ? this.prisma.conversation.findFirst({ where: { offerId: row.selectedOfferId, deletedAt: null }, select: { id: true } })
+        : null,
     ]);
-    return { ...toAssignmentDto(row), role, disputeId: dispute?.id ?? null, errand: errand as unknown as AssignedErrandDto };
+    return { ...toAssignmentDto(row), role, disputeId: dispute?.id ?? null, conversationId: conversation?.id ?? null, errand: errand as unknown as AssignedErrandDto };
   }
 }

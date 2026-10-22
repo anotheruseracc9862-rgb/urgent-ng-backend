@@ -58,6 +58,20 @@ describe('Accept, decline, timeout (P7-03)', () => {
       expect(history.map((h) => h.t)).toEqual(['RUNNER_SELECTED', 'ACCEPTED']);
     });
 
+    it('gives both people the conversation once accepted, and neither before', async () => {
+      const s = await selectedScene(app, categoryId);
+      const detail = async (user: { accessToken: string }) =>
+        (await request(app.getHttpServer()).get(`${API}/assignments/${s.assignmentId}`).set(...bearer(user.accessToken)).expect(200)).body.data;
+      expect((await detail(s.runner)).conversationId).toBeNull();
+
+      await acceptAssignment(app, s.runner, s.assignmentId).expect(201);
+      const conversation = await prisma.conversation.findFirstOrThrow({ where: { errandId: s.errandId } });
+      expect((await detail(s.runner)).conversationId).toBe(conversation.id);
+      expect((await detail(s.requester)).conversationId).toBe(conversation.id);
+      const errandView = (await request(app.getHttpServer()).get(`${API}/errands/${s.errandId}`).set(...bearer(s.requester.accessToken)).expect(200)).body.data;
+      expect(errandView.assignment.conversationId).toBe(conversation.id);
+    });
+
     it('answers "not found" to anyone who is not the selected runner', async () => {
       const s = await selectedScene(app, categoryId);
       const stranger = await signedInUser(app);

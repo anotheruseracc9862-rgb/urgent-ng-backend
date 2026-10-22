@@ -1,13 +1,13 @@
 import { Prisma } from '@prisma/client';
 import type { PrismaService } from '../database/prisma.service.js';
-import type { FeedItemDto, MyOfferDto } from './marketplace.dto.js';
+import type { MyOfferDto } from './marketplace.dto.js';
 
 /**
  * Put the viewer's own offer on each errand of a page, in one query for the whole page. A runner may make
  * only one offer per errand, so the latest one is shown whatever its state: a card says "Offer sent", or
  * "Offer declined", and never offers a second offer that would be refused.
  */
-export async function attachMyOffers(prisma: Pick<PrismaService, '$queryRaw'>, userId: string, items: FeedItemDto[]): Promise<void> {
+export async function attachMyOffers(prisma: Pick<PrismaService, '$queryRaw'>, userId: string, items: Array<{ id: string; myOffer: MyOfferDto | null }>): Promise<void> {
   if (items.length === 0) return;
   const rows = await prisma.$queryRaw<
     Array<{ errand_id: string; id: string; status: MyOfferDto['status']; amount_minor: bigint; duration_minutes: number; awaiting_party: MyOfferDto['awaitingParty']; needs_reconfirmation: boolean }>

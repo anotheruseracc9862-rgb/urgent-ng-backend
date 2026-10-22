@@ -46,6 +46,16 @@ describe('My offer on the marketplace', () => {
     expect((await detail(scene.runner, scene.errandId)).myOffer).toMatchObject({ id: scene.offerId, awaitingParty: 'REQUESTER' });
   });
 
+  it('marks the own offer of a runner on the map pin too', async () => {
+    const scene = await offerScene(app, categoryId);
+    const pins = async (user: Authed) =>
+      (await request(app.getHttpServer()).get(`${API}/marketplace/errands/map`).set(...bearer(user.accessToken)).expect(200)).body.data as Array<{ id: string; myOffer: Record<string, unknown> | null }>;
+
+    expect((await pins(scene.runner)).find((pin) => pin.id === scene.errandId)?.myOffer).toMatchObject({ id: scene.offerId, status: 'ACTIVE' });
+    const other = await readyRunner(app, uniqueNin(778));
+    expect((await pins(other)).find((pin) => pin.id === scene.errandId)?.myOffer).toBeNull();
+  });
+
   it('shows another runner no offer at all: only your own is yours to see', async () => {
     const scene = await offerScene(app, categoryId);
     const other = await readyRunner(app, uniqueNin(777));

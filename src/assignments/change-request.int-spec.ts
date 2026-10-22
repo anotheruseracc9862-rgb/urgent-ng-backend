@@ -124,6 +124,21 @@ describe('Change requests (P7-09)', () => {
       expect((await create(ended.runner, ended.assignmentId, 'OTHER', { note: 'x' })).status).toBe(409);
     });
 
+    it('only asks for the stops the errand has: a service has one address, an errand only its own stops', async () => {
+      const service = await acceptedScene(app, (await prisma.category.findFirstOrThrow({ where: { key: 'home_cleaning' } })).id);
+      const noPickup = await create(service.requester, service.assignmentId, 'PICKUP', { point: { lat: 6.5, lng: 3.4 } });
+      expect(noPickup.status).toBe(409);
+      expect(noPickup.body.error.code).toBe('CHANGE_REQUEST_NOT_ALLOWED');
+      expect(noPickup.body.error.message).toMatch(/one address/);
+      await create(service.requester, service.assignmentId, 'DESTINATION', { point: { lat: 6.5, lng: 3.4 } }).expect(201);
+
+      const pickupOnly = await acceptedScene(app, (await prisma.category.findFirstOrThrow({ where: { key: 'pickup' } })).id);
+      const noDestination = await create(pickupOnly.requester, pickupOnly.assignmentId, 'DESTINATION', { point: { lat: 6.5, lng: 3.4 } });
+      expect(noDestination.status).toBe(409);
+      expect(noDestination.body.error.message).toMatch(/no destination/);
+      await create(pickupOnly.requester, pickupOnly.assignmentId, 'PICKUP', { point: { lat: 6.5, lng: 3.4 } }).expect(201);
+    });
+
     it('is invisible to strangers', async () => {
       const s = await acceptedScene(app, categoryId);
       const stranger = await signedInUser(app);

@@ -152,6 +152,9 @@ export class AssignmentDetailDto extends AssignmentDto {
   @ApiPropertyOptional({ type: String, nullable: true, description: 'The latest non-deleted dispute for this assignment, or null. Visible only to its parties.' })
   disputeId?: string | null;
 
+  @ApiPropertyOptional({ type: String, nullable: true, description: 'The conversation between the two parties once the runner has accepted and messages are open, otherwise null.' })
+  conversationId?: string | null;
+
   @ApiProperty({ type: AssignedErrandDto, description: 'The errand as this caller may see it. Exact locations and contacts only for the requester, and for the runner while the assignment is ACCEPTED.' })
   errand!: AssignedErrandDto;
 }

@@ -117,8 +117,12 @@ export class ErrandViewService {
         status: { in: ['PENDING_ACCEPTANCE', 'ACCEPTED', 'COMPLETED'] },
       },
       orderBy: { selectedAt: 'desc' },
-      select: { id: true, runnerId: true, status: true, agreedAmountMinor: true, acceptedAt: true },
+      select: { id: true, runnerId: true, status: true, agreedAmountMinor: true, acceptedAt: true, selectedOfferId: true },
     });
+    // Messages open once the runner accepts; before that there is nothing to link to.
+    const conversation = assignment?.acceptedAt
+      ? await client.conversation.findFirst({ where: { offerId: assignment.selectedOfferId, deletedAt: null }, select: { id: true } })
+      : null;
     const at = (type: 'ERRAND_PICKUP' | 'ERRAND_DESTINATION'): ParticipantLocationView | null => {
       const found = locations.find((location) => location.type === type);
       return found ? this.privacy.toParticipant(found) : null;
@@ -149,6 +153,7 @@ export class ErrandViewService {
             status: assignment.status,
             agreedAmountMinor: Number(assignment.agreedAmountMinor),
             acceptedAt: assignment.acceptedAt,
+            conversationId: conversation?.id ?? null,
           }
         : null,
       offerCount: errand.offerCount,

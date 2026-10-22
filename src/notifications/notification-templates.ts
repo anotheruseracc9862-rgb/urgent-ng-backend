@@ -40,7 +40,8 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     title: 'You were selected',
     body: 'Accept "{errandTitle}" before {deadline} to take the job.',
   },
-  'assignment.accepted': { category: 'TRANSACTIONAL', title: 'Runner accepted', body: '{runnerName} accepted "{errandTitle}".' },
+  'assignment.accepted': { category: 'TRANSACTIONAL', title: 'Runner accepted', body: '{runnerName} accepted "{errandTitle}". Messages are open.' },
+  'assignment.chat_open': { category: 'TRANSACTIONAL', title: 'Messages are open', body: 'You can now message {requesterName} about "{errandTitle}".' },
   'assignment.declined': { category: 'TRANSACTIONAL', title: 'Runner declined', body: '{runnerName} declined "{errandTitle}". Choose another runner.' },
   'assignment.timed_out.requester': {
     category: 'TRANSACTIONAL',
@@ -78,6 +79,25 @@ export const TEMPLATE_DEFAULTS: Record<string, NotificationTemplateDefault> = {
     category: 'TRANSACTIONAL',
     title: 'Running late',
     body: '{runnerName} expects about {minutes} more minutes for "{errandTitle}".',
+  },
+  // The same steps for a service (work at one address): a template is `<name>.service` when the errand's category is a service.
+  'execution.started.service': { category: 'TRANSACTIONAL', title: 'On the way', body: '{runnerName} is on the way to the address for "{errandTitle}".' },
+  'execution.picked_up.service': { category: 'TRANSACTIONAL', title: 'Work started', body: '{runnerName} started the work for "{errandTitle}".' },
+  'execution.delivered.service': {
+    category: 'TRANSACTIONAL',
+    title: 'Work finished',
+    body: '{runnerName} finished the work for "{errandTitle}". Please confirm it is done.',
+  },
+  'execution.arrived.service': { category: 'TRANSACTIONAL', title: 'Runner arrived', body: '{runnerName} arrived at the address for "{errandTitle}".' },
+  'errand.auto_completed.requester.service': {
+    category: 'TRANSACTIONAL',
+    title: 'Job completed',
+    body: '"{errandTitle}" was completed automatically after the work was finished.',
+  },
+  'errand.auto_completed.runner.service': {
+    category: 'TRANSACTIONAL',
+    title: 'Job completed',
+    body: '"{errandTitle}" was completed automatically after the work was finished.',
   },
   'execution.problem_reported': {
     category: 'TRANSACTIONAL',
