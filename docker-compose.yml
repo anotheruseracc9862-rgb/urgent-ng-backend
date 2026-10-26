@@ -1,3 +1,6 @@
+# Compose project name shown in Docker Desktop. The data volume keeps its old name so no data is lost.
+name: urgent-ng
+
 services:
   postgres:
     image: postgis/postgis:17-3.5
@@ -31,3 +34,4 @@ services:
 
 volumes:
   pgdata:
+    name: backend_pgdata

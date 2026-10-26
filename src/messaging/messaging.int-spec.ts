@@ -105,12 +105,13 @@ describe('Messaging (P8-01)', () => {
       expect(await prisma.message.count()).toBe(0);
     });
 
-    it('a runner who withdraws and offers again keeps the same conversation', async () => {
+    it('a runner who withdraws cannot offer again, and keeps the one conversation', async () => {
       const s = await offerScene(app, categoryId);
       const first = await rowFor(s);
       await offerAction(app, s.runner, 'post', s.offerId, 'withdraw').expect(200);
       const { submitOffer } = await import('../test/offer.helper.js');
-      await submitOffer(app, s.runner, s.errandId).expect(201);
+      // One offer per runner per errand: a withdrawal cannot restart the negotiation (offer-once suite).
+      await submitOffer(app, s.runner, s.errandId).expect(403);
 
       expect(await prisma.conversation.count({ where: { errandId: s.errandId } })).toBe(1);
       expect((await rowFor(s)).id).toBe(first.id);
