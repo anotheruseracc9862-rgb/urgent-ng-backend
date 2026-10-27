@@ -129,11 +129,16 @@ BEGIN
   EXECUTE format('DROP TRIGGER IF EXISTS retention_only_delete ON %s', target);
   EXECUTE format('CREATE TRIGGER retention_only_delete BEFORE DELETE ON %s FOR EACH ROW EXECUTE FUNCTION retention_only_delete()', target);
   -- the retention role may read and delete from transient tables
-  EXECUTE format('GRANT SELECT, DELETE ON %s TO urgent_retention', target);
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'urgent_retention') THEN
+    EXECUTE format('GRANT SELECT, DELETE ON %s TO urgent_retention', target);
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
 
 -- ---------------------------------------------------------------- 5. roles
+-- Managed hosts (e.g. Northflank) do not give the migration user CREATEROLE. The roles are
+-- dropped again by 20261006210000_single_database_login, so creation and every grant below
+-- are skipped when the roles cannot be created.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'urgent_app') THEN
@@ -142,6 +147,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'urgent_retention') THEN
     CREATE ROLE urgent_retention NOLOGIN;
   END IF;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'Skipping role creation: no CREATEROLE privilege';
 END
 $$;
 
@@ -153,16 +160,19 @@ SELECT install_block_delete_trigger('commercial_products');
 SELECT install_retention_delete_trigger('outbox_events');
 SELECT install_retention_delete_trigger('idempotency_keys');
 
-GRANT USAGE ON SCHEMA public TO urgent_app, urgent_retention;
-GRANT EXECUTE ON FUNCTION uuid_generate_v7() TO urgent_app, urgent_retention;
-
--- The application role can read, insert and update, and can never delete.
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO urgent_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO urgent_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO urgent_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO urgent_app;
-
--- Append-only and immutable tables cannot be updated by the application either.
-REVOKE UPDATE ON audit_logs     FROM urgent_app;
-REVOKE UPDATE ON price_versions FROM urgent_app;
-REVOKE ALL ON _prisma_migrations FROM urgent_app;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'urgent_app')
+     AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'urgent_retention') THEN
+    EXECUTE $q$GRANT USAGE ON SCHEMA public TO urgent_app, urgent_retention$q$;
+    EXECUTE $q$GRANT EXECUTE ON FUNCTION uuid_generate_v7() TO urgent_app, urgent_retention$q$;
+    EXECUTE $q$GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO urgent_app$q$;
+    EXECUTE $q$GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO urgent_app$q$;
+    EXECUTE $q$ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO urgent_app$q$;
+    EXECUTE $q$ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO urgent_app$q$;
+    EXECUTE $q$REVOKE UPDATE ON audit_logs     FROM urgent_app$q$;
+    EXECUTE $q$REVOKE UPDATE ON price_versions FROM urgent_app$q$;
+    EXECUTE $q$REVOKE ALL ON _prisma_migrations FROM urgent_app$q$;
+  END IF;
+END
+$$;

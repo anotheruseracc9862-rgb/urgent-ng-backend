@@ -79,6 +79,15 @@ const isTest = process.env.NODE_ENV === 'test';
           return id;
         },
         redact: ['req.headers.authorization', 'req.headers.cookie'],
+        // One short line per request: no header dump
+        serializers: {
+          req: (req: { id: string; method: string; url: string }) => ({
+            id: req.id,
+            method: req.method,
+            url: req.url,
+          }),
+          res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
+        },
         autoLogging: {
           ignore: (req) =>
             typeof req.url === 'string' && req.url.includes('/health'),
