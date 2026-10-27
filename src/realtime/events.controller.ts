@@ -84,7 +84,9 @@ export class EventsController {
       for await (const frame of this.streams.frames(user.userId, lastEventId || lastEventIdQuery || undefined, abort.signal, { heartbeatMs: HEARTBEAT_MS })) {
         write(res, frame);
         if (frame.kind === 'heartbeat') {
-          await this.streams.refreshSlot(user.userId, slot);
+          // The slot is gone when a newer connection took it over the cap: end this one.
+          const kept = await this.streams.refreshSlot(user.userId, slot);
+          if (!kept) break;
         }
       }
     } catch {

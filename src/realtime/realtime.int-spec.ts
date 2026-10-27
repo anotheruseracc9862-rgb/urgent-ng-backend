@@ -171,15 +171,23 @@ describe('Realtime (P8-02)', () => {
   });
 
   describe('connections', () => {
-    it('are capped per user and a slot is freed on close', async () => {
+    it('are capped per user: at the cap the oldest slot is dropped and its connection ends', async () => {
       const user = await signedInUser(app);
       const slots: string[] = [];
       for (let i = 0; i < 5; i += 1) slots.push(await streams().acquireSlot(user.userId, 5));
 
-      await expect(streams().acquireSlot(user.userId, 5)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
+      const newest = await streams().acquireSlot(user.userId, 5);
 
-      await streams().releaseSlot(user.userId, slots[0]);
-      await expect(streams().acquireSlot(user.userId, 5)).resolves.toBeTruthy();
+      expect(await streams().refreshSlot(user.userId, slots[0])).toBe(false);
+      expect(await streams().refreshSlot(user.userId, slots[1])).toBe(true);
+      expect(await streams().refreshSlot(user.userId, newest)).toBe(true);
+    });
+
+    it('free a slot on close', async () => {
+      const user = await signedInUser(app);
+      const slot = await streams().acquireSlot(user.userId, 5);
+      await streams().releaseSlot(user.userId, slot);
+      expect(await streams().refreshSlot(user.userId, slot)).toBe(false);
     });
   });
 
@@ -263,20 +271,21 @@ describe('Realtime (P8-02)', () => {
       expect(second.status).toBe(401);
     });
 
-    it('refuses a connection over the cap', async () => {
+    it('a connection over the cap is accepted and replaces the oldest one', async () => {
       await app.get(BusinessConfigService).set('REALTIME_MAX_CONNECTIONS_PER_USER', 2);
       const user = await signedInUser(app);
       const headers = { Authorization: `Bearer ${user.accessToken}` };
       const a = await open('/events', headers);
       const b = await open('/events', headers);
+      const c = await open('/events', headers);
       try {
         expect(a.res.status).toBe(200);
         expect(b.res.status).toBe(200);
-        const third = await fetch(`${baseUrl}/events`, { headers });
-        expect(third.status).toBe(429);
+        expect(c.res.status).toBe(200);
       } finally {
         a.abort.abort();
         b.abort.abort();
+        c.abort.abort();
       }
       expect(prisma).toBeTruthy();
     });
