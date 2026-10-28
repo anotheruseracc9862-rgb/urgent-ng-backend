@@ -34,6 +34,9 @@ export function redisOptionsFromUrl(url: string): RedisOptions {
       ? { password: decodeURIComponent(parsed.password) }
       : {}),
     db,
+    // Probe idle sockets every 10 s so a proxy or load balancer in front of a hosted Redis does not
+    // drop them for being quiet (the default waits for the operating system, about two hours).
+    keepAlive: 10_000,
     ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
   };
 }

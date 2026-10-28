@@ -58,6 +58,8 @@ export class MediaWorker implements OnModuleDestroy {
     this.worker.on('failed', (job, error) => {
       void this.onFailed(job, error);
     });
+    // A dropped Redis connection is retried by BullMQ itself: one line, not a stack trace each time.
+    this.worker.on('error', (error) => this.logger.warn(`Media worker connection: ${error.message}`));
     this.logger.log('Media worker started');
   }
 

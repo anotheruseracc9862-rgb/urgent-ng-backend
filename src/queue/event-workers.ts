@@ -38,6 +38,9 @@ export class EventWorkers implements OnModuleDestroy {
       worker.on('failed', (job, error) => {
         this.logger.warn(`${queue} job ${job?.id ?? '?'} failed (attempt ${job?.attemptsMade ?? '?'}): ${error.message}`);
       });
+      worker.on('error', (error) => {
+        this.logger.warn(`${queue} worker connection: ${error.message}`);
+      });
       this.workers.push(worker);
     }
     this.logger.log(`Event workers started for: ${queues.join(', ')}; handlers: ${this.dispatcher.registered.join(', ') || 'none'}`);
