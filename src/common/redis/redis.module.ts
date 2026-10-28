@@ -4,12 +4,19 @@ import { Redis } from 'ioredis';
 import { redisOptionsFromUrl } from './redis.config.js';
 
 export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
+/** One connection shared by every BullMQ queue (producer side) of this process. */
+export const BULL_PRODUCER_CONNECTION = Symbol('BULL_PRODUCER_CONNECTION');
+/** One connection shared by every BullMQ worker of this process; each worker adds one blocking connection. */
+export const BULL_WORKER_CONNECTION = Symbol('BULL_WORKER_CONNECTION');
 
 /**
  * One shared Redis client for caching, health checks and rate limiting.
  * It fails fast when Redis is down (no offline queue) so callers can degrade
  * to PostgreSQL, because Redis never holds business state (Backend PRD 3.3).
- * BullMQ creates its own connections from the same URL.
+ *
+ * BullMQ would open its own connections per queue (about 13) and two per worker. Hosted Redis plans
+ * cap connections (the free tier allows 30), so queues and workers share one connection each:
+ * a process then holds a handful of connections instead of about thirty.
  */
 @Global()
 @Module({
@@ -43,13 +50,45 @@ export const REDIS_CLIENT = Symbol('REDIS_CLIENT');
         return client;
       },
     },
+    {
+      provide: BULL_PRODUCER_CONNECTION,
+      inject: [ConfigService],
+      // BullMQ's own defaults for a producer: commands wait out a reconnect instead of failing at once.
+      useFactory: (config: ConfigService) => {
+        const client = new Redis(redisOptionsFromUrl(config.getOrThrow<string>('redis.url')));
+        client.on('error', () => undefined);
+        return client;
+      },
+    },
+    {
+      provide: BULL_WORKER_CONNECTION,
+      inject: [ConfigService],
+      // Workers need maxRetriesPerRequest null (BullMQ blocks on it). Lazy: the API never starts a
+      // worker, so it never opens this connection.
+      useFactory: (config: ConfigService) => {
+        const client = new Redis({
+          ...redisOptionsFromUrl(config.getOrThrow<string>('redis.url')),
+          maxRetriesPerRequest: null,
+          lazyConnect: true,
+        });
+        client.on('error', () => undefined);
+        return client;
+      },
+    },
   ],
-  exports: [REDIS_CLIENT],
+  exports: [REDIS_CLIENT, BULL_PRODUCER_CONNECTION, BULL_WORKER_CONNECTION],
 })
 export class RedisModule implements OnApplicationShutdown {
-  constructor(@Inject(REDIS_CLIENT) private readonly client: Redis) {}
+  constructor(
+    @Inject(REDIS_CLIENT) private readonly client: Redis,
+    @Inject(BULL_PRODUCER_CONNECTION) private readonly producer: Redis,
+    @Inject(BULL_WORKER_CONNECTION) private readonly worker: Redis,
+  ) {}
 
+  /** BullMQ does not close a connection it was handed, so the queues and workers have stopped by now. */
   async onApplicationShutdown(): Promise<void> {
     this.client.disconnect();
+    this.producer.disconnect();
+    this.worker.disconnect();
   }
 }

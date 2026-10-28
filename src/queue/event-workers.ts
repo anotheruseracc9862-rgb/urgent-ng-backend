@@ -1,7 +1,7 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Worker, type ConnectionOptions, type Job } from 'bullmq';
-import { redisOptionsFromUrl } from '../common/redis/redis.config.js';
+import type { Redis } from 'ioredis';
+import { BULL_WORKER_CONNECTION } from '../common/redis/redis.module.js';
 import { EventDispatcher, type DomainEvent } from './event-dispatcher.js';
 import { EVENT_TO_QUEUE_MAP, QUEUE_NAMES } from './queue.registry.js';
 
@@ -19,7 +19,7 @@ export class EventWorkers implements OnModuleDestroy {
   private workers: Worker[] = [];
 
   constructor(
-    private readonly config: ConfigService,
+    @Inject(BULL_WORKER_CONNECTION) private readonly redis: Redis,
     private readonly dispatcher: EventDispatcher,
   ) {}
 
@@ -27,7 +27,8 @@ export class EventWorkers implements OnModuleDestroy {
     if (this.workers.length > 0) {
       return;
     }
-    const connection = redisOptionsFromUrl(this.config.getOrThrow<string>('redis.url')) as ConnectionOptions;
+    // One shared connection for all workers; each worker only adds its own blocking connection.
+    const connection = this.redis as ConnectionOptions;
     const queues = [...new Set(Object.values(EVENT_TO_QUEUE_MAP))].filter((name) => !OWN_WORKER.includes(name));
     for (const queue of queues) {
       const worker = new Worker<DomainEvent>(

@@ -1,8 +1,9 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
 import type { ConnectionOptions } from 'bullmq';
+import type { Redis } from 'ioredis';
 import { LoggerModule } from 'nestjs-pino';
 import configuration from './config/configuration.js';
 import { validateEnv } from './config/env.validation.js';
@@ -14,8 +15,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware.j
 import { resolveRequestId } from './common/middleware/request-id.js';
 import { CommonModule } from './common/common.module.js';
 import { ProvidersModule } from './common/providers/providers.module.js';
-import { RedisModule } from './common/redis/redis.module.js';
-import { redisOptionsFromUrl } from './common/redis/redis.config.js';
+import { BULL_PRODUCER_CONNECTION, RedisModule } from './common/redis/redis.module.js';
 import { AppThrottlerModule } from './common/throttler/throttler.module.js';
 import { AppThrottlerGuard } from './common/throttler/app-throttler.guard.js';
 import { AuditModule } from './audit/audit.module.js';
@@ -94,12 +94,11 @@ const isTest = process.env.NODE_ENV === 'test';
         },
       },
     }),
+    // Every queue shares one Redis connection (see RedisModule).
     BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        connection: redisOptionsFromUrl(
-          config.getOrThrow<string>('redis.url'),
-        ) as ConnectionOptions,
+      inject: [BULL_PRODUCER_CONNECTION],
+      useFactory: (connection: Redis) => ({
+        connection: connection as ConnectionOptions,
       }),
     }),
     RedisModule,

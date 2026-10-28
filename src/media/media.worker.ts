@@ -1,9 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Worker, type ConnectionOptions, type Job } from 'bullmq';
+import type { Redis } from 'ioredis';
 import { QUEUE_NAMES } from '../queue/queue.registry.js';
 import { BaseConsumer, type JobContext } from '../queue/base.consumer.js';
-import { redisOptionsFromUrl } from '../common/redis/redis.config.js';
+import { BULL_WORKER_CONNECTION } from '../common/redis/redis.module.js';
 import { MediaProcessingService } from './media-processing.service.js';
 
 interface MediaJobData {
@@ -38,7 +38,7 @@ export class MediaWorker implements OnModuleDestroy {
   private worker?: Worker;
 
   constructor(
-    private readonly config: ConfigService,
+    @Inject(BULL_WORKER_CONNECTION) private readonly redis: Redis,
     private readonly processing: MediaProcessingService,
   ) {
     this.consumer = new MediaConsumer(processing);
@@ -48,7 +48,7 @@ export class MediaWorker implements OnModuleDestroy {
     if (this.worker) {
       return;
     }
-    const connection = redisOptionsFromUrl(this.config.getOrThrow<string>('redis.url')) as ConnectionOptions;
+    const connection = this.redis as ConnectionOptions;
     this.worker = new Worker<MediaJobData>(
       QUEUE_NAMES.MEDIA,
       (job: Job<MediaJobData>) =>
