@@ -23,6 +23,8 @@ export type FetchLike = (url: string, init: { method: string; headers: Record<st
 
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const DEFAULT_TOKEN_URI = 'https://oauth2.googleapis.com/token';
+/** How long Firebase holds a push for a phone that is off or out of range: one day. */
+const PUSH_TTL_SECONDS = 86_400;
 
 const base64Url = (input: Buffer | string): string => Buffer.from(input).toString('base64url');
 
@@ -88,6 +90,11 @@ export class FcmPushProvider implements IPushProvider {
           token: notification.token,
           notification: { title: notification.title, body: notification.body, ...(notification.imageUrl ? { image: notification.imageUrl } : {}) },
           data: notification.data ?? {},
+          // Without these a phone may treat the message as low priority and hold it back to save battery.
+          // They ask for immediate delivery, and let an undelivered push wait up to a day for a phone that is off.
+          android: { priority: 'HIGH', ttl: `${PUSH_TTL_SECONDS}s` },
+          webpush: { headers: { Urgency: 'high', TTL: String(PUSH_TTL_SECONDS) } },
+          apns: { headers: { 'apns-priority': '10', 'apns-expiration': String(Math.floor(this.now() / 1000) + PUSH_TTL_SECONDS) } },
         },
       }),
     });

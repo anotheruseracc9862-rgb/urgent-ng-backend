@@ -46,9 +46,12 @@ describe('FcmPushProvider', () => {
     const send = calls[1];
     expect(send.url).toBe('https://fcm.googleapis.com/v1/projects/urgent-ng-test/messages:send');
     expect(send.headers.Authorization).toBe('Bearer token-1');
-    expect(JSON.parse(send.body)).toEqual({
-      message: { token: 'device-token', notification: { title: 'Hello', body: 'World' }, data: { errandId: 'e-1' } },
-    });
+    const message = JSON.parse(send.body).message;
+    expect(message).toMatchObject({ token: 'device-token', notification: { title: 'Hello', body: 'World' }, data: { errandId: 'e-1' } });
+    // Immediate delivery, and a day to reach a phone that is off.
+    expect(message.android).toEqual({ priority: 'HIGH', ttl: '86400s' });
+    expect(message.webpush.headers).toEqual({ Urgency: 'high', TTL: '86400' });
+    expect(message.apns.headers['apns-priority']).toBe('10');
   });
 
   it('caches the access token between sends', async () => {
