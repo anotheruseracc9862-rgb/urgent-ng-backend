@@ -39,14 +39,14 @@ const allFake = {
   payments: 'fake',
 };
 
-async function build(providers: Record<string, string>): Promise<TestingModule> {
+async function build(providers: Record<string, string>, extra: Record<string, unknown> = {}): Promise<TestingModule> {
   return Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({
         isGlobal: true,
         ignoreEnvFile: true,
         // Same shape as AppConfig.providers (see src/config/configuration.ts)
-        load: [() => ({ providers })],
+        load: [() => ({ providers, ...extra })],
       }),
       ProvidersModule.forRoot(),
     ],
@@ -89,6 +89,18 @@ describe('ProvidersModule', () => {
   it('logs one-time codes when sms is "real" but has no keys outside production', async () => {
     const module = await build({ ...allFake, sms: 'real' });
     expect(module.get(OTP_PROVIDER)).toBeInstanceOf(LogOtpProvider);
+  });
+
+  it('refuses a missing SMS key in production, unless ALLOW_LOG_OTP=true', async () => {
+    await expect(build({ ...allFake, sms: 'real' }, { nodeEnv: 'production' })).rejects.toThrow(/SMS is not configured/);
+
+    process.env.ALLOW_LOG_OTP = 'true';
+    try {
+      const module = await build({ ...allFake, sms: 'real' }, { nodeEnv: 'production' });
+      expect(module.get(OTP_PROVIDER)).toBeInstanceOf(LogOtpProvider);
+    } finally {
+      delete process.env.ALLOW_LOG_OTP;
+    }
   });
 
   it('fails fast when storage is "real" but the AWS settings are missing', async () => {

@@ -11,8 +11,9 @@ import { otpEmail } from '../../notifications/email/email-messages.js';
  * written to the backend log instead of being sent. Email codes still go out through the real email
  * provider when one is configured, and are logged otherwise.
  *
- * This writes a phone number and a live code to the log on purpose. It is never built in
- * production (the factory refuses and the environment check requires SMS keys there).
+ * This writes a phone number and a live code to the log on purpose. In production it is built
+ * only when ALLOW_LOG_OTP=true is set explicitly (a temporary switch for a deployment with no SMS
+ * vendor yet); otherwise the factory refuses and the environment check requires SMS keys.
  */
 export class LogOtpProvider implements IOtpProvider {
   private readonly logger = new Logger('OtpDelivery');

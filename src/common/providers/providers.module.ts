@@ -4,7 +4,7 @@
  * validated config (`providers.<name>`: stand-ins under NODE_ENV=test, the vendor otherwise).
  */
 
-import { DynamicModule, FactoryProvider, Module } from '@nestjs/common';
+import { DynamicModule, FactoryProvider, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../config/configuration.js';
 import {
@@ -76,6 +76,12 @@ function createOtpProvider(config: ConfigService): TermiiOtpProvider | LogOtpPro
   const sms = config.get<{ apiKey: string; senderId: string; baseUrl: string; channel: string }>('sms');
   const smtp = config.get<SmtpSettings>('smtp');
   const email = smtp?.host && smtp.port && smtp.user && smtp.pass && smtp.from ? new SmtpEmailProvider(smtp) : null;
+  // Temporary switch for a deployment that has no SMS vendor yet: codes go to the log, in any
+  // environment. Remove ALLOW_LOG_OTP before real users sign up.
+  if (config.get<string>('ALLOW_LOG_OTP') === 'true') {
+    new Logger('OtpDelivery').warn('ALLOW_LOG_OTP is on: one-time codes are written to the log. Turn it off before launch.');
+    return new LogOtpProvider(email);
+  }
   if (!sms?.apiKey || !sms.senderId) {
     // No SMS vendor yet: fine while developing (the code is logged), never in production.
     if (config.get<string>('nodeEnv') === 'production') {

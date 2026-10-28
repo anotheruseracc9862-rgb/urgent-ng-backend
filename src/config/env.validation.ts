@@ -26,7 +26,8 @@ const usesRealPush = usesVendors;
 const usesRealStorage = usesVendors;
 
 // Outside production an empty SMS key means "no SMS vendor yet": codes are logged (LogOtpProvider).
-const needsSmsKeys = (env: EnvironmentVariables): boolean => isProduction(env);
+// ALLOW_LOG_OTP=true (temporary, no SMS vendor yet) lifts the requirement in production too.
+const needsSmsKeys = (env: EnvironmentVariables): boolean => isProduction(env) && process.env.ALLOW_LOG_OTP !== 'true';
 const usesRealMaps = usesVendors;
 const usesRealPayments = usesVendors;
 const usesRealGoogle = usesVendors;
