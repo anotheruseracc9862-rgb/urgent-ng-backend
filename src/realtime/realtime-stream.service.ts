@@ -40,6 +40,8 @@ const CONNECTION_TTL_MS = 90_000;
 const HUB_BLOCK_MS = 1_000;
 /** A connection that falls this far behind is told to resync instead of buffering without limit. */
 const MAX_QUEUED_FRAMES = 500;
+/** Consecutive failed reads of the shared reader before the open connections are told to give up. */
+const MAX_READER_FAILURES = 8;
 const ID_PATTERN = /^(\d+)-(\d+)$/;
 
 const compareIds = (a: string, b: string): number => {
@@ -226,52 +228,67 @@ export class RealtimeStreamService implements OnModuleDestroy {
     subscriber.wake?.();
   }
 
-  /** The one blocking read of this process: every open stream, fanned out to its connections. */
+  /**
+   * The one blocking read of this process: every open stream, fanned out to its connections.
+   *
+   * A Redis hiccup (a reset socket, a restart) is retried on a fresh connection and reading resumes
+   * from each stream's cursor, so no event is lost and no browser has to reconnect. Only a Redis that
+   * stays down tells the connections to give up.
+   */
   private async run(): Promise<void> {
     this.running = true;
-    const reader = new Redis({
-      ...redisOptionsFromUrl(this.config.getOrThrow<string>('redis.url')),
-      maxRetriesPerRequest: 1,
-    });
-    reader.on('error', () => undefined);
-    this.reader = reader;
-    try {
-      while (this.channels.size > 0 && !this.closing) {
-        const keys = [...this.channels.keys()];
-        const cursors = keys.map((key) => this.channels.get(key)!.cursor);
-        // ioredis types xread for one key at a time; Redis takes a key list.
-        const xread = reader.xread.bind(reader) as unknown as (...args: Array<string | number>) => Promise<XreadResult>;
-        const result = await xread('BLOCK', HUB_BLOCK_MS, 'STREAMS', ...keys, ...cursors);
-        if (!result) continue;
-        for (const [key, entries] of result) {
-          const channel = this.channels.get(key);
-          if (!channel) continue;
-          for (const [id, fields] of entries) {
-            channel.cursor = id;
-            const frame: SseFrame = { kind: 'event', id, envelope: this.toEnvelope(id, fields) };
-            for (const subscriber of channel.subscribers) this.push(subscriber, frame);
+    let failures = 0;
+    while (this.channels.size > 0 && !this.closing) {
+      const reader = new Redis({
+        ...redisOptionsFromUrl(this.config.getOrThrow<string>('redis.url')),
+        maxRetriesPerRequest: 1,
+      });
+      reader.on('error', () => undefined);
+      this.reader = reader;
+      try {
+        while (this.channels.size > 0 && !this.closing) {
+          const keys = [...this.channels.keys()];
+          const cursors = keys.map((key) => this.channels.get(key)!.cursor);
+          // ioredis types xread for one key at a time; Redis takes a key list.
+          const xread = reader.xread.bind(reader) as unknown as (...args: Array<string | number>) => Promise<XreadResult>;
+          const result = await xread('BLOCK', HUB_BLOCK_MS, 'STREAMS', ...keys, ...cursors);
+          failures = 0;
+          if (!result) continue;
+          for (const [key, entries] of result) {
+            const channel = this.channels.get(key);
+            if (!channel) continue;
+            for (const [id, fields] of entries) {
+              channel.cursor = id;
+              const frame: SseFrame = { kind: 'event', id, envelope: this.toEnvelope(id, fields) };
+              for (const subscriber of channel.subscribers) this.push(subscriber, frame);
+            }
           }
         }
-      }
-    } catch (error) {
-      if (!this.closing) {
-        this.logger.warn(`Realtime reader failed: ${error instanceof Error ? error.message : String(error)}`);
-        const failure = error instanceof Error ? error : new Error(String(error));
-        for (const channel of this.channels.values()) {
-          for (const subscriber of channel.subscribers) {
-            subscriber.failed = failure;
-            subscriber.wake?.();
+      } catch (error) {
+        if (this.closing) break;
+        failures += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Realtime reader failed (${failures}/${MAX_READER_FAILURES}): ${message}`);
+        if (failures >= MAX_READER_FAILURES) {
+          const failure = error instanceof Error ? error : new Error(message);
+          for (const channel of this.channels.values()) {
+            for (const subscriber of channel.subscribers) {
+              subscriber.failed = failure;
+              subscriber.wake?.();
+            }
           }
+          this.channels.clear();
+          break;
         }
-        this.channels.clear();
+        await new Promise((resolve) => setTimeout(resolve, Math.min(500 * failures, 3_000)));
+      } finally {
+        reader.disconnect();
+        this.reader = undefined;
       }
-    } finally {
-      reader.disconnect();
-      this.reader = undefined;
-      this.running = false;
-      // A stream registered while the reader was shutting down still needs one.
-      if (this.channels.size > 0 && !this.closing) void this.run();
     }
+    this.running = false;
+    // A stream registered while the reader was shutting down still needs one.
+    if (this.channels.size > 0 && !this.closing) void this.run();
   }
 
   /** The newest entry id, or `0-0` for an empty stream (so every later entry is "new"). */
