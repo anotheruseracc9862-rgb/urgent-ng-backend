@@ -243,7 +243,12 @@ export class RealtimeStreamService implements OnModuleDestroy {
         ...redisOptionsFromUrl(this.config.getOrThrow<string>('redis.url')),
         maxRetriesPerRequest: 1,
       });
-      reader.on('error', () => undefined);
+      // ioredis reports only "max retries per request" when a connection cannot be made; the socket
+      // error behind it (ECONNRESET, ETIMEDOUT, "max number of clients reached") is what explains it.
+      let socketError = 'none seen';
+      reader.on('error', (error) => {
+        socketError = error.message;
+      });
       this.reader = reader;
       try {
         while (this.channels.size > 0 && !this.closing) {
@@ -268,7 +273,7 @@ export class RealtimeStreamService implements OnModuleDestroy {
         if (this.closing) break;
         failures += 1;
         const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Realtime reader failed (${failures}/${MAX_READER_FAILURES}): ${message}`);
+        this.logger.warn(`Realtime reader failed (${failures}/${MAX_READER_FAILURES}): ${message}. Connection error: ${socketError}`);
         if (failures >= MAX_READER_FAILURES) {
           const failure = error instanceof Error ? error : new Error(message);
           for (const channel of this.channels.values()) {
