@@ -64,14 +64,27 @@ export class AuthController {
     );
   }
 
-  /** Verify the registration code and mark the phone or email as verified. */
+  /**
+   * Verify the registration code and mark the phone or email as verified. A new account is signed in
+   * at the same moment (web clients get their session cookies), so the person lands in the app
+   * without a second login. Mobile clients (`X-Client: mobile`) still sign in with `/auth/login`.
+   */
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
   @RateLimit('auth')
   @ApiEnveloped(R.VerifiedDto)
   @ApiErrors(400, 429)
-  async verifyOtp(@Body() dto: VerifyOtpDto, @ReqCtx() ctx: RequestContext) {
-    await this.registration.verify(singleIdentifier(dto), dto.code, ctx);
+  async verifyOtp(
+    @Body() dto: VerifyOtpDto,
+    @Headers('x-client') client: string | undefined,
+    @ReqCtx() ctx: RequestContext,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const userId = await this.registration.verify(singleIdentifier(dto), dto.code, ctx);
+    if (!wantsBodyTokens(client)) {
+      const tokens = await this.login.signInAfterVerification(userId, ctx);
+      if (tokens) setAuthCookies(res, tokens);
+    }
     return { verified: true };
   }
 

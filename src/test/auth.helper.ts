@@ -106,6 +106,8 @@ export async function verifyUser(app: INestApplication, user: TestUser): Promise
   const key = user.phone.startsWith('+') ? 'phone' : 'email';
   await request(app.getHttpServer())
     .post(`${API}/auth/otp/verify`)
+    // A mobile client: the web path would also sign the new account in, and the tests log in on their own.
+    .set('X-Client', 'mobile')
     .send({ [key]: user.phone, code: lastCode(app, user.phone) })
     .expect(200);
 }

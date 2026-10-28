@@ -97,6 +97,32 @@ export class LoginService {
     return { userId: user.id, status: user.status, tokens };
   }
 
+  /**
+   * The first sign-in of a new account. The registration code proves the person owns the phone or
+   * email they just registered with, so they are signed in without typing the password again.
+   * The gates match `login`: only an ACTIVE, unlocked, unrestricted account that has never signed in
+   * gets a session here. Anything else returns null and signs in the normal way.
+   */
+  async signInAfterVerification(userId: string, ctx: RequestContext = {}): Promise<TokenPair | null> {
+    const user = await this.prisma.client.user.findFirst({
+      where: { id: userId },
+      select: { id: true, status: true, lastLoginAt: true },
+    });
+    if (!user || user.status !== 'ACTIVE' || user.lastLoginAt !== null) return null;
+    if ((await this.lockState(user.id)).locked) return null;
+    if (await this.restrictions.findActive(user.id, 'ACCOUNT_LOGIN')) return null;
+
+    await this.prisma.$executeRaw`UPDATE users SET last_login_at = now() WHERE id = ${user.id}::uuid`;
+    const tokens = await this.sessions.create(user.id, ctx);
+    await this.audit.record({
+      action: 'auth.login',
+      actorId: user.id,
+      metadata: { via: 'registration_code' },
+      ctx,
+    });
+    return tokens;
+  }
+
   private async lockState(userId: string): Promise<{ locked: boolean; retryAfterSeconds: number }> {
     const rows = await this.prisma.$queryRaw<Array<{ locked: boolean; retry: number }>>`
       SELECT (locked_until IS NOT NULL AND locked_until > now()) AS locked,

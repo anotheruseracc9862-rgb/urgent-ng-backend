@@ -216,6 +216,36 @@ describe('Registration, OTP and password reset (HTTP)', () => {
       expect(again.body.error.code).toBe('OTP_EXPIRED');
     });
 
+    it('signs a new account in when the code is right, and only once', async () => {
+      const user = await registerUser(app);
+      const code = lastCode(app, user.phone);
+
+      const res = await post('/auth/otp/verify').send({ phone: user.phone, code }).expect(200);
+
+      const cookies = (res.headers['set-cookie'] as unknown as string[]) ?? [];
+      expect(cookies.some((cookie) => cookie.startsWith('ung_at='))).toBe(true);
+      expect(cookies.some((cookie) => cookie.startsWith('ung_rt='))).toBe(true);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: user.userId } })).lastLoginAt).not.toBeNull();
+    });
+
+    it('does not sign in a mobile client from the code (it uses /auth/login)', async () => {
+      const user = await registerUser(app);
+      const code = lastCode(app, user.phone);
+
+      const res = await post('/auth/otp/verify').set('X-Client', 'mobile').send({ phone: user.phone, code }).expect(200);
+
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('does not sign in an account that has already signed in before', async () => {
+      const user = await registerUser(app);
+      await prisma.user.update({ where: { id: user.userId }, data: { lastLoginAt: new Date() } });
+
+      const res = await post('/auth/otp/verify').send({ phone: user.phone, code: lastCode(app, user.phone) }).expect(200);
+
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
     it('verifies an email the same way', async () => {
       const user = await registerUser(app, { email: 'ada@example.com' });
 
